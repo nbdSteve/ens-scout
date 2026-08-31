@@ -1,0 +1,13 @@
+.idea/
+.env
+
+# Go build and test artifacts
+/bin/
+/dist/
+*.exe
+*.out
+*.test
+coverage.out
+
+# Local scan output
+/results/

@@ -1,0 +1,10 @@
+*.go text eol=lf
+go.mod text eol=lf
+*.md text eol=lf
+*.yaml text eol=lf
+*.yml text eol=lf
+.gitignore text eol=lf
+.gitattributes text eol=lf
+
+# Historical output is retained byte-for-byte, including legacy blank EOFs.
+data/results/** whitespace=-blank-at-eof
