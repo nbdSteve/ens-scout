@@ -148,6 +148,16 @@ scanner, the read API, the local preview, and the browser all agree.
   repeated claim, so a publisher still writing a set renews the grace period a
   reclaimer waits out, and the marker's own expiry has to outlive the interval
   between reclaim passes or it takes its chunks out of reach again.
+- A staging marker is an operational record, not a published wire format: nothing
+  resolves one, and it holds a snapshot ID and a timestamp. A backend that versions
+  its marker versions it independently of `FormatVersion`, or the next intentional
+  wire change turns every stored marker into one nothing can interpret and strands
+  the chunk sets they name.
+- `StagedSnapshots` skips a marker it cannot interpret, reports it through
+  `StagingUnreadableError` alongside the markers that did read, and never returns
+  one. Nothing may be expired against a marker nobody could interpret, but failing
+  the whole call would stop every other abandoned set from being reclaimed: failing
+  closed here means leaving one marker alone and saying so, not stopping the pass.
 - Write the latest pointer last, after chunks are stored, read back, and
   verified, so a failed publication leaves the previous snapshot serving.
 - Distinguish an absent pointer from a pointer whose chunks are gone. `Read`
@@ -228,17 +238,29 @@ implement the snapshot contract above rather than restating it.
   bounding table growth. A failed TTL write must never fail a publication that
   already succeeded.
 - Abandoned chunk sets are reclaimed, which is what makes the TTL actually bound
-  table growth rather than only bounding it for snapshots that were published. A run
-  reclaims from the staging registry after its own snapshot ID is known, and the
-  rules are what keep it from destroying live data: it skips its own ID, because a
-  set it goes on to publish must not carry an expiry that would outlive the pointer
-  naming it; it removes the marker and leaves the chunks alone when the marker names
-  the published snapshot; it defers the whole pass when the pointer cannot be read,
-  because then nothing proves which snapshot is live; and it leaves a marker younger
-  than the grace period alone, because a publisher may still be writing that set.
-  The grace exceeds the longest an invocation can live, and it is bounded work per
-  run. Every failure here is logged, never returned: this is cleanup after an earlier
+  table growth rather than only bounding it for snapshots that were published. The
+  rules are what keep a pass from destroying live data: it skips its own run's
+  snapshot ID, because a set the run publishes must not carry an expiry that would
+  outlive the pointer naming it; it removes the marker and leaves the chunks alone
+  when the marker names the published snapshot; it defers the whole pass when the
+  pointer cannot be read, because then nothing proves which snapshot is live; and it
+  leaves a marker younger than the grace period alone, because a publisher may still
+  be writing that set. The grace exceeds the longest an invocation can live. Every
+  failure here is logged, never returned: this is cleanup after an earlier
   invocation, so failing on it would turn one bad run into a stuck schedule.
+- Reclaim after the publication attempt, and after it either way. Before it, cleanup
+  sits on the critical path of the write it exists to clean up after, and a throttled
+  table can spend the invocation's remaining deadline there and leave the run
+  publishing nothing, abandoning one more set and making the next pass longer. On the
+  success path only, reclaiming stops exactly when sets are being abandoned, because
+  the run that keeps failing to publish is the run that keeps abandoning them. The
+  run's own snapshot ID is excluded either way, so the set it just published, or just
+  abandoned, is left alone.
+- The per-run reclaim budget bounds markers acted on, not markers reclaimed. A table
+  that refuses every expiry has to cost the same bounded number of calls as one that
+  accepts them all; counting successes alone would let a sustained failure turn every
+  later pass into work proportional to the whole registry, which is unbounded work
+  in exactly the state that fills the registry.
 - `ExpireChunks` refuses the snapshot the pointer names and refuses a pointer it
   cannot read, but an absent pointer means nothing is published and therefore
   nothing is live. Refusing then would leave a set abandoned before the first

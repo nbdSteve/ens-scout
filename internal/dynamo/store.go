@@ -378,17 +378,22 @@ func (s *Store) UnstageSnapshot(ctx context.Context, snapshotID string) error {
 // StagedSnapshots returns every staging marker, in sort-key order, which for these
 // keys is snapshot ID order.
 //
-// It fails closed on a marker it cannot decode rather than skipping it, so a
-// reclaimer never acts on a partial view of what is staged. A marker only a future
-// format version could write therefore defers reclaiming rather than mis-aiming it,
-// and the marker's own TTL still bounds how long that can last.
+// A marker it cannot interpret is skipped rather than returned, and reported through
+// snapshot.StagingUnreadableError alongside the markers that did read. Nothing acts
+// on a marker that was skipped, which is the part of failing closed that matters,
+// but failing the whole call would stop every other abandoned chunk set from being
+// reclaimed - a table growing without bound because one item is unreadable.
+//
+// A failure to query the registry at all is still a failure, with no markers.
 func (s *Store) StagedSnapshots(ctx context.Context) ([]snapshot.StagedSnapshot, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	var (
-		staged   []snapshot.StagedSnapshot
-		startKey map[string]types.AttributeValue
+		staged    []snapshot.StagedSnapshot
+		skipped   int
+		firstSkip error
+		startKey  map[string]types.AttributeValue
 	)
 	for page := 0; page < maxStagingQueryPages; page++ {
 		output, err := s.api.Query(ctx, &dynamodb.QueryInput{
@@ -412,11 +417,18 @@ func (s *Store) StagedSnapshots(ctx context.Context) ([]snapshot.StagedSnapshot,
 		for _, item := range output.Items {
 			entry, err := decodeStagingItem(item)
 			if err != nil {
-				return nil, err
+				skipped++
+				if firstSkip == nil {
+					firstSkip = err
+				}
+				continue
 			}
 			staged = append(staged, entry)
 		}
 		if len(output.LastEvaluatedKey) == 0 {
+			if skipped > 0 {
+				return staged, &snapshot.StagingUnreadableError{Skipped: skipped, Cause: firstSkip}
+			}
 			return staged, nil
 		}
 		startKey = output.LastEvaluatedKey

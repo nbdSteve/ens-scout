@@ -3,6 +3,7 @@ package scanner
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -94,8 +95,9 @@ func (g *fakeGraph) asked() []string {
 type fakeStore struct {
 	*snapshot.MemoryStore
 
-	mu      sync.Mutex
-	expired map[string]time.Time
+	mu       sync.Mutex
+	expired  map[string]time.Time
+	attempts []string
 
 	putChunksErr error
 	getChunksErr error
@@ -105,6 +107,11 @@ type fakeStore struct {
 	stageErr     error
 	stagedErr    error
 	unstageErr   error
+
+	// stagedSkipped makes StagedSnapshots report markers it could not interpret
+	// alongside the ones it could, which is what a real registry does with a corrupt
+	// or unknown-version item.
+	stagedSkipped int
 
 	// onPutChunks runs before the chunk write, so a test can end a run at the one
 	// point where a complete chunk set exists and no pointer names it.
@@ -143,7 +150,11 @@ func (s *fakeStore) StagedSnapshots(ctx context.Context) ([]snapshot.StagedSnaps
 	if s.stagedErr != nil {
 		return nil, s.stagedErr
 	}
-	return s.MemoryStore.StagedSnapshots(ctx)
+	staged, err := s.MemoryStore.StagedSnapshots(ctx)
+	if err == nil && s.stagedSkipped > 0 {
+		return staged, &snapshot.StagingUnreadableError{Skipped: s.stagedSkipped, Cause: errInjected}
+	}
+	return staged, err
 }
 
 func (s *fakeStore) GetChunks(ctx context.Context, snapshotID string) ([]snapshot.Chunk, error) {
@@ -168,6 +179,9 @@ func (s *fakeStore) GetLatest(ctx context.Context) (snapshot.Latest, error) {
 }
 
 func (s *fakeStore) ExpireChunks(ctx context.Context, snapshotID string, expiresAt time.Time) error {
+	s.mu.Lock()
+	s.attempts = append(s.attempts, snapshotID)
+	s.mu.Unlock()
 	if s.expireErr != nil {
 		return s.expireErr
 	}
@@ -198,6 +212,85 @@ func (s *fakeStore) expiry(snapshotID string) (time.Time, bool) {
 	defer s.mu.Unlock()
 	expiry, found := s.expired[snapshotID]
 	return expiry, found
+}
+
+// expireAttempts counts the expiry calls made against any of the given snapshots,
+// which is the work a reclaim pass spent whether the table accepted it or not.
+func (s *fakeStore) expireAttempts(snapshotIDs ...string) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	count := 0
+	for _, attempt := range s.attempts {
+		if containsString(snapshotIDs, attempt) {
+			count++
+		}
+	}
+	return count
+}
+
+// logRecord is one decoded line of the logger's JSON Lines output. That output is
+// this package's own emitted record format and the interface an operator queries, so
+// a test decodes it rather than searching the buffer for loose substrings: a level
+// found somewhere in the output says nothing about which record carries it.
+type logRecord struct {
+	Level      string `json:"level"`
+	Event      string `json:"event"`
+	SnapshotID string `json:"snapshot_id"`
+	PreviousID string `json:"previous_snapshot_id"`
+	Staged     int    `json:"staged"`
+	Attempted  int    `json:"attempted"`
+	Reclaimed  int    `json:"reclaimed"`
+	Skipped    int    `json:"skipped"`
+	Error      string `json:"error"`
+}
+
+func logRecords(t *testing.T, run *testRun) []logRecord {
+	t.Helper()
+	var records []logRecord
+	for _, line := range strings.Split(strings.TrimSpace(run.logs.String()), "\n") {
+		if line == "" {
+			continue
+		}
+		var record logRecord
+		if err := json.Unmarshal([]byte(line), &record); err != nil {
+			t.Fatalf("log line %q is not a JSON record: %v", line, err)
+		}
+		records = append(records, record)
+	}
+	return records
+}
+
+// requireRecord returns the first record for an event and fails when there is none,
+// so an assertion about a level or an ID is bound to the record that carries it.
+func requireRecord(t *testing.T, run *testRun, event string) logRecord {
+	t.Helper()
+	for _, record := range logRecords(t, run) {
+		if record.Event == event {
+			return record
+		}
+	}
+	t.Fatalf("no %q record in the log: %s", event, run.logs.String())
+	return logRecord{}
+}
+
+// requireRecordAt is requireRecord with the level the event must be reported at.
+func requireRecordAt(t *testing.T, run *testRun, event string, level Level) logRecord {
+	t.Helper()
+	record := requireRecord(t, run, event)
+	if record.Level != string(level) {
+		t.Errorf("the %q record is at level %q, want %q", event, record.Level, level)
+	}
+	return record
+}
+
+func hasRecord(t *testing.T, run *testRun, event string) bool {
+	t.Helper()
+	for _, record := range logRecords(t, run) {
+		if record.Event == event {
+			return true
+		}
+	}
+	return false
 }
 
 // stagedIDs is every snapshot ID with a staging marker, in ID order.
@@ -809,9 +902,7 @@ func TestRunPublishesWhenThePreviousPointerIsUnreadable(t *testing.T) {
 	if len(run.slept) != run.deps.Config.PreviousReadAttempts-1 {
 		t.Errorf("waited %d times between %d attempts", len(run.slept), run.deps.Config.PreviousReadAttempts)
 	}
-	if !strings.Contains(run.logs.String(), "previous_snapshot_unreadable") {
-		t.Errorf("an unreadable pointer was not reported: %s", run.logs.String())
-	}
+	requireRecordAt(t, run, "previous_snapshot_unreadable", LevelWarn)
 	if result.Carried != 0 || result.Previous != "" {
 		t.Errorf("a run that could not read the previous snapshot carried state anyway: %+v", result)
 	}
@@ -865,9 +956,7 @@ func TestRunExpiresTheSupersededSnapshot(t *testing.T) {
 	if _, found := store.expiry(current.Latest.SnapshotID); found {
 		t.Errorf("the published snapshot was given a TTL")
 	}
-	if !strings.Contains(second.logs.String(), "superseded_chunks_expired") {
-		t.Errorf("the TTL was not reported: %s", second.logs.String())
-	}
+	requireRecordAt(t, second, "superseded_chunks_expired", LevelInfo)
 }
 
 func TestRunSucceedsWhenTheTTLCannotBeApplied(t *testing.T) {
@@ -891,9 +980,7 @@ func TestRunSucceedsWhenTheTTLCannotBeApplied(t *testing.T) {
 	if current.Latest.SnapshotID == previous.Latest.SnapshotID {
 		t.Fatalf("the second run did not publish a new snapshot")
 	}
-	if !strings.Contains(second.logs.String(), "superseded_chunks_expire_failed") {
-		t.Errorf("the retention failure was not reported: %s", second.logs.String())
-	}
+	requireRecordAt(t, second, "superseded_chunks_expire_failed", LevelWarn)
 	if _, _, err := snapshot.Read(context.Background(), store); err != nil {
 		t.Errorf("the published snapshot is not readable: %v", err)
 	}
@@ -969,20 +1056,17 @@ func TestRunWarnsWhenThePreviousSnapshotChunksAreMissing(t *testing.T) {
 		t.Fatalf("second Run: %v", err)
 	}
 
-	logs := second.logs.String()
-	if !strings.Contains(logs, "previous_snapshot_chunks_missing") {
-		t.Errorf("a vanished snapshot was not reported: %s", logs)
-	}
-	if !strings.Contains(logs, `"level":"warn"`) {
-		t.Errorf("a vanished snapshot was reported below warning level: %s", logs)
-	}
-	if !strings.Contains(logs, previous.Latest.SnapshotID) {
-		t.Errorf("the report does not name the snapshot that vanished: %s", logs)
+	// An operator must never lose a whole group with nothing above INFO, so the level
+	// is asserted on the record that reports the loss and not on the buffer.
+	record := requireRecordAt(t, second, "previous_snapshot_chunks_missing", LevelWarn)
+	if record.PreviousID != previous.Latest.SnapshotID {
+		t.Errorf("the record names %q, want the snapshot that vanished, %q",
+			record.PreviousID, previous.Latest.SnapshotID)
 	}
 	// Losing a whole group must not look like a first run, and a strongly consistent
 	// read that found no chunk will not find one on a retry either.
-	if strings.Contains(logs, "previous_snapshot_absent") {
-		t.Errorf("a vanished snapshot was reported as a bootstrap: %s", logs)
+	if hasRecord(t, second, "previous_snapshot_absent") {
+		t.Errorf("a vanished snapshot was reported as a bootstrap: %s", second.logs.String())
 	}
 	if len(second.slept) != 0 {
 		t.Errorf("waited %d times for chunks that are definitively absent", len(second.slept))
@@ -1077,8 +1161,8 @@ func TestAbandonedChunksAreReclaimedAfterAFailedPublication(t *testing.T) {
 				if want := reclaimAt.Add(abandonedRetention); !expiry.Equal(want) {
 					t.Errorf("TTL %s, want %s", expiry, want)
 				}
-				if !strings.Contains(third.logs.String(), "abandoned_chunks_expired") {
-					t.Errorf("the reclaim was not reported: %s", third.logs.String())
+				if record := requireRecordAt(t, third, "abandoned_chunks_expired", LevelWarn); record.SnapshotID != abandoned {
+					t.Errorf("the reclaim record names %q, want %q", record.SnapshotID, abandoned)
 				}
 			}
 
@@ -1172,6 +1256,111 @@ func TestReclaimNeverExpiresTheLiveSnapshot(t *testing.T) {
 	}
 }
 
+// stageAbandoned stages markers for snapshots no run will publish, as an earlier
+// invocation that died between its chunk write and its pointer write would leave.
+func stageAbandoned(t *testing.T, store *fakeStore, stagedAt time.Time, count int) []string {
+	t.Helper()
+	ids := make([]string, 0, count)
+	for i := 0; i < count; i++ {
+		id := fmt.Sprintf("abandoned-%02d", i)
+		if err := store.StageSnapshot(context.Background(), id, stagedAt, stagedAt.Add(stagingRetention)); err != nil {
+			t.Fatalf("StageSnapshot %s: %v", id, err)
+		}
+		ids = append(ids, id)
+	}
+	return ids
+}
+
+// TestReclaimBudgetBoundsTheWorkOneRunAttempts covers the budget on the path that
+// matters: a table that refuses every expiry. A budget that only counted successes
+// would never trip there, so every later run would do work proportional to the whole
+// registry, and the pass that exists to bound the table would grow with it.
+func TestReclaimBudgetBoundsTheWorkOneRunAttempts(t *testing.T) {
+	store := newFakeStore()
+	dir := defaultLists(t)
+
+	first := newTestRun(t, dir, newFakeGraph(nil), store)
+	live, err := Run(context.Background(), first.deps, Event{Group: GroupShort})
+	if err != nil {
+		t.Fatalf("first Run: %v", err)
+	}
+
+	abandoned := stageAbandoned(t, store, fixedNow.Add(-2*abandonedAfter), maxReclaimsPerRun+3)
+	store.expireErr = errInjected
+
+	second := newTestRun(t, dir, newFakeGraph(nil), store).at(fixedNow.Add(time.Hour))
+	current, err := Run(context.Background(), second.deps, Event{Group: GroupShort})
+	if err != nil {
+		// Cleanup is best effort. A publication that already succeeded must not be
+		// reported as a failure because the reclaim pass could not finish.
+		t.Fatalf("a failing reclaim pass failed the run: %v", err)
+	}
+	if current.Latest.SnapshotID == live.Latest.SnapshotID {
+		t.Fatalf("the second run did not publish a new snapshot")
+	}
+
+	if got := store.expireAttempts(abandoned...); got != maxReclaimsPerRun {
+		t.Errorf("the pass attempted %d expiries, want its budget of %d", got, maxReclaimsPerRun)
+	}
+	record := requireRecordAt(t, second, "abandoned_chunks_deferred", LevelWarn)
+	if record.Attempted != maxReclaimsPerRun || record.Reclaimed != 0 {
+		t.Errorf("the deferred record reports %d attempted and %d reclaimed, want %d and 0",
+			record.Attempted, record.Reclaimed, maxReclaimsPerRun)
+	}
+	// Nothing was expired and nothing was forgotten, so the next pass still finds
+	// every marker this one could not get to.
+	if got, want := len(stagedIDs(t, store)), len(abandoned); got != want {
+		t.Errorf("%d markers remain, want all %d", got, want)
+	}
+	if _, _, err := snapshot.Read(context.Background(), store); err != nil {
+		t.Errorf("the published snapshot is not readable: %v", err)
+	}
+}
+
+// TestReclaimContinuesPastAMarkerItCannotInterpret proves one unreadable marker does
+// not stop the pass. Stopping would leave every other abandoned chunk set unreclaimed
+// until its marker's own TTL fired, which is the unbounded growth staging prevents.
+func TestReclaimContinuesPastAMarkerItCannotInterpret(t *testing.T) {
+	store := newFakeStore()
+	dir := defaultLists(t)
+
+	first := newTestRun(t, dir, newFakeGraph(nil), store)
+	if _, err := Run(context.Background(), first.deps, Event{Group: GroupShort}); err != nil {
+		t.Fatalf("first Run: %v", err)
+	}
+
+	abandonedAt := fixedNow.Add(time.Hour)
+	store.putLatestErr = errInjected
+	second := newTestRun(t, dir, newFakeGraph(nil), store).at(abandonedAt)
+	if _, err := Run(context.Background(), second.deps, Event{Group: GroupLong}); err == nil {
+		t.Fatalf("the second run published despite the injected failure")
+	}
+	store.putLatestErr = nil
+	staged := stagedIDs(t, store)
+	if len(staged) != 1 {
+		t.Fatalf("staged snapshots are %v, want exactly the abandoned one", staged)
+	}
+	abandoned := staged[0]
+
+	// The registry reports one marker it could not interpret next to the one it could.
+	store.stagedSkipped = 1
+
+	third := newTestRun(t, dir, newFakeGraph(nil), store).at(abandonedAt.Add(abandonedAfter + time.Minute))
+	if _, err := Run(context.Background(), third.deps, Event{Group: GroupShort}); err != nil {
+		t.Fatalf("third Run: %v", err)
+	}
+
+	if record := requireRecordAt(t, third, "staging_markers_unreadable", LevelWarn); record.Skipped != 1 {
+		t.Errorf("the record reports %d skipped markers, want 1", record.Skipped)
+	}
+	if _, found := store.expiry(abandoned); !found {
+		t.Errorf("the readable marker's chunks were not reclaimed: %s", third.logs.String())
+	}
+	if isStaged(t, store, abandoned) {
+		t.Errorf("the reclaimed marker was kept")
+	}
+}
+
 func TestReclaimIsDeferredWhenThePointerCannotBeRead(t *testing.T) {
 	store := newFakeStore()
 	dir := defaultLists(t)
@@ -1201,9 +1390,7 @@ func TestReclaimIsDeferredWhenThePointerCannotBeRead(t *testing.T) {
 	if _, err := Run(context.Background(), third.deps, Event{Group: GroupShort}); err != nil {
 		t.Fatalf("third Run: %v", err)
 	}
-	if !strings.Contains(third.logs.String(), "abandoned_chunks_deferred") {
-		t.Errorf("the deferred reclaim was not reported: %s", third.logs.String())
-	}
+	requireRecordAt(t, third, "abandoned_chunks_deferred", LevelWarn)
 	if _, found := store.expiry(abandoned); found {
 		t.Errorf("a snapshot was expired against a pointer that could not be read")
 	}
@@ -1234,9 +1421,7 @@ func TestRunRefusesToWriteChunksItCannotStage(t *testing.T) {
 	if _, err := Run(context.Background(), second.deps, Event{Group: GroupLong}); err == nil {
 		t.Fatalf("Run published a snapshot it could not stage")
 	}
-	if !strings.Contains(second.logs.String(), "snapshot_stage_failed") {
-		t.Errorf("the staging failure was not reported: %s", second.logs.String())
-	}
+	requireRecordAt(t, second, "snapshot_stage_failed", LevelError)
 	if got := store.SnapshotIDs(); !equalStrings(sortedCopy(got), []string{live.Latest.SnapshotID}) {
 		t.Errorf("the store holds %v, want only %q", got, live.Latest.SnapshotID)
 	}
@@ -1364,7 +1549,7 @@ func TestRedactorStripsConfiguredSecrets(t *testing.T) {
 
 	// A store with no credential configured must behave exactly like the default.
 	empty := Config{}.Redactor()
-	if got, want := empty.Error(errInjected), Redact(errInjected); got != want {
+	if got, want := empty.Error(errInjected), (*Redactor)(nil).Error(errInjected); got != want {
 		t.Errorf("an unconfigured redactor rendered %q, want %q", got, want)
 	}
 	// A literal too short to be a credential is left alone, so an ordinary message
@@ -1405,7 +1590,9 @@ func TestLoggerToleratesNoWriter(t *testing.T) {
 	logger.Log(LevelInfo, "scan_started", Fields{})
 }
 
-func TestRedact(t *testing.T) {
+// TestNilRedactorStripsThePatterns covers the redactor a logger uses before its
+// configuration is known, which strips the patterns and no literal.
+func TestNilRedactorStripsThePatterns(t *testing.T) {
 	tests := []struct {
 		name string
 		err  error
@@ -1436,8 +1623,8 @@ func TestRedact(t *testing.T) {
 	for _, test := range tests {
 		test := test
 		t.Run(test.name, func(t *testing.T) {
-			if got := Redact(test.err); got != test.want {
-				t.Errorf("Redact() = %q, want %q", got, test.want)
+			if got := (*Redactor)(nil).Error(test.err); got != test.want {
+				t.Errorf("a nil Redactor rendered %q, want %q", got, test.want)
 			}
 		})
 	}

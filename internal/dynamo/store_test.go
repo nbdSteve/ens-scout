@@ -1156,6 +1156,11 @@ func TestStagingRegistryTracksUnpublishedSnapshots(t *testing.T) {
 	// A marker carries its own TTL from the moment it is written, so a marker whose
 	// chunks are already reclaimed cannot accumulate.
 	item := fake.stored(snapshot.LatestPartition, snapshot.StagingSort("scan-first"))
+	// The marker is versioned on its own, so bumping the snapshot wire format cannot
+	// strand the chunk sets the stored markers name.
+	if version, err := numberAttribute(item, attrFormatVersion); err != nil || version != stagingFormatVersion {
+		t.Errorf("the marker declares version %d (err %v), want %d", version, err, stagingFormatVersion)
+	}
 	ttl, err := numberAttribute(item, attrExpiresAt)
 	if err != nil {
 		t.Fatalf("the staging marker has no TTL: %v", err)
@@ -1225,15 +1230,22 @@ func TestStagingMarkersAreInvisibleToEveryOtherRead(t *testing.T) {
 	}
 }
 
-func TestStagedSnapshotsFailsClosedOnAnUnaccountableMarker(t *testing.T) {
+// TestStagedSnapshotsSkipsAMarkerItCannotInterpret covers the one thing that must
+// not happen when a marker is unreadable: the whole pass stopping. An unreadable
+// marker is never returned, so nothing can be expired against it, but every other
+// abandoned chunk set is still reported and so still reclaimable.
+func TestStagedSnapshotsSkipsAMarkerItCannotInterpret(t *testing.T) {
 	tests := []struct {
 		name    string
 		corrupt func(item map[string]types.AttributeValue)
 	}{
 		{
-			name: "an unknown format version",
+			// A marker version this build does not know. It is stamped independently
+			// of snapshot.FormatVersion, so a wire change cannot produce this, but an
+			// intentional marker change could.
+			name: "an unknown marker version",
 			corrupt: func(item map[string]types.AttributeValue) {
-				item[attrFormatVersion] = numberValue(int64(snapshot.FormatVersion) + 1)
+				item[attrFormatVersion] = numberValue(stagingFormatVersion + 1)
 			},
 		},
 		{
@@ -1263,15 +1275,28 @@ func TestStagedSnapshotsFailsClosedOnAnUnaccountableMarker(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			store, fake, _ := newTestStore(t, Options{})
 			ctx := context.Background()
-			if err := store.StageSnapshot(ctx, "scan-first", fixedNow, fixedNow.Add(time.Hour)); err != nil {
-				t.Fatalf("StageSnapshot: %v", err)
+			for _, id := range []string{"scan-first", "scan-second"} {
+				if err := store.StageSnapshot(ctx, id, fixedNow, fixedNow.Add(time.Hour)); err != nil {
+					t.Fatalf("StageSnapshot %s: %v", id, err)
+				}
 			}
 			item := fake.stored(snapshot.LatestPartition, snapshot.StagingSort("scan-first"))
 			test.corrupt(item)
 			fake.put(item)
 
-			if staged, err := store.StagedSnapshots(ctx); err == nil {
-				t.Fatalf("StagedSnapshots returned %v, want a refusal to report a partial view", staged)
+			staged, err := store.StagedSnapshots(ctx)
+			var unreadable *snapshot.StagingUnreadableError
+			if !errors.As(err, &unreadable) {
+				t.Fatalf("StagedSnapshots returned %v, want a StagingUnreadableError", err)
+			}
+			if unreadable.Skipped != 1 {
+				t.Errorf("reported %d skipped markers, want 1", unreadable.Skipped)
+			}
+			// The readable marker is still reported, so its chunk set is still
+			// reclaimable, and the unreadable one is not reported at all, so nothing
+			// can be expired against it.
+			if len(staged) != 1 || staged[0].SnapshotID != "scan-second" {
+				t.Fatalf("StagedSnapshots returned %v, want only scan-second", staged)
 			}
 		})
 	}

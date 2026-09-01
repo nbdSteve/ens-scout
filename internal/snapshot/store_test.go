@@ -844,6 +844,38 @@ func assertStagingRules(t *testing.T, store StagingStore) {
 	}
 }
 
+// TestFileStoreSkipsAStagingMarkerItCannotInterpret covers what must not happen when
+// a marker is unreadable: the whole registry becoming unreadable with it. The marker
+// file written here is one the store would never write, which is what a corrupt or
+// foreign registry entry looks like on disk.
+func TestFileStoreSkipsAStagingMarkerItCannotInterpret(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	store := NewFileStore(root)
+
+	if err := store.StageSnapshot(ctx, "scan-good", fixedNow, fixedNow.Add(time.Hour)); err != nil {
+		t.Fatalf("StageSnapshot: %v", err)
+	}
+	corrupt := filepath.Join(root, fileStoreStagingDir, "scan-bad"+fileStoreChunkExt)
+	if err := os.WriteFile(corrupt, []byte("{not a marker"), 0o600); err != nil {
+		t.Fatalf("write a corrupt marker: %v", err)
+	}
+
+	staged, err := store.StagedSnapshots(ctx)
+	var unreadable *StagingUnreadableError
+	if !errors.As(err, &unreadable) {
+		t.Fatalf("StagedSnapshots returned %v, want a StagingUnreadableError", err)
+	}
+	if unreadable.Skipped != 1 {
+		t.Errorf("reported %d skipped markers, want 1", unreadable.Skipped)
+	}
+	// The readable marker is still reported, so its chunk set stays reclaimable, and
+	// the unreadable one is not, so nothing can be expired against it.
+	if len(staged) != 1 || staged[0].SnapshotID != "scan-good" {
+		t.Fatalf("StagedSnapshots returned %v, want only scan-good", staged)
+	}
+}
+
 // TestStoresKeepThePointerMonotonic drives the LatestStore ordering rule through
 // both fakes: an older scan is refused, an identical retry succeeds without
 // changing anything, and a different pointer at the same scan time is refused.

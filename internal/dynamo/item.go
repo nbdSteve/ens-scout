@@ -70,6 +70,17 @@ func chunkItem(snapshotID string, chunk snapshot.Chunk) map[string]types.Attribu
 	}
 }
 
+// stagingFormatVersion versions the staging marker on its own, independently of
+// snapshot.FormatVersion.
+//
+// A marker is an operational record rather than a published wire format: no reader
+// resolves one, and it holds a snapshot ID and a timestamp and no payload. Sharing
+// the snapshot format's number would mean that the next intentional wire change
+// turned every stored marker into one this package refuses to interpret, and the
+// chunk sets they name would never be reclaimed. Bump this only when the marker's
+// own attributes change.
+const stagingFormatVersion = 1
+
 // stagingItem renders one staging marker as an item.
 //
 // Unlike a chunk it carries a TTL from the moment it is written: the marker is a
@@ -80,7 +91,7 @@ func stagingItem(snapshotID string, stagedAt, expiresAt time.Time) map[string]ty
 	return map[string]types.AttributeValue{
 		attrPartition:     stringValue(snapshot.LatestPartition),
 		attrSort:          stringValue(snapshot.StagingSort(snapshotID)),
-		attrFormatVersion: numberValue(int64(snapshot.FormatVersion)),
+		attrFormatVersion: numberValue(stagingFormatVersion),
 		attrSnapshotID:    stringValue(snapshotID),
 		attrStagedAt:      stringValue(stagedAt.UTC().Format(time.RFC3339)),
 		attrExpiresAt:     numberValue(expiresAt.UTC().Unix()),
@@ -104,8 +115,8 @@ func decodeStagingItem(item map[string]types.AttributeValue) (snapshot.StagedSna
 	if err != nil {
 		return snapshot.StagedSnapshot{}, err
 	}
-	if version != int64(snapshot.FormatVersion) {
-		return snapshot.StagedSnapshot{}, fmt.Errorf("staging marker declares format version %d (want %d)", version, snapshot.FormatVersion)
+	if version != stagingFormatVersion {
+		return snapshot.StagedSnapshot{}, fmt.Errorf("staging marker declares format version %d (want %d)", version, stagingFormatVersion)
 	}
 
 	snapshotID, err := stringAttribute(item, attrSnapshotID)

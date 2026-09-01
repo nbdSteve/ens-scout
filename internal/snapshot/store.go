@@ -257,6 +257,22 @@ type StagedSnapshot struct {
 	StagedAt   time.Time `json:"staged_at"`
 }
 
+// StagingUnreadableError reports that StagedSnapshots skipped markers it could not
+// interpret. It accompanies the markers that did read, so a caller reclaims the rest
+// and reports the ones it had to leave alone.
+type StagingUnreadableError struct {
+	Skipped int
+	Cause   error
+}
+
+func (e *StagingUnreadableError) Error() string {
+	return fmt.Sprintf("skipped %d staging marker(s) that could not be interpreted: %v", e.Skipped, e.Cause)
+}
+
+// Unwrap exposes the first skipped marker's own error, which is what says why it
+// could not be interpreted.
+func (e *StagingUnreadableError) Unwrap() error { return e.Cause }
+
 // StagingStore records which snapshot IDs a publisher has begun writing, so a
 // chunk set that never became the published snapshot can still be found and
 // reclaimed.
@@ -279,9 +295,21 @@ type StagedSnapshot struct {
 //   - UnstageSnapshot is idempotent, so removing a marker that is not there
 //     succeeds. A leftover marker costs one wasted reclaim attempt; a marker
 //     removed too eagerly costs a chunk set nothing can find.
-//   - StagedSnapshots returns every stored marker and never reports an empty set
-//     from a read it could not complete. A reclaimer decides what to destroy from
-//     it, so a failed read must be a failed read.
+//   - StagedSnapshots returns every marker it could interpret and never reports an
+//     empty set from a read it could not complete. A reclaimer decides what to
+//     destroy from it, so a failed read must be a failed read.
+//   - a marker StagedSnapshots cannot interpret is skipped, never returned, and
+//     never acted on, and the call reports StagingUnreadableError alongside the
+//     markers it did read. Failing the whole call instead would stop every other
+//     abandoned set from being reclaimed, which is the unbounded growth this
+//     interface exists to prevent; failing closed here means leaving one marker
+//     alone and saying so, not stopping the pass.
+//
+// A marker is an operational record and not a published wire format: no reader
+// resolves one, and it holds only a snapshot ID and a timestamp. An implementation
+// that versions its marker therefore versions it independently of FormatVersion, so
+// a wire change that bumps FormatVersion cannot turn every stored marker into one
+// nothing can interpret, and so strand the chunk sets they name.
 //
 // A marker carries its own expiry, so a marker whose chunks are already reclaimed
 // cannot accumulate. The expiry has to be far longer than the interval between

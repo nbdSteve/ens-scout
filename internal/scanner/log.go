@@ -88,7 +88,9 @@ type Fields struct {
 	Bytes        int    `json:"bytes,omitempty"`
 	Attempt      int    `json:"attempt,omitempty"`
 	Staged       int    `json:"staged,omitempty"`
+	Attempted    int    `json:"attempted,omitempty"`
 	Reclaimed    int    `json:"reclaimed,omitempty"`
+	Skipped      int    `json:"skipped,omitempty"`
 	ScannedAt    string `json:"scanned_at,omitempty"`
 	StagedAt     string `json:"staged_at,omitempty"`
 	ExpiresAt    string `json:"expires_at,omitempty"`
@@ -209,11 +211,4 @@ func (r *Redactor) Text(message string) string {
 	message = endpointPattern.ReplaceAllString(message, "[endpoint]")
 	message = namePattern.ReplaceAllString(message, "[name]")
 	return strings.TrimSpace(message)
-}
-
-// Redact renders an error log-safe with no configured secret. It is the default a
-// caller gets before it knows its configuration; a caller that has one uses
-// Config.Redactor instead.
-func Redact(err error) string {
-	return (*Redactor)(nil).Error(err)
 }

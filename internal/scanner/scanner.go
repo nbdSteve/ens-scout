@@ -97,7 +97,8 @@ const (
 
 // gatewayTemplate is the authenticated Graph gateway. The API key travels in the
 // path, which is why the resolved endpoint is treated as a secret: it is never a
-// log field, and Redact strips any URL an error quotes.
+// log field, and a Redactor strips any URL an error quotes as well as the key and
+// the endpoint as literals.
 const gatewayTemplate = "https://gateway.thegraph.com/api/%s/subgraphs/id/%s"
 
 // Configuration bounds. Every knob has a ceiling as well as a floor, because a
@@ -535,13 +536,6 @@ func Run(ctx context.Context, deps Dependencies, event Event) (Result, error) {
 		return Result{}, deps.fail(logger, "snapshot_build_failed", Fields{Group: group}, err)
 	}
 
-	// Reclaiming runs here rather than at the top of the run, so it knows the
-	// snapshot ID this run is about to write and can leave it alone. A staged set
-	// this run went on to publish must never be carrying an expiry: the chunks would
-	// be identical, so the write would be skipped and the expiry would outlive the
-	// pointer that started naming them.
-	reclaimAbandoned(ctx, deps, logger, group, built.Metadata.SnapshotID, deps.now())
-
 	stagedAt := deps.now().Truncate(time.Second)
 	if err := deps.Store.StageSnapshot(ctx, built.Metadata.SnapshotID, stagedAt, stagedAt.Add(stagingRetention)); err != nil {
 		// Nothing has been written yet, so failing here publishes nothing and loses
@@ -551,14 +545,31 @@ func Run(ctx context.Context, deps Dependencies, event Event) (Result, error) {
 			Fields{Group: group, SnapshotID: built.Metadata.SnapshotID}, err)
 	}
 
-	latest, err := snapshot.Publish(ctx, deps.Store, built, deps.now().Truncate(time.Second))
-	if err != nil {
-		return Result{}, deps.fail(logger, "publish_failed", Fields{Group: group, SnapshotID: built.Metadata.SnapshotID}, err)
+	latest, publishErr := snapshot.Publish(ctx, deps.Store, built, deps.now().Truncate(time.Second))
+	if publishErr == nil {
+		// The snapshot is published, so its chunks are live and the marker has done
+		// its job. A marker left behind costs one wasted reclaim attempt, which is why
+		// this is not worth failing a successful publication over.
+		unstage(ctx, deps, logger, group, latest.SnapshotID)
 	}
-	// The snapshot is published, so its chunks are live and the marker has done its
-	// job. A marker left behind costs one wasted reclaim attempt, which is why this
-	// is not worth failing a successful publication over.
-	unstage(ctx, deps, logger, group, latest.SnapshotID)
+
+	// Reclaiming runs after the publication attempt, and after it either way.
+	//
+	// Before it, best-effort cleanup would sit on the critical path of the write it
+	// exists to clean up after: a throttled table could spend the rest of the
+	// invocation's deadline here and leave the run publishing nothing, abandoning one
+	// more chunk set and making the next pass longer still. On the success path only,
+	// it would stop reclaiming exactly when sets are being abandoned, because a run
+	// that keeps failing to publish is the run that keeps abandoning them.
+	//
+	// It is given this run's own snapshot ID either way, so the set this run just
+	// published, or just abandoned, is left alone. Nothing it does can fail the run.
+	reclaimAbandoned(ctx, deps, logger, group, built.Metadata.SnapshotID, deps.now())
+
+	if publishErr != nil {
+		return Result{}, deps.fail(logger, "publish_failed",
+			Fields{Group: group, SnapshotID: built.Metadata.SnapshotID}, publishErr)
+	}
 	logger.Log(LevelInfo, "snapshot_published", Fields{
 		Group:        group,
 		SnapshotID:   latest.SnapshotID,
@@ -808,11 +819,26 @@ func readPrevious(ctx context.Context, deps Dependencies, logger *Logger) (*snap
 //   - a marker younger than abandonedAfter is left alone, because a publisher may
 //     still be writing that set. Staging refreshes the marker, so a publisher that
 //     claims a snapshot ID again renews its own grace period.
+//   - a marker the registry could not interpret is reported and left alone. It is
+//     never returned, so nothing can be expired against it, and the markers that did
+//     read are still reclaimed: one unreadable item must not stop the pass that
+//     bounds the table.
+//
+// The budget bounds markers acted on, not markers reclaimed, so a table that refuses
+// every expiry costs the same bounded number of calls as one that accepts them all.
+// Counting only successes would let a sustained failure turn every later pass into
+// work proportional to the whole registry.
 //
 // Every failure here is logged and none fails the run. This is cleanup after an
 // earlier invocation, so refusing to publish over it would turn one failed run into
 // a permanently stuck schedule.
 func reclaimAbandoned(ctx context.Context, deps Dependencies, logger *Logger, group Group, keep string, now time.Time) {
+	if ctx.Err() != nil {
+		// A dead context says nothing about what is staged, and cleanup is never
+		// worth reporting a failure the run has already reported.
+		return
+	}
+
 	live := ""
 	switch latest, err := deps.Store.GetLatest(ctx); {
 	case err == nil:
@@ -826,11 +852,16 @@ func reclaimAbandoned(ctx context.Context, deps Dependencies, logger *Logger, gr
 
 	staged, err := deps.Store.StagedSnapshots(ctx)
 	if err != nil {
-		logger.LogError(LevelWarn, "abandoned_chunks_deferred", Fields{Group: group}, err)
-		return
+		var unreadable *snapshot.StagingUnreadableError
+		if !errors.As(err, &unreadable) {
+			logger.LogError(LevelWarn, "abandoned_chunks_deferred", Fields{Group: group}, err)
+			return
+		}
+		logger.LogError(LevelWarn, "staging_markers_unreadable",
+			Fields{Group: group, Skipped: unreadable.Skipped}, err)
 	}
 
-	reclaimed := 0
+	attempted, reclaimed := 0, 0
 	for _, entry := range staged {
 		if ctx.Err() != nil {
 			return
@@ -838,20 +869,24 @@ func reclaimAbandoned(ctx context.Context, deps Dependencies, logger *Logger, gr
 		if entry.SnapshotID == keep {
 			continue
 		}
-		if entry.SnapshotID == live {
-			unstage(ctx, deps, logger, group, entry.SnapshotID)
+		actionable := entry.SnapshotID == live || now.Sub(entry.StagedAt) >= abandonedAfter
+		if !actionable {
 			continue
 		}
-		if now.Sub(entry.StagedAt) < abandonedAfter {
-			continue
-		}
-		if reclaimed >= maxReclaimsPerRun {
+		if attempted >= maxReclaimsPerRun {
 			logger.Log(LevelWarn, "abandoned_chunks_deferred", Fields{
 				Group:     group,
 				Staged:    len(staged),
+				Attempted: attempted,
 				Reclaimed: reclaimed,
 			})
 			return
+		}
+		attempted++
+
+		if entry.SnapshotID == live {
+			unstage(ctx, deps, logger, group, entry.SnapshotID)
+			continue
 		}
 
 		expiresAt := now.Add(abandonedRetention).UTC().Truncate(time.Second)

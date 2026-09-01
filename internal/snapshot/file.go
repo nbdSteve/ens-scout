@@ -317,9 +317,11 @@ func (s *FileStore) UnstageSnapshot(ctx context.Context, snapshotID string) erro
 	return nil
 }
 
-// StagedSnapshots reads every staging marker, in snapshot ID order. It fails closed
-// on a marker it cannot read, because a reclaimer decides what to destroy from this
-// and must never be handed a partial view.
+// StagedSnapshots reads every staging marker, in snapshot ID order.
+//
+// A marker file it cannot interpret is skipped and reported through
+// StagingUnreadableError, never returned and so never acted on. An I/O failure is a
+// failure: it says nothing about the marker's contents.
 func (s *FileStore) StagedSnapshots(ctx context.Context) ([]StagedSnapshot, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -343,6 +345,14 @@ func (s *FileStore) StagedSnapshots(ctx context.Context) ([]StagedSnapshot, erro
 	sort.Strings(names)
 
 	staged := make([]StagedSnapshot, 0, len(names))
+	skipped := 0
+	var firstSkip error
+	skip := func(err error) {
+		skipped++
+		if firstSkip == nil {
+			firstSkip = err
+		}
+	}
 	for _, name := range names {
 		encoded, err := os.ReadFile(filepath.Join(s.root, fileStoreStagingDir, name))
 		if err != nil {
@@ -350,15 +360,21 @@ func (s *FileStore) StagedSnapshots(ctx context.Context) ([]StagedSnapshot, erro
 		}
 		var marker stagedSnapshot
 		if err := json.Unmarshal(encoded, &marker); err != nil {
-			return nil, fmt.Errorf("read staging marker %s: %w", name, err)
+			skip(fmt.Errorf("read staging marker %s: %w", name, err))
+			continue
 		}
 		if err := ValidateSnapshotID(marker.SnapshotID); err != nil {
-			return nil, err
+			skip(err)
+			continue
 		}
 		if want := marker.SnapshotID + fileStoreChunkExt; name != want {
-			return nil, fmt.Errorf("staging marker %s names snapshot %q, want file %s", name, marker.SnapshotID, want)
+			skip(fmt.Errorf("staging marker %s names snapshot %q, want file %s", name, marker.SnapshotID, want))
+			continue
 		}
 		staged = append(staged, StagedSnapshot{SnapshotID: marker.SnapshotID, StagedAt: marker.StagedAt.UTC()})
+	}
+	if skipped > 0 {
+		return staged, &StagingUnreadableError{Skipped: skipped, Cause: firstSkip}
 	}
 	return staged, nil
 }
