@@ -3,6 +3,7 @@ package snapshot
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -123,8 +124,12 @@ func (s *FileStore) DeleteChunks(ctx context.Context, snapshotID string) error {
 	return os.RemoveAll(s.snapshotDir(snapshotID))
 }
 
-// PutLatest replaces the pointer file. The write is atomic, so a reader never
-// observes a half-written pointer.
+// PutLatest replaces the pointer file, applying the LatestStore ordering rule.
+// The write is atomic, so a reader never observes a half-written pointer.
+//
+// The stored pointer must still be readable and valid: this store never
+// overwrites a pointer it cannot understand, because that pointer may be the
+// only record of what readers are currently served.
 func (s *FileStore) PutLatest(ctx context.Context, latest Latest) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -132,6 +137,22 @@ func (s *FileStore) PutLatest(ctx context.Context, latest Latest) error {
 	if err := latest.Validate(); err != nil {
 		return err
 	}
+
+	var stored *Latest
+	current, err := s.GetLatest(ctx)
+	if err == nil {
+		stored = &current
+	} else if !errors.Is(err, ErrNotFound) {
+		return err
+	}
+	write, err := checkPutLatest(stored, latest)
+	if err != nil {
+		return err
+	}
+	if !write {
+		return nil
+	}
+
 	if err := os.MkdirAll(s.root, 0o755); err != nil {
 		return err
 	}

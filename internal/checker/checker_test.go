@@ -78,4 +78,80 @@ func TestRunBatchesClassifiesAndSorts(t *testing.T) {
 	if statuses["free.eth"] != ens.StatusAvailable {
 		t.Errorf("free status = %q", statuses["free.eth"])
 	}
+	if !stats.ClassifiedAt.Equal(now) {
+		t.Errorf("ClassifiedAt = %s, want %s", stats.ClassifiedAt, now)
+	}
+}
+
+// TestRunReportsOneClassificationInstant proves Run samples the clock exactly once
+// and reports that instant, which is what a publisher must pass to snapshot.Build
+// as the scan time.
+func TestRunReportsOneClassificationInstant(t *testing.T) {
+	first := time.Date(2026, time.March, 1, 12, 0, 0, 0, time.UTC)
+
+	tests := []struct {
+		name  string
+		names []string
+	}{
+		{name: "with names", names: []string{"alpha", "beta", "gamma"}},
+		{name: "with no names", names: nil},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			// A clock that advances on every call would produce a different
+			// instant per batch if Run sampled it more than once.
+			calls := 0
+			clock := func() time.Time {
+				calls++
+				return first.Add(time.Duration(calls-1) * time.Hour)
+			}
+
+			_, stats, err := Run(context.Background(), &fakeClient{}, test.names, Options{
+				Workers:   2,
+				BatchSize: 1,
+				Soon:      7 * 24 * time.Hour,
+				Now:       clock,
+			})
+			if err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+			if calls != 1 {
+				t.Fatalf("Run sampled the clock %d times, want 1", calls)
+			}
+			if !stats.ClassifiedAt.Equal(first) {
+				t.Fatalf("ClassifiedAt = %s, want %s", stats.ClassifiedAt, first)
+			}
+			if stats.ClassifiedAt.Location() != time.UTC {
+				t.Fatalf("ClassifiedAt is in %s, want UTC", stats.ClassifiedAt.Location())
+			}
+		})
+	}
+}
+
+// TestRunLeavesTheInstantUnsetWhenItRejectsOptions keeps the documented contract
+// honest: a caller must not read ClassifiedAt from a failed run.
+func TestRunLeavesTheInstantUnsetWhenItRejectsOptions(t *testing.T) {
+	tests := []struct {
+		name    string
+		client  Client
+		options Options
+	}{
+		{name: "no client", options: Options{Workers: 1, BatchSize: 1}},
+		{name: "no workers", client: &fakeClient{}, options: Options{Workers: 0, BatchSize: 1}},
+		{name: "bad batch size", client: &fakeClient{}, options: Options{Workers: 1, BatchSize: 0}},
+		{name: "negative soon window", client: &fakeClient{}, options: Options{Workers: 1, BatchSize: 1, Soon: -time.Hour}},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, stats, err := Run(context.Background(), test.client, []string{"alpha"}, test.options)
+			if err == nil {
+				t.Fatal("Run accepted invalid options")
+			}
+			if !stats.ClassifiedAt.IsZero() {
+				t.Fatalf("ClassifiedAt = %s, want the zero time", stats.ClassifiedAt)
+			}
+		})
+	}
 }

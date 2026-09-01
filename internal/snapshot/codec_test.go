@@ -348,9 +348,15 @@ func TestVerifyFailsClosedAgainstPointer(t *testing.T) {
 			want:   "scan time disagrees",
 		},
 		{
-			name:   "name count",
-			mutate: func(l *Latest) { l.Names++ },
-			want:   "the pointer reports",
+			// The whole summary is moved together, so it stays internally
+			// consistent and only the chunks can contradict it.
+			name: "name count",
+			mutate: func(l *Latest) {
+				l.Names++
+				l.Counts[ens.StatusAvailable]++
+				l.Sources[0].Names++
+			},
+			want: "the pointer reports",
 		},
 		{
 			name:   "missing sources",
@@ -394,14 +400,24 @@ func TestVerifyFailsClosedAgainstPointer(t *testing.T) {
 			want:   "counts must list every lifecycle status",
 		},
 		{
-			name:   "wrong count",
+			// Moving a name between statuses keeps the counts summing to the name
+			// total, so only the comparison with the chunks can catch it.
+			name: "count moved between statuses",
+			mutate: func(l *Latest) {
+				l.Counts[ens.StatusAvailable]++
+				l.Counts[ens.StatusUnknown]--
+			},
+			want: `results but the pointer reports`,
+		},
+		{
+			name:   "counts sum past the name total",
 			mutate: func(l *Latest) { l.Counts[ens.StatusAvailable] = 99 },
-			want:   `results but the pointer reports 99`,
+			want:   "counts sum to 105 but the pointer reports 8 names",
 		},
 		{
 			name:   "source name total edited",
 			mutate: func(l *Latest) { l.Sources[0].Names = 99 },
-			want:   "disagrees with its pointer",
+			want:   "source lists account for 99 names but the pointer reports 8",
 		},
 		{
 			name:   "source path edited",

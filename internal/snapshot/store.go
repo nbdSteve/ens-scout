@@ -1,7 +1,9 @@
 package snapshot
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -37,6 +39,13 @@ const (
 // ErrNotFound reports that no snapshot or latest pointer exists yet. A reader
 // must treat it as "nothing published" rather than as a transient failure.
 var ErrNotFound = errors.New("snapshot not found")
+
+// ErrPointerConflict reports that a pointer write was refused because it would
+// move readers to an older scan, or because a different pointer is already
+// stored for the same scan time. A publisher must treat it as a lost race, not
+// as a transient failure to retry: the snapshot that is already published is
+// the one that should keep serving.
+var ErrPointerConflict = errors.New("latest snapshot pointer conflict")
 
 // SnapshotPartition returns the partition key that holds one snapshot's chunks.
 func SnapshotPartition(snapshotID string) string {
@@ -127,10 +136,15 @@ func (l Latest) Validate() error {
 	if len(expectedSources) != len(l.Sources) {
 		return fmt.Errorf("latest pointer source lists are not canonical")
 	}
+	sourceNames := 0
 	for i, source := range l.Sources {
 		if source != expectedSources[i] {
 			return fmt.Errorf("latest pointer source lists are not sorted by id")
 		}
+		sourceNames += source.Names
+	}
+	if sourceNames != l.Names {
+		return fmt.Errorf("latest pointer source lists account for %d names but the pointer reports %d", sourceNames, l.Names)
 	}
 
 	scanAge, err := DeriveScanAgeInput(l.Sources)
@@ -144,6 +158,7 @@ func (l Latest) Validate() error {
 	if len(l.Counts) != len(ens.Statuses) {
 		return fmt.Errorf("latest pointer counts must list every lifecycle status")
 	}
+	counted := 0
 	for _, status := range ens.Statuses {
 		count, ok := l.Counts[status]
 		if !ok {
@@ -152,6 +167,13 @@ func (l Latest) Validate() error {
 		if count < 0 {
 			return fmt.Errorf("latest pointer reports a negative %q count", status)
 		}
+		counted += count
+	}
+	// Every result lands in exactly one status, so the counts always sum to the
+	// name total. Checking it here catches an edited summary on the cheap path
+	// that reads only the pointer, without fetching and decompressing a chunk.
+	if counted != l.Names {
+		return fmt.Errorf("latest pointer counts sum to %d but the pointer reports %d names", counted, l.Names)
 	}
 	return nil
 }
@@ -166,9 +188,70 @@ type ChunkStore interface {
 
 // LatestStore stores the single pointer to the newest valid snapshot.
 // GetLatest returns ErrNotFound before anything is published.
+//
+// PutLatest only ever moves readers forward. Scans overlap: a slow run can
+// finish after the next scheduled run, and a retried run can finish after a
+// later one, so an unconditional write would silently serve an older scan.
+// Implementations must apply this rule against the stored pointer:
+//
+//   - an older ScannedAt is rejected with ErrPointerConflict;
+//   - the same ScannedAt with a byte-identical pointer succeeds and stores
+//     nothing new, so retrying one publication is safe;
+//   - the same ScannedAt with any other difference is rejected with
+//     ErrPointerConflict as a same-time conflict;
+//   - a newer ScannedAt replaces the stored pointer.
+//
+// A real backend enforces this with a conditional write rather than a read
+// followed by a write, so two concurrent publishers cannot both win.
 type LatestStore interface {
 	PutLatest(ctx context.Context, latest Latest) error
 	GetLatest(ctx context.Context) (Latest, error)
+}
+
+// checkPutLatest applies the LatestStore ordering rule. The first return value
+// reports whether the caller should store the incoming pointer; false with a nil
+// error is the accepted no-op for an identical retry.
+func checkPutLatest(stored *Latest, incoming Latest) (bool, error) {
+	if stored == nil {
+		return true, nil
+	}
+	if incoming.ScannedAt.Before(stored.ScannedAt) {
+		return false, fmt.Errorf(
+			"%w: snapshot %s was scanned at %s, before the published snapshot %s at %s",
+			ErrPointerConflict,
+			incoming.SnapshotID, incoming.ScannedAt.Format(time.RFC3339),
+			stored.SnapshotID, stored.ScannedAt.Format(time.RFC3339),
+		)
+	}
+	if incoming.ScannedAt.Equal(stored.ScannedAt) {
+		identical, err := pointersIdentical(*stored, incoming)
+		if err != nil {
+			return false, err
+		}
+		if identical {
+			return false, nil
+		}
+		return false, fmt.Errorf(
+			"%w: snapshot %s disagrees with the published snapshot %s at the same scan time %s",
+			ErrPointerConflict,
+			incoming.SnapshotID, stored.SnapshotID, stored.ScannedAt.Format(time.RFC3339),
+		)
+	}
+	return true, nil
+}
+
+// pointersIdentical compares two pointers by their canonical JSON, which is the
+// same form a backend stores, so "identical" means identical on the wire.
+func pointersIdentical(left, right Latest) (bool, error) {
+	leftBytes, err := json.Marshal(left)
+	if err != nil {
+		return false, err
+	}
+	rightBytes, err := json.Marshal(right)
+	if err != nil {
+		return false, err
+	}
+	return bytes.Equal(leftBytes, rightBytes), nil
 }
 
 // Store is the full surface a publisher needs. Later AWS code implements this
@@ -187,7 +270,10 @@ type Store interface {
 //  4. write the pointer last.
 //
 // If any step fails the pointer is untouched, so readers keep serving the
-// previous snapshot.
+// previous snapshot. Step 4 also enforces the LatestStore ordering rule, so a
+// scan that finishes out of order is refused with ErrPointerConflict rather than
+// moving readers back to an older scan. The refusal is returned to the caller;
+// the chunks it already wrote are left for retention to remove.
 func Publish(ctx context.Context, store Store, snapshot Snapshot, publishedAt time.Time) (Latest, error) {
 	if store == nil {
 		return Latest{}, fmt.Errorf("snapshot store is required")

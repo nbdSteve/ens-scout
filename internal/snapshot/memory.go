@@ -68,7 +68,9 @@ func (s *MemoryStore) DeleteChunks(ctx context.Context, snapshotID string) error
 	return nil
 }
 
-// PutLatest replaces the pointer.
+// PutLatest moves the pointer forward, applying the LatestStore ordering rule.
+// Holding the write lock across the comparison and the write stands in for the
+// conditional write a real backend uses.
 func (s *MemoryStore) PutLatest(ctx context.Context, latest Latest) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -78,6 +80,13 @@ func (s *MemoryStore) PutLatest(ctx context.Context, latest Latest) error {
 	}
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
+	write, err := checkPutLatest(s.latest, latest)
+	if err != nil {
+		return err
+	}
+	if !write {
+		return nil
+	}
 	stored := latest.Clone()
 	s.latest = &stored
 	s.published = true

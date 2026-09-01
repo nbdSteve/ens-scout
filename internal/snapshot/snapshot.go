@@ -181,6 +181,14 @@ type Snapshot struct {
 // Build normalizes results into canonical order, derives metadata, and
 // validates the whole snapshot. Callers may pass results in any order, so the
 // output does not depend on input order or on which worker finished first.
+//
+// scannedAt must be the instant the results were classified against, which
+// checker.Run reports as Stats.ClassifiedAt. It is not "roughly when the scan
+// ran": every status is checked against it, so a scan that classifies at one
+// instant and then builds with a freshly sampled clock is rejected as soon as
+// any expiry, grace end, or premium end falls between the two. Build truncates
+// scannedAt to the second, which is safe because ENS lifecycle timestamps are
+// whole seconds and so no boundary sits inside the truncated fraction.
 func Build(snapshotID string, scannedAt time.Time, sources []SourceList, results []ens.Result) (Snapshot, error) {
 	if err := ValidateSnapshotID(snapshotID); err != nil {
 		return Snapshot{}, err

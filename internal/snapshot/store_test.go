@@ -1,6 +1,7 @@
 package snapshot
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -213,6 +214,204 @@ func TestSupersededSnapshotsAreRemovableAfterPublication(t *testing.T) {
 	}
 }
 
+// TestStoresKeepThePointerMonotonic drives the LatestStore ordering rule through
+// both fakes: an older scan is refused, an identical retry succeeds without
+// changing anything, and a different pointer at the same scan time is refused.
+func TestStoresKeepThePointerMonotonic(t *testing.T) {
+	ctx := context.Background()
+
+	published := mustPointer(t, mustBuild(t, lifecycleResults(t, fixedNow)), fixedNow.Add(time.Minute))
+
+	earlier := fixedNow.Add(-3 * time.Hour)
+	earlierResults := lifecycleResults(t, earlier)
+	earlierSnapshot, err := Build("earlier-snapshot", earlier, testSources(len(earlierResults)), earlierResults)
+	if err != nil {
+		t.Fatalf("Build earlier snapshot: %v", err)
+	}
+	older := mustPointer(t, earlierSnapshot, earlier.Add(time.Minute))
+
+	later := fixedNow.Add(3 * time.Hour)
+	laterResults := lifecycleResults(t, later)
+	laterSnapshot, err := Build("later-snapshot", later, testSources(len(laterResults)), laterResults)
+	if err != nil {
+		t.Fatalf("Build later snapshot: %v", err)
+	}
+	newer := mustPointer(t, laterSnapshot, later.Add(time.Minute))
+
+	// Same scan time, different publication time: a genuinely different pointer.
+	republished := mustPointer(t, mustBuild(t, lifecycleResults(t, fixedNow)), fixedNow.Add(2*time.Minute))
+
+	tests := []struct {
+		name       string
+		write      Latest
+		wantErr    bool
+		wantServed Latest
+	}{
+		{
+			name:       "older scan time is refused",
+			write:      older,
+			wantErr:    true,
+			wantServed: published,
+		},
+		{
+			name:       "identical pointer is an accepted no-op",
+			write:      published,
+			wantServed: published,
+		},
+		{
+			name:       "same scan time with a different pointer is refused",
+			write:      republished,
+			wantErr:    true,
+			wantServed: published,
+		},
+		{
+			name:       "newer scan time moves the pointer",
+			write:      newer,
+			wantServed: newer,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			for name, store := range newStores(t) {
+				t.Run(name, func(t *testing.T) {
+					if err := store.PutLatest(ctx, published); err != nil {
+						t.Fatalf("PutLatest of the first pointer: %v", err)
+					}
+
+					err := store.PutLatest(ctx, test.write)
+					if test.wantErr {
+						if err == nil {
+							t.Fatalf("PutLatest accepted a pointer that moves readers backwards")
+						}
+						if !errors.Is(err, ErrPointerConflict) {
+							t.Fatalf("error %q is not an ErrPointerConflict", err)
+						}
+					} else if err != nil {
+						t.Fatalf("PutLatest: %v", err)
+					}
+
+					served, err := store.GetLatest(ctx)
+					if err != nil {
+						t.Fatalf("GetLatest: %v", err)
+					}
+					if served.SnapshotID != test.wantServed.SnapshotID {
+						t.Fatalf("readers see %q, want %q", served.SnapshotID, test.wantServed.SnapshotID)
+					}
+					if !bytes.Equal(mustMarshal(t, served), mustMarshal(t, test.wantServed)) {
+						t.Fatalf("the stored pointer is not byte-identical to the one that should be serving")
+					}
+				})
+			}
+		})
+	}
+}
+
+// TestPublishRefusesAnOutOfOrderScan is the end-to-end version of the ordering
+// rule: a slow scan that finishes after a later one must not move readers back.
+func TestPublishRefusesAnOutOfOrderScan(t *testing.T) {
+	ctx := context.Background()
+
+	newer := mustBuild(t, lifecycleResults(t, fixedNow))
+
+	earlier := fixedNow.Add(-3 * time.Hour)
+	earlierResults := lifecycleResults(t, earlier)
+	older, err := Build("earlier-snapshot", earlier, testSources(len(earlierResults)), earlierResults)
+	if err != nil {
+		t.Fatalf("Build the earlier snapshot: %v", err)
+	}
+
+	for name, store := range newStores(t) {
+		t.Run(name, func(t *testing.T) {
+			if _, err := Publish(ctx, store, newer, fixedNow); err != nil {
+				t.Fatalf("Publish the newer snapshot: %v", err)
+			}
+
+			if _, err := Publish(ctx, store, older, fixedNow.Add(time.Minute)); err == nil {
+				t.Fatal("Publish moved readers back to an older scan")
+			} else if !errors.Is(err, ErrPointerConflict) {
+				t.Fatalf("error %q is not an ErrPointerConflict", err)
+			}
+
+			readSnapshot, readLatest, err := Read(ctx, store)
+			if err != nil {
+				t.Fatalf("Read after a refused publication: %v", err)
+			}
+			if readLatest.SnapshotID != newer.Metadata.SnapshotID {
+				t.Fatalf("the pointer names %q, want %q", readLatest.SnapshotID, newer.Metadata.SnapshotID)
+			}
+			if !readSnapshot.Metadata.ScannedAt.Equal(newer.Metadata.ScannedAt) {
+				t.Fatalf("readers see a scan at %s, want %s", readSnapshot.Metadata.ScannedAt, newer.Metadata.ScannedAt)
+			}
+		})
+	}
+}
+
+// TestPutLatestRejectsAnInconsistentSummary proves both fakes refuse to store a
+// pointer whose summary contradicts itself, so a client that reads only the
+// pointer is never handed totals that do not add up.
+func TestPutLatestRejectsAnInconsistentSummary(t *testing.T) {
+	ctx := context.Background()
+	valid := mustPointer(t, mustBuild(t, lifecycleResults(t, fixedNow)), fixedNow.Add(time.Minute))
+
+	tests := []struct {
+		name   string
+		mutate func(*Latest)
+		want   string
+	}{
+		{
+			name:   "counts sum above the name total",
+			mutate: func(l *Latest) { l.Counts[ens.StatusAvailable] += 3 },
+			want:   "counts sum to 11 but the pointer reports 8 names",
+		},
+		{
+			name:   "counts sum below the name total",
+			mutate: func(l *Latest) { l.Counts[ens.StatusAvailable] = 0 },
+			want:   "counts sum to 6 but the pointer reports 8 names",
+		},
+		{
+			name:   "source totals above the name total",
+			mutate: func(l *Latest) { l.Sources[0].Names += 2 },
+			want:   "source lists account for 10 names but the pointer reports 8",
+		},
+		{
+			name:   "source totals below the name total",
+			mutate: func(l *Latest) { l.Sources[0].Names = 0 },
+			want:   "source lists account for 0 names but the pointer reports 8",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			latest := valid.Clone()
+			test.mutate(&latest)
+			for name, store := range newStores(t) {
+				t.Run(name, func(t *testing.T) {
+					err := store.PutLatest(ctx, latest)
+					if err == nil {
+						t.Fatalf("PutLatest stored an inconsistent summary")
+					}
+					if !strings.Contains(err.Error(), test.want) {
+						t.Fatalf("error %q does not contain %q", err, test.want)
+					}
+					if _, err := store.GetLatest(ctx); !errors.Is(err, ErrNotFound) {
+						t.Fatalf("GetLatest returned %v, want ErrNotFound", err)
+					}
+				})
+			}
+		})
+	}
+}
+
+func mustPointer(t *testing.T, snapshot Snapshot, publishedAt time.Time) Latest {
+	t.Helper()
+	payload, err := Encode(snapshot)
+	if err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+	return payload.Latest(publishedAt)
+}
+
 // TestStoresIsolateStoredPointerState proves both fakes enforce the immutability a
 // real backend gives for free: a reader that edits the pointer it was handed must
 // not be able to change what the next reader sees.
@@ -335,14 +534,23 @@ func TestFileStoreDetectsTamperedFiles(t *testing.T) {
 			want:   "counts must list every lifecycle status",
 		},
 		{
+			// An edited count is caught by the pointer alone, without fetching or
+			// decompressing a chunk, which is the work a status read exists to skip.
 			name:   "pointer count edited",
 			damage: editLatestFile(`"available":2`, `"available":99`),
-			want:   `results but the pointer reports 99`,
+			want:   "counts sum to 105 but the pointer reports 8 names",
 		},
 		{
 			name:   "pointer source name total edited",
 			damage: editLatestFile(`"names":8}]`, `"names":99}]`),
-			want:   "disagrees with its pointer",
+			want:   "source lists account for 99 names but the pointer reports 8",
+		},
+		{
+			// The counts still sum to the name total, so only the comparison with
+			// the decoded snapshot can catch this one.
+			name:   "pointer count moved between statuses",
+			damage: editLatestFile(`"available":2,"expiring-soon":1`, `"available":3,"expiring-soon":0`),
+			want:   "results but the pointer reports",
 		},
 	}
 

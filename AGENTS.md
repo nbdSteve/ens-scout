@@ -75,6 +75,13 @@ scanner, the read API, the local preview, and the browser all agree.
   keep the documented base64 safety margin below DynamoDB's 400 KB item limit.
 - Fail closed on missing, duplicated, reordered, corrupt, checksum-mismatched,
   or non-canonical payloads. Never repair one.
+- Pass `checker.Run`'s `Stats.ClassifiedAt` to `snapshot.Build` as the scan time.
+  Every published status is re-checked against that instant, so sampling the
+  clock again after a long scan rejects the whole snapshot.
+- Keep the pointer monotonic. `LatestStore.PutLatest` rejects an older scan time,
+  treats a byte-identical pointer at the same scan time as a successful no-op so
+  a retry is safe, and rejects any other pointer at the same scan time. Scans
+  overlap, so an unconditional write would quietly serve an older scan.
 - Write the latest pointer last, after chunks are stored, read back, and
   verified, so a failed publication leaves the previous snapshot serving.
 - Publish staleness thresholds, not a stale flag. Clients resolve staleness
@@ -128,4 +135,6 @@ it small, current, and free of anything the code already states.
   A stale instruction here is worse than a missing one.
 - Do not turn this file into a changelog, a task list, or a design document.
   Design belongs in `docs/`.
-- `CLAUDE.md` only points at this file. Add content here, not there.
+- `CLAUDE.md` is a symbolic link to this file, committed as git mode `120000`.
+  Keep it a link rather than a copy or a one-line pointer, so exactly one real
+  file holds the agent instructions and no second copy can drift.

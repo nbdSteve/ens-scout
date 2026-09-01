@@ -218,6 +218,48 @@ func TestBuildIgnoresWorkerCompletionOrder(t *testing.T) {
 	}
 }
 
+// TestBuildAcceptsTheCheckerClassificationInstant proves the scan time contract is
+// satisfiable end to end. checker.Run reports the instant it classified against,
+// and Build accepts exactly that instant even with a sub-second fraction, because
+// ENS boundaries are whole seconds. Sampling the clock again past a boundary is
+// refused, which is why the instant has to be carried rather than re-derived.
+func TestBuildAcceptsTheCheckerClassificationInstant(t *testing.T) {
+	classifyAt := fixedNow.Add(500 * time.Millisecond)
+	// The nearest lifecycle boundary to the classification instant.
+	expiry := fixedNow.Add(time.Second)
+
+	client := fakeLookupClient{lookups: map[string]ens.Lookup{
+		"zap": {Name: "zap", Found: true, Expiry: &expiry},
+	}}
+	results, stats, err := checker.Run(context.Background(), client, []string{"zap"}, checker.Options{
+		Workers:   1,
+		BatchSize: 1,
+		Soon:      testSoon,
+		Now:       func() time.Time { return classifyAt },
+	})
+	if err != nil {
+		t.Fatalf("checker.Run: %v", err)
+	}
+	if !stats.ClassifiedAt.Equal(classifyAt) {
+		t.Fatalf("checker reports ClassifiedAt %s, want %s", stats.ClassifiedAt, classifyAt)
+	}
+	if len(results) != 1 || results[0].Status != ens.StatusExpiringSoon {
+		t.Fatalf("results are %+v, want one expiring-soon result", results)
+	}
+
+	if _, err := Build("test-snapshot", stats.ClassifiedAt, testSources(len(results)), results); err != nil {
+		t.Fatalf("Build rejected the instant checker classified against: %v", err)
+	}
+
+	// Two seconds later the expiry has passed, so the stored status no longer
+	// describes the scan time and the whole snapshot is refused.
+	if _, err := Build("test-snapshot", classifyAt.Add(2*time.Second), testSources(len(results)), results); err == nil {
+		t.Fatal("Build accepted a scan time on the far side of a lifecycle boundary")
+	} else if !strings.Contains(err.Error(), "at the scan time") {
+		t.Fatalf("error %q does not mention the scan time", err)
+	}
+}
+
 func TestBuildRejectsInvalidInput(t *testing.T) {
 	results := lifecycleResults(t, fixedNow)
 	sources := testSources(len(results))
