@@ -57,6 +57,12 @@ const (
 	// 1 MB page this covers far more chunks than chunkSortDigits allows.
 	maxChunkQueryPages = 512
 
+	// maxStagingQueryPages bounds the staging-marker query. Markers are a few tens
+	// of bytes each and exist only between a publisher's first chunk write and its
+	// pointer write, so one page holds thousands of them; the bound is here for the
+	// same reason the chunk one is, to keep a paging loop finite.
+	maxStagingQueryPages = 16
+
 	// maxPointerAttempts bounds the compare-and-swap loop in PutLatest. Each
 	// attempt re-reads the pointer, so a publisher that loses the race this many
 	// times in a row is contending with a publisher that keeps winning, and the
@@ -74,8 +80,10 @@ const (
 //
 // Reads address the pointer by its exact primary key with GetItem, and chunk reads
 // query the SNAPSHOT# partition for keys beginning with snapshot.ChunkSortPrefix, so
-// nothing on the read path can return a quarantined item. Any future query that
-// scans the META partition by sort-key prefix would have to exclude this one.
+// nothing on the read path can return a quarantined item. The one query that does
+// scan the META partition by sort-key prefix, StagedSnapshots, asks for
+// snapshot.StagingSortPrefix, which this prefix does not begin with. Any future
+// query over that partition has to exclude this prefix explicitly.
 const quarantineSortPrefix = snapshot.LatestSort + "-INVALID#"
 
 // Store implements snapshot.Store, and adds ExpireChunks for the TTL a real table
@@ -121,8 +129,12 @@ func New(api API, options Options) (*Store, error) {
 	return &Store{api: api, table: options.Table, unprocessedRetries: retries, sleep: sleep}, nil
 }
 
-// Store satisfies the contract's full publisher surface.
-var _ snapshot.Store = (*Store)(nil)
+// Store satisfies the contract's full publisher surface, and the staging registry
+// a publisher needs so an abandoned chunk set stays findable.
+var (
+	_ snapshot.Store        = (*Store)(nil)
+	_ snapshot.StagingStore = (*Store)(nil)
+)
 
 // PutChunks writes the chunks of one snapshot, applying the ChunkStore rule to
 // whatever is already stored under that snapshot ID: an identical set is a no-op, a
@@ -244,18 +256,24 @@ func (s *Store) DeleteChunks(ctx context.Context, snapshotID string) error {
 	return s.batchWrite(ctx, requests)
 }
 
-// ExpireChunks sets the table's TTL attribute on every chunk of a superseded
-// snapshot, so the previous snapshot stays readable for a recovery window and is
+// ExpireChunks sets the table's TTL attribute on every chunk of a snapshot that is
+// no longer the published one, so it stays readable for a recovery window and is
 // then reclaimed without any further call.
 //
 // DynamoDB deletes expired items at its own pace, typically within 48 hours of the
 // timestamp, so expiresAt is the earliest the chunks may disappear and not a
 // deadline by which they will. Callers must size the window on the "at least" reading.
 //
-// It refuses to expire the snapshot the latest pointer names, and refuses outright
-// when the pointer is missing or unusable, because neither can prove the snapshot is
-// superseded. Expiring the live snapshot would empty the table under readers that
-// resolve the pointer successfully.
+// It refuses to expire the snapshot the latest pointer names, because expiring the
+// live snapshot would empty the table under readers that resolve the pointer
+// successfully. A pointer that is stored but unusable is refused too: it cannot
+// prove which snapshot it names, so it cannot prove this is not that one.
+//
+// A pointer that is absent is not the same thing. Nothing is published, so no
+// reader can be resolving any snapshot and this one cannot be the live one.
+// Refusing then would leave a chunk set abandoned before the first successful
+// publication unreclaimable, which is exactly the case where a publication that
+// keeps failing would otherwise grow the table on every attempt.
 //
 // A snapshot whose chunks carry a TTL must not be published again: the TTL is not
 // part of snapshot.Chunk, so PlanChunkWrite would see an identical set, skip the
@@ -273,11 +291,15 @@ func (s *Store) ExpireChunks(ctx context.Context, snapshotID string, expiresAt t
 	}
 
 	published, err := s.GetLatest(ctx)
-	if err != nil {
+	switch {
+	case err == nil:
+		if published.SnapshotID == snapshotID {
+			return fmt.Errorf("refusing to expire snapshot %s because the latest pointer still names it", snapshotID)
+		}
+	case errors.Is(err, snapshot.ErrNotFound):
+		// Nothing is published, so nothing is live.
+	default:
 		return fmt.Errorf("cannot expire snapshot %s without a usable latest pointer: %w", snapshotID, err)
-	}
-	if published.SnapshotID == snapshotID {
-		return fmt.Errorf("refusing to expire snapshot %s because the latest pointer still names it", snapshotID)
 	}
 
 	keys, err := s.chunkKeys(ctx, snapshotID)
@@ -315,6 +337,91 @@ func (s *Store) ExpireChunks(ctx context.Context, snapshotID string, expiresAt t
 		return fmt.Errorf("expire chunks of snapshot %s: %w", snapshotID, err)
 	}
 	return nil
+}
+
+// StageSnapshot records that this publisher is about to write one snapshot's
+// chunks, so the set stays findable if the publication never reaches the pointer.
+//
+// The write is unconditional, which is the rule the contract states: a publisher
+// that claims the same snapshot ID again refreshes the staging time and so renews
+// the grace period a reclaimer waits out. A conditional write that preserved the
+// first claim would let a reclaimer decide a set was abandoned while a second
+// publisher was still writing it.
+func (s *Store) StageSnapshot(ctx context.Context, snapshotID string, stagedAt, expiresAt time.Time) error {
+	if err := snapshot.ValidateStaging(ctx, snapshotID, stagedAt, expiresAt); err != nil {
+		return err
+	}
+	_, err := s.api.PutItem(ctx, &dynamodb.PutItemInput{
+		TableName: aws.String(s.table),
+		Item:      stagingItem(snapshotID, stagedAt, expiresAt),
+	})
+	if err != nil {
+		return fmt.Errorf("stage snapshot %s: %w", snapshotID, err)
+	}
+	return nil
+}
+
+// UnstageSnapshot removes a snapshot's staging marker. Removing one that is not
+// there succeeds, so a publisher may unstage without first reading.
+func (s *Store) UnstageSnapshot(ctx context.Context, snapshotID string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := snapshot.ValidateSnapshotID(snapshotID); err != nil {
+		return err
+	}
+	return s.batchWrite(ctx, []types.WriteRequest{
+		{DeleteRequest: &types.DeleteRequest{Key: stagingKey(snapshotID)}},
+	})
+}
+
+// StagedSnapshots returns every staging marker, in sort-key order, which for these
+// keys is snapshot ID order.
+//
+// It fails closed on a marker it cannot decode rather than skipping it, so a
+// reclaimer never acts on a partial view of what is staged. A marker only a future
+// format version could write therefore defers reclaiming rather than mis-aiming it,
+// and the marker's own TTL still bounds how long that can last.
+func (s *Store) StagedSnapshots(ctx context.Context) ([]snapshot.StagedSnapshot, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	var (
+		staged   []snapshot.StagedSnapshot
+		startKey map[string]types.AttributeValue
+	)
+	for page := 0; page < maxStagingQueryPages; page++ {
+		output, err := s.api.Query(ctx, &dynamodb.QueryInput{
+			TableName:              aws.String(s.table),
+			KeyConditionExpression: aws.String("#pk = :pk AND begins_with(#sk, :prefix)"),
+			ExpressionAttributeNames: map[string]string{
+				"#pk": attrPartition,
+				"#sk": attrSort,
+			},
+			ExpressionAttributeValues: map[string]types.AttributeValue{
+				":pk":     stringValue(snapshot.LatestPartition),
+				":prefix": stringValue(snapshot.StagingSortPrefix),
+			},
+			ScanIndexForward:  aws.Bool(true),
+			ConsistentRead:    aws.Bool(true),
+			ExclusiveStartKey: startKey,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("query staged snapshots: %w", err)
+		}
+		for _, item := range output.Items {
+			entry, err := decodeStagingItem(item)
+			if err != nil {
+				return nil, err
+			}
+			staged = append(staged, entry)
+		}
+		if len(output.LastEvaluatedKey) == 0 {
+			return staged, nil
+		}
+		startKey = output.LastEvaluatedKey
+	}
+	return nil, fmt.Errorf("staged snapshots span more than %d query pages", maxStagingQueryPages)
 }
 
 // GetLatest returns the published pointer, ErrNotFound when nothing is published,

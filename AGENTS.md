@@ -95,7 +95,8 @@ scanner, the read API, the local preview, and the browser all agree.
   stays the one definition of a valid label. Canonical sorting is by the stored
   fully-qualified name, and a client filtering on label length strips the suffix.
 - Keep the package free of AWS, HTTP, and frontend dependencies. Storage
-  backends implement `ChunkStore`, `LatestStore`, and `Store`.
+  backends implement `ChunkStore`, `LatestStore`, and `Store`, plus
+  `StagingStore` if they hold snapshots a publisher can abandon.
 - Keep serialization canonical: name-sorted results, UTC timestamps truncated to
   the second, a fixed gzip level, and an explicitly zeroed gzip header. The same
   logical scan must always produce the same bytes and the same checksum.
@@ -133,8 +134,26 @@ scanner, the read API, the local preview, and the browser all agree.
   `GetLatest` and `Read` still fail closed on one. Replacing such a pointer must
   preserve it somewhere reads never look, and must fail the publication rather
   than destroy it, because it is the only evidence of why publication was stuck.
+- Resume applies within one publication, never across two. A re-invocation
+  rescans, samples a new `ClassifiedAt`, and so mints a different snapshot ID with
+  different bytes, which is why the resume rule cannot finish an earlier run's
+  chunk set and why an abandoned set has to be reclaimable instead.
+- Stage a snapshot ID through `StagingStore` before its first chunk write and
+  unstage it after the pointer moves. Chunks live in their own partition and only
+  the pointer names one, so a publication that writes every chunk and then fails
+  leaves a set nothing references and no query finds. The marker is durable before
+  anything can go wrong, which is the point: the failures that abandon a set - a
+  killed function, an expired context, a timeout, a lost pointer race - are exactly
+  the ones that never run a deferred cleanup. Staging refreshes the marker on a
+  repeated claim, so a publisher still writing a set renews the grace period a
+  reclaimer waits out, and the marker's own expiry has to outlive the interval
+  between reclaim passes or it takes its chunks out of reach again.
 - Write the latest pointer last, after chunks are stored, read back, and
   verified, so a failed publication leaves the previous snapshot serving.
+- Distinguish an absent pointer from a pointer whose chunks are gone. `Read`
+  reports `ErrNotFound` for the first and `ChunksMissingError` for the second,
+  because a publisher merging forward treats nothing-published as an ordinary
+  bootstrap and would otherwise drop a whole group without saying so.
 - Publish staleness thresholds, not a stale flag. Clients resolve staleness
   against their own clock.
 - Regenerate `data/fixtures/` with `go test ./internal/snapshot -update` and
@@ -156,6 +175,13 @@ implement the snapshot contract above rather than restating it.
   the fastest cadence would multiply the Graph budget by eight for no new data.
   Carried statuses are re-derived, never copied, so an expiry that lapsed since
   the last scan is reported correctly without a lookup.
+- Read the previous snapshot after the fresh scan, not before it. A scan takes
+  minutes and the other group's schedule can publish during them, so a snapshot
+  read first would carry stale results over data this run never checked and
+  regress a name the other group had already republished. The cost is that the
+  bounded retry and its backoff now happen after the Graph spend, which is worth
+  paying to carry the newest published snapshot rather than the oldest one the run
+  could have seen.
 - Only lists that contributed a name become sources. A bootstrap run therefore
   advertises its own cadence's staleness thresholds rather than the slowest
   cadence of a list it has not published yet.
@@ -164,6 +190,12 @@ implement the snapshot contract above rather than restating it.
   exactly the condition the corrupt-pointer quarantine exists to recover from,
   and the missing group returns on its own next schedule. A cancelled or expired
   context is not the same thing, and must never be read as an empty store.
+- A previous pointer that resolves but whose chunks are gone is a warning, not an
+  informational bootstrap record, and it names the snapshot that vanished. The run
+  still publishes past it, but an operator who has just lost a whole group from the
+  site must not have to infer that from a record about a first run. It is not
+  retried: a strongly consistent read that found no chunk will not find one on a
+  second attempt.
 - There is no public-endpoint fallback here, unlike the CLI. A scheduled scan of
   tens of thousands of names against the shared rate-limited endpoint would fail
   slowly and partially; a missing credential must fail at startup instead.
@@ -171,6 +203,13 @@ implement the snapshot contract above rather than restating it.
   produced it. The Graph gateway carries `THEGRAPH_API_KEY` in its request path,
   so any error that quotes a URL leaks the credential into a log group. This
   applies to the error the handler returns too: the Lambda runtime logs it.
+- Redaction is configuration-aware. `Config.Redactor` strips the configured key and
+  the resolved endpoint as literals, on top of the URL and candidate-name patterns,
+  because a pattern only catches a credential that is inside a URL: `internal/ens`
+  folds a slice of the gateway's response body into its error, and a gateway that
+  echoed the key back would otherwise put a bare one in the log group. A store with
+  no key configured behaves exactly like the pattern-only default, and a test
+  asserts a key is absent from output rather than asserting on a real credential.
 - Log fields are a fixed struct, not a map, so a candidate label cannot reach a
   log line by accident. Adding a field is the moment to decide it is safe.
 - `internal/dynamo` holds every storage rule that is not in the contract:
@@ -178,15 +217,39 @@ implement the snapshot contract above rather than restating it.
   compare-and-swap loop for the pointer. Losing that race is a lost race, not a
   transient failure.
 - A quarantined unusable pointer keeps the `META` partition and takes a sort key
-  under `LATEST-INVALID#`. Reads address the pointer by its exact primary key, so
-  nothing on the read path can return one. Any future query that scans the `META`
-  partition by sort-key prefix has to exclude that prefix explicitly.
+  under `LATEST-INVALID#`, and a staging marker takes one under `STAGING#`. Reads
+  address the pointer by its exact primary key, so nothing on the read path can
+  return either. The only query over that partition asks for `STAGING#`; any future
+  one has to exclude `LATEST-INVALID#` explicitly.
 - Superseded chunks get a TTL, not a delete, and the window is the previous
   snapshot's own stale-after threshold measured from the new publication. That
   keeps the snapshot readers may still be resolving alive for as long as it could
   legitimately be served, and lets a rollback re-point at it, while still
   bounding table growth. A failed TTL write must never fail a publication that
   already succeeded.
+- Abandoned chunk sets are reclaimed, which is what makes the TTL actually bound
+  table growth rather than only bounding it for snapshots that were published. A run
+  reclaims from the staging registry after its own snapshot ID is known, and the
+  rules are what keep it from destroying live data: it skips its own ID, because a
+  set it goes on to publish must not carry an expiry that would outlive the pointer
+  naming it; it removes the marker and leaves the chunks alone when the marker names
+  the published snapshot; it defers the whole pass when the pointer cannot be read,
+  because then nothing proves which snapshot is live; and it leaves a marker younger
+  than the grace period alone, because a publisher may still be writing that set.
+  The grace exceeds the longest an invocation can live, and it is bounded work per
+  run. Every failure here is logged, never returned: this is cleanup after an earlier
+  invocation, so failing on it would turn one bad run into a stuck schedule.
+- `ExpireChunks` refuses the snapshot the pointer names and refuses a pointer it
+  cannot read, but an absent pointer means nothing is published and therefore
+  nothing is live. Refusing then would leave a set abandoned before the first
+  successful publication unreclaimable, which is exactly the case where a bootstrap
+  that keeps failing would grow the table on every attempt.
+- Issue #4 owns the schedules, and it must offset the daily schedule from the
+  three-hourly one so they cannot fire in the same second. When they collide, the
+  short run finishes first and publishes, and the monotonic pointer then refuses the
+  daily run because its scan time is the older of the two, throwing away a whole
+  daily Graph budget on which run happened to sample its clock first. Failing closed
+  there is correct; not colliding is cheaper.
 
 ## ENS lifecycle rules
 

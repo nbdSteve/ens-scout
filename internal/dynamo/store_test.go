@@ -1028,15 +1028,27 @@ func TestExpireChunksRefusesWithoutProofTheSnapshotIsSuperseded(t *testing.T) {
 		assertReadsSnapshot(t, store, "scan-live")
 	})
 
-	t.Run("there is no pointer", func(t *testing.T) {
-		store, _, _ := newTestStore(t, Options{})
+	// An absent pointer is the one case that is not a lack of proof. Nothing is
+	// published, so no reader can be resolving any snapshot, and a chunk set
+	// abandoned before the first successful publication has to stay reclaimable or a
+	// bootstrap that keeps failing grows the table on every attempt.
+	t.Run("there is no pointer at all", func(t *testing.T) {
+		store, fake, _ := newTestStore(t, Options{})
 		built := testSnapshot(t, "scan-orphan", fixedNow, "zap", "orb")
 		payload := mustEncode(t, built)
 		if err := store.PutChunks(context.Background(), "scan-orphan", payload.Chunks); err != nil {
 			t.Fatalf("PutChunks: %v", err)
 		}
-		if err := store.ExpireChunks(context.Background(), "scan-orphan", expiry); !errors.Is(err, snapshot.ErrNotFound) {
-			t.Fatalf("ExpireChunks returned %v, want ErrNotFound with no pointer to check against", err)
+		if err := store.ExpireChunks(context.Background(), "scan-orphan", expiry); err != nil {
+			t.Fatalf("ExpireChunks returned %v, want an expiry with nothing published", err)
+		}
+		item := fake.stored(snapshot.SnapshotPartition("scan-orphan"), snapshot.ChunkSort(0))
+		ttl, err := numberAttribute(item, attrExpiresAt)
+		if err != nil {
+			t.Fatalf("the abandoned chunk has no TTL: %v", err)
+		}
+		if ttl != expiry.Unix() {
+			t.Errorf("the TTL is %d, want %d", ttl, expiry.Unix())
 		}
 	})
 
@@ -1101,6 +1113,167 @@ func TestDeleteChunksRemovesOnlyTheNamedSnapshot(t *testing.T) {
 	}
 	if fake.stored(snapshot.LatestPartition, snapshot.LatestSort) == nil {
 		t.Errorf("DeleteChunks removed the latest pointer")
+	}
+}
+
+// TestStagingRegistryTracksUnpublishedSnapshots covers the registry a publisher
+// uses so a chunk set it abandons stays findable: chunks live in their own
+// partition and only the pointer names one, so without a marker an abandoned set is
+// unreachable.
+func TestStagingRegistryTracksUnpublishedSnapshots(t *testing.T) {
+	store, fake, _ := newTestStore(t, Options{})
+	ctx := context.Background()
+	expires := fixedNow.Add(30 * 24 * time.Hour)
+
+	if staged, err := store.StagedSnapshots(ctx); err != nil || len(staged) != 0 {
+		t.Fatalf("StagedSnapshots on an empty table returned %v, %v", staged, err)
+	}
+
+	if err := store.StageSnapshot(ctx, "scan-second", fixedNow.Add(time.Hour), expires); err != nil {
+		t.Fatalf("StageSnapshot: %v", err)
+	}
+	if err := store.StageSnapshot(ctx, "scan-first", fixedNow, expires); err != nil {
+		t.Fatalf("StageSnapshot: %v", err)
+	}
+
+	staged, err := store.StagedSnapshots(ctx)
+	if err != nil {
+		t.Fatalf("StagedSnapshots: %v", err)
+	}
+	want := []snapshot.StagedSnapshot{
+		{SnapshotID: "scan-first", StagedAt: fixedNow},
+		{SnapshotID: "scan-second", StagedAt: fixedNow.Add(time.Hour)},
+	}
+	if len(staged) != len(want) {
+		t.Fatalf("StagedSnapshots returned %v, want %v", staged, want)
+	}
+	for i, entry := range staged {
+		if entry.SnapshotID != want[i].SnapshotID || !entry.StagedAt.Equal(want[i].StagedAt) {
+			t.Errorf("marker %d is %+v, want %+v", i, entry, want[i])
+		}
+	}
+
+	// A marker carries its own TTL from the moment it is written, so a marker whose
+	// chunks are already reclaimed cannot accumulate.
+	item := fake.stored(snapshot.LatestPartition, snapshot.StagingSort("scan-first"))
+	ttl, err := numberAttribute(item, attrExpiresAt)
+	if err != nil {
+		t.Fatalf("the staging marker has no TTL: %v", err)
+	}
+	if ttl != expires.Unix() {
+		t.Errorf("the marker TTL is %d, want %d", ttl, expires.Unix())
+	}
+
+	// Claiming the same snapshot again refreshes the staging time, which is what
+	// renews the grace period a reclaimer waits out.
+	refreshed := fixedNow.Add(4 * time.Hour)
+	if err := store.StageSnapshot(ctx, "scan-first", refreshed, expires); err != nil {
+		t.Fatalf("restaging: %v", err)
+	}
+	staged, err = store.StagedSnapshots(ctx)
+	if err != nil {
+		t.Fatalf("StagedSnapshots: %v", err)
+	}
+	if len(staged) != 2 || !staged[0].StagedAt.Equal(refreshed) {
+		t.Fatalf("restaging left %v, want scan-first staged at %s", staged, refreshed)
+	}
+
+	if err := store.UnstageSnapshot(ctx, "scan-first"); err != nil {
+		t.Fatalf("UnstageSnapshot: %v", err)
+	}
+	// Unstaging is idempotent, so a publisher may unstage without reading first.
+	if err := store.UnstageSnapshot(ctx, "scan-first"); err != nil {
+		t.Errorf("a repeated UnstageSnapshot failed: %v", err)
+	}
+	staged, err = store.StagedSnapshots(ctx)
+	if err != nil {
+		t.Fatalf("StagedSnapshots: %v", err)
+	}
+	if len(staged) != 1 || staged[0].SnapshotID != "scan-second" {
+		t.Errorf("StagedSnapshots returned %v, want only scan-second", staged)
+	}
+
+	if err := store.StageSnapshot(ctx, "scan-first", fixedNow, fixedNow); err == nil {
+		t.Errorf("StageSnapshot accepted a marker that expires when it was staged")
+	}
+	if err := store.StageSnapshot(ctx, "../escape", fixedNow, expires); err == nil {
+		t.Errorf("StageSnapshot accepted an unsafe snapshot id")
+	}
+}
+
+// TestStagingMarkersAreInvisibleToEveryOtherRead proves the markers share the
+// pointer's partition without reaching any other read path.
+func TestStagingMarkersAreInvisibleToEveryOtherRead(t *testing.T) {
+	store, _, _ := newTestStore(t, Options{})
+	ctx := context.Background()
+	built := testSnapshot(t, "scan-live", fixedNow, "zap", "orb")
+	publish(t, store, built, fixedNow)
+
+	if err := store.StageSnapshot(ctx, "scan-live", fixedNow, fixedNow.Add(time.Hour)); err != nil {
+		t.Fatalf("StageSnapshot: %v", err)
+	}
+	if err := store.StageSnapshot(ctx, "scan-next", fixedNow, fixedNow.Add(time.Hour)); err != nil {
+		t.Fatalf("StageSnapshot: %v", err)
+	}
+
+	assertReadsSnapshot(t, store, "scan-live")
+	if _, err := store.GetChunks(ctx, "scan-live"); err != nil {
+		t.Errorf("GetChunks was disturbed by a staging marker: %v", err)
+	}
+	if _, err := store.GetChunks(ctx, "scan-next"); !errors.Is(err, snapshot.ErrNotFound) {
+		t.Errorf("GetChunks returned %v for a staged snapshot with no chunks, want ErrNotFound", err)
+	}
+}
+
+func TestStagedSnapshotsFailsClosedOnAnUnaccountableMarker(t *testing.T) {
+	tests := []struct {
+		name    string
+		corrupt func(item map[string]types.AttributeValue)
+	}{
+		{
+			name: "an unknown format version",
+			corrupt: func(item map[string]types.AttributeValue) {
+				item[attrFormatVersion] = numberValue(int64(snapshot.FormatVersion) + 1)
+			},
+		},
+		{
+			name: "a missing staging time",
+			corrupt: func(item map[string]types.AttributeValue) {
+				delete(item, attrStagedAt)
+			},
+		},
+		{
+			name: "an unreadable staging time",
+			corrupt: func(item map[string]types.AttributeValue) {
+				item[attrStagedAt] = stringValue("yesterday")
+			},
+		},
+		{
+			// A marker keyed under one snapshot but naming another would aim a
+			// reclaim at the wrong chunks.
+			name: "a snapshot id that disagrees with the key",
+			corrupt: func(item map[string]types.AttributeValue) {
+				item[attrSnapshotID] = stringValue("scan-other")
+			},
+		},
+	}
+
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			store, fake, _ := newTestStore(t, Options{})
+			ctx := context.Background()
+			if err := store.StageSnapshot(ctx, "scan-first", fixedNow, fixedNow.Add(time.Hour)); err != nil {
+				t.Fatalf("StageSnapshot: %v", err)
+			}
+			item := fake.stored(snapshot.LatestPartition, snapshot.StagingSort("scan-first"))
+			test.corrupt(item)
+			fake.put(item)
+
+			if staged, err := store.StagedSnapshots(ctx); err == nil {
+				t.Fatalf("StagedSnapshots returned %v, want a refusal to report a partial view", staged)
+			}
+		})
 	}
 }
 

@@ -21,6 +21,7 @@ import (
 //	latest.json
 //	snapshots/<snapshot-id>/chunk-00000.json
 //	snapshots/<snapshot-id>/chunk-00001.json
+//	staging/<snapshot-id>.json
 //
 // Each chunk file is one JSON-encoded Chunk, including its checksum, so a
 // hand-edited file fails verification exactly as a corrupt stored item would.
@@ -28,9 +29,14 @@ type FileStore struct {
 	root string
 }
 
+// FileStore records staged snapshots as well as published ones, so both local
+// fakes offer the same surface the real backend does.
+var _ StagingStore = (*FileStore)(nil)
+
 const (
 	fileStoreLatestName = "latest.json"
 	fileStoreChunkDir   = "snapshots"
+	fileStoreStagingDir = "staging"
 	fileStoreChunkGlob  = "chunk-"
 	fileStoreChunkExt   = ".json"
 	// fileStoreQuarantinePrefix names a pointer file kept for diagnosis rather
@@ -268,8 +274,101 @@ func (s *FileStore) GetLatest(ctx context.Context) (Latest, error) {
 	return latest, nil
 }
 
+// stagedSnapshot is one staging marker on disk. The expiry is recorded rather than
+// acted on: a directory has no TTL, and a real backend expires the item itself.
+type stagedSnapshot struct {
+	SnapshotID string    `json:"snapshot_id"`
+	StagedAt   time.Time `json:"staged_at"`
+	ExpiresAt  time.Time `json:"expires_at"`
+}
+
+// StageSnapshot writes a snapshot's staging marker, replacing any earlier one so a
+// repeated claim refreshes the staging time.
+func (s *FileStore) StageSnapshot(ctx context.Context, snapshotID string, stagedAt, expiresAt time.Time) error {
+	if err := ValidateStaging(ctx, snapshotID, stagedAt, expiresAt); err != nil {
+		return err
+	}
+	encoded, err := json.Marshal(stagedSnapshot{
+		SnapshotID: snapshotID,
+		StagedAt:   stagedAt.UTC(),
+		ExpiresAt:  expiresAt.UTC(),
+	})
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Join(s.root, fileStoreStagingDir), 0o755); err != nil {
+		return err
+	}
+	return writeFileAtomically(s.stagingPath(snapshotID), encoded)
+}
+
+// UnstageSnapshot removes a staging marker. Removing one that is not there
+// succeeds, so a publisher may unstage without first checking.
+func (s *FileStore) UnstageSnapshot(ctx context.Context, snapshotID string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := ValidateSnapshotID(snapshotID); err != nil {
+		return err
+	}
+	if err := os.Remove(s.stagingPath(snapshotID)); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
+}
+
+// StagedSnapshots reads every staging marker, in snapshot ID order. It fails closed
+// on a marker it cannot read, because a reclaimer decides what to destroy from this
+// and must never be handed a partial view.
+func (s *FileStore) StagedSnapshots(ctx context.Context) ([]StagedSnapshot, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	entries, err := os.ReadDir(filepath.Join(s.root, fileStoreStagingDir))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || !strings.HasSuffix(name, fileStoreChunkExt) {
+			continue
+		}
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	staged := make([]StagedSnapshot, 0, len(names))
+	for _, name := range names {
+		encoded, err := os.ReadFile(filepath.Join(s.root, fileStoreStagingDir, name))
+		if err != nil {
+			return nil, err
+		}
+		var marker stagedSnapshot
+		if err := json.Unmarshal(encoded, &marker); err != nil {
+			return nil, fmt.Errorf("read staging marker %s: %w", name, err)
+		}
+		if err := ValidateSnapshotID(marker.SnapshotID); err != nil {
+			return nil, err
+		}
+		if want := marker.SnapshotID + fileStoreChunkExt; name != want {
+			return nil, fmt.Errorf("staging marker %s names snapshot %q, want file %s", name, marker.SnapshotID, want)
+		}
+		staged = append(staged, StagedSnapshot{SnapshotID: marker.SnapshotID, StagedAt: marker.StagedAt.UTC()})
+	}
+	return staged, nil
+}
+
 func (s *FileStore) snapshotDir(snapshotID string) string {
 	return filepath.Join(s.root, fileStoreChunkDir, snapshotID)
+}
+
+func (s *FileStore) stagingPath(snapshotID string) string {
+	return filepath.Join(s.root, fileStoreStagingDir, snapshotID+fileStoreChunkExt)
 }
 
 func writeFileAtomically(path string, payload []byte) error {

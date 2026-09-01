@@ -44,6 +44,11 @@ func build(ctx context.Context, logger *scanner.Logger) (scanner.Dependencies, e
 	if err != nil {
 		return scanner.Dependencies{}, err
 	}
+	// From here on the credential is known, so every record and every returned error
+	// is rendered through a redactor that strips it literally. The endpoint carries
+	// the key in its path, and the client's own errors quote a slice of whatever the
+	// gateway sent back.
+	logger.UseRedactor(config.Redactor())
 
 	awsConfig, err := awsconfig.LoadDefaultConfig(ctx)
 	if err != nil {
@@ -89,12 +94,16 @@ type response struct {
 // and its alarms learn that a scan did not publish. It is redacted first: the
 // Lambda runtime writes the error it is given straight to the log group, and an
 // error from a lower layer may quote the Graph endpoint, which carries the API key
-// in its path. scanner.Run has already logged the same failure with its fields.
+// in its path, or a slice of an upstream response body that quotes the key on its
+// own. The configuration's redactor strips both, so the returned error is held to
+// the same rule as a log record. scanner.Run has already logged the same failure
+// with its fields.
 func handler(deps scanner.Dependencies) func(context.Context, scanner.Event) (response, error) {
+	redactor := deps.Config.Redactor()
 	return func(ctx context.Context, event scanner.Event) (response, error) {
 		result, err := scanner.Run(ctx, deps, event)
 		if err != nil {
-			return response{}, errors.New(scanner.Redact(err))
+			return response{}, errors.New(redactor.Error(err))
 		}
 		return response{
 			Group:      result.Group,

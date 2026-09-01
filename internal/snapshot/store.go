@@ -17,13 +17,16 @@ import (
 // agrees on them, but this package implements no backend. A DynamoDB table with
 // a string partition key and a string sort key can hold the whole model:
 //
-//	PK                       SK          Attributes
-//	SNAPSHOT#<snapshot-id>   CHUNK#00000 payload, checksum, index, count, TTL
-//	SNAPSHOT#<snapshot-id>   CHUNK#00001 payload, checksum, index, count, TTL
-//	META                     LATEST      the Latest pointer
+//	PK                       SK                   Attributes
+//	SNAPSHOT#<snapshot-id>   CHUNK#00000          payload, checksum, index, count, TTL
+//	SNAPSHOT#<snapshot-id>   CHUNK#00001          payload, checksum, index, count, TTL
+//	META                     LATEST               the Latest pointer
+//	META                     STAGING#<snapshot-id> a staged snapshot, staged time, TTL
 //
 // Chunk sort keys are zero padded so lexical order matches numeric order and a
-// single ranged query returns chunks already in index order.
+// single ranged query returns chunks already in index order. The staging markers
+// share the pointer's partition so one prefix query finds every snapshot a
+// publisher has begun writing.
 const (
 	// LatestPartition and LatestSort address the single latest pointer.
 	LatestPartition = "META"
@@ -32,6 +35,10 @@ const (
 	// ChunkSortPrefix begins every chunk sort key, so a backend can address one
 	// snapshot's chunks and nothing else with a single prefix query.
 	ChunkSortPrefix = "CHUNK#"
+
+	// StagingSortPrefix begins every staging marker's sort key, so one prefix
+	// query over LatestPartition lists them and nothing else.
+	StagingSortPrefix = "STAGING#"
 
 	snapshotPartitionPrefix = "SNAPSHOT#"
 	// chunkSortDigits supports 99,999 chunks, about 18 GiB of compressed
@@ -42,6 +49,35 @@ const (
 // ErrNotFound reports that no snapshot or latest pointer exists yet. A reader
 // must treat it as "nothing published" rather than as a transient failure.
 var ErrNotFound = errors.New("snapshot not found")
+
+// ErrChunksMissing reports that the latest pointer resolved but the chunks it
+// names are not stored.
+//
+// It is deliberately not ErrNotFound. An absent pointer means nothing has been
+// published, which is an ordinary bootstrap; a pointer whose chunks are gone means
+// a published snapshot disappeared under it, which is an anomaly worth reporting.
+// A publisher that merges the previous snapshot forward has to tell them apart, or
+// losing a whole group looks exactly like a first run.
+var ErrChunksMissing = errors.New("the chunks the latest pointer names are missing")
+
+// ChunksMissingError is ErrChunksMissing carrying the snapshot the pointer named,
+// so a caller can report which snapshot disappeared without parsing a message.
+type ChunksMissingError struct {
+	SnapshotID string
+
+	// Cause is the read error, kept for the message alone. It is deliberately not
+	// unwrapped: it wraps ErrNotFound, and exposing that through this error would
+	// make a vanished snapshot indistinguishable from an empty store again.
+	Cause error
+}
+
+func (e *ChunksMissingError) Error() string {
+	return fmt.Sprintf("snapshot %s is named by the latest pointer but its chunks are missing: %v",
+		e.SnapshotID, e.Cause)
+}
+
+// Unwrap reports ErrChunksMissing and stops there, for the reason Cause documents.
+func (e *ChunksMissingError) Unwrap() error { return ErrChunksMissing }
 
 // ErrPointerConflict reports that a pointer write was refused because it would
 // move readers to an older scan, or because a different pointer is already
@@ -58,6 +94,11 @@ func SnapshotPartition(snapshotID string) string {
 // ChunkSort returns the sort key for one chunk index.
 func ChunkSort(index int) string {
 	return fmt.Sprintf("%s%0*d", ChunkSortPrefix, chunkSortDigits, index)
+}
+
+// StagingSort returns the sort key of one snapshot's staging marker.
+func StagingSort(snapshotID string) string {
+	return StagingSortPrefix + snapshotID
 }
 
 // Latest is the pointer to the newest valid snapshot. Readers resolve it first
@@ -207,6 +248,73 @@ type ChunkStore interface {
 	PutChunks(ctx context.Context, snapshotID string, chunks []Chunk) error
 	GetChunks(ctx context.Context, snapshotID string) ([]Chunk, error)
 	DeleteChunks(ctx context.Context, snapshotID string) error
+}
+
+// StagedSnapshot records that a publisher began writing one snapshot's chunks.
+// StagedAt is when it last claimed that snapshot ID.
+type StagedSnapshot struct {
+	SnapshotID string    `json:"snapshot_id"`
+	StagedAt   time.Time `json:"staged_at"`
+}
+
+// StagingStore records which snapshot IDs a publisher has begun writing, so a
+// chunk set that never became the published snapshot can still be found and
+// reclaimed.
+//
+// Chunks live in their own partition and only the latest pointer names one, so a
+// publication that writes every chunk and then fails to move the pointer leaves a
+// full chunk set that nothing references and no query can find. A publisher
+// therefore writes a marker before the first chunk and removes it once the pointer
+// has moved. The marker is durable by the time anything can go wrong, which is what
+// makes this survive the failures that abandon a chunk set in the first place: a
+// killed function, an expired context, a hard timeout, and a lost pointer race are
+// exactly the cases that skip a deferred cleanup.
+//
+// Implementations must apply these rules:
+//
+//   - StageSnapshot overwrites any marker for the same snapshot ID and refreshes
+//     StagedAt. A publisher that claims an ID again renews the grace period a
+//     reclaimer waits out, which is what keeps a reclaimer from ever expiring
+//     chunks another publisher is still writing.
+//   - UnstageSnapshot is idempotent, so removing a marker that is not there
+//     succeeds. A leftover marker costs one wasted reclaim attempt; a marker
+//     removed too eagerly costs a chunk set nothing can find.
+//   - StagedSnapshots returns every stored marker and never reports an empty set
+//     from a read it could not complete. A reclaimer decides what to destroy from
+//     it, so a failed read must be a failed read.
+//
+// A marker carries its own expiry, so a marker whose chunks are already reclaimed
+// cannot accumulate. The expiry has to be far longer than the interval between
+// reclaim passes: a marker that expires before its chunks are reclaimed leaves
+// them unreachable again, which is the state this interface exists to prevent.
+//
+// Reclaiming is not part of this interface. Whether an expiry may be placed on a
+// snapshot's chunks is LatestStore's business, because only the pointer says which
+// snapshot readers are being served.
+type StagingStore interface {
+	StageSnapshot(ctx context.Context, snapshotID string, stagedAt, expiresAt time.Time) error
+	UnstageSnapshot(ctx context.Context, snapshotID string) error
+	StagedSnapshots(ctx context.Context) ([]StagedSnapshot, error)
+}
+
+// ValidateStaging is the check every StageSnapshot implementation runs on its
+// arguments: a live context, a usable snapshot ID, and an expiry that outlives the
+// moment the snapshot was staged. A marker that expires at or before its own
+// staging time would vanish before any reclaim pass could act on it.
+func ValidateStaging(ctx context.Context, snapshotID string, stagedAt, expiresAt time.Time) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := ValidateSnapshotID(snapshotID); err != nil {
+		return err
+	}
+	if stagedAt.IsZero() {
+		return fmt.Errorf("staging snapshot %s needs the time it was staged", snapshotID)
+	}
+	if !expiresAt.After(stagedAt) {
+		return fmt.Errorf("staging snapshot %s needs an expiry after its staging time", snapshotID)
+	}
+	return nil
 }
 
 // ChunkWriteDecision is what PutChunks must do about chunks already stored under
@@ -462,8 +570,10 @@ type Store interface {
 // If any step fails the pointer is untouched, so readers keep serving the
 // previous snapshot. Step 4 also enforces the LatestStore ordering rule, so a
 // scan that finishes out of order is refused with ErrPointerConflict rather than
-// moving readers back to an older scan. The refusal is returned to the caller;
-// the chunks it already wrote are left for retention to remove.
+// moving readers back to an older scan. The refusal is returned to the caller,
+// which leaves a complete chunk set no pointer names. Publish does not reclaim it:
+// a caller that may fail this way stages the snapshot ID through StagingStore
+// first, so the abandoned set stays findable after the process is gone.
 //
 // Publish is safe to retry with the same snapshot after a transient failure, and
 // may be called with a freshly sampled publishedAt: step 2 accepts the chunks it
@@ -503,6 +613,10 @@ func Publish(ctx context.Context, store Store, snapshot Snapshot, publishedAt ti
 }
 
 // Read resolves the latest pointer and returns the verified snapshot it names.
+//
+// ErrNotFound means nothing is published. A pointer that resolves but whose chunks
+// are absent reports ChunksMissingError instead, so a caller can tell a bootstrap
+// from a published snapshot that disappeared.
 func Read(ctx context.Context, store Store) (Snapshot, Latest, error) {
 	if store == nil {
 		return Snapshot{}, Latest{}, fmt.Errorf("snapshot store is required")
@@ -513,6 +627,9 @@ func Read(ctx context.Context, store Store) (Snapshot, Latest, error) {
 	}
 	chunks, err := store.GetChunks(ctx, latest.SnapshotID)
 	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return Snapshot{}, Latest{}, &ChunksMissingError{SnapshotID: latest.SnapshotID, Cause: err}
+		}
 		return Snapshot{}, Latest{}, fmt.Errorf("read snapshot %s chunks: %w", latest.SnapshotID, err)
 	}
 	snapshot, err := Verify(latest, chunks)

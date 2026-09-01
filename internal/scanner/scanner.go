@@ -126,6 +126,39 @@ const (
 // its chunks, so a retry is either immediately useful or not useful at all.
 const previousReadBackoff = 250 * time.Millisecond
 
+// Retention of chunk sets that were written but never published.
+//
+// A publication writes every chunk and then moves the pointer. Between those two
+// steps the chunk set exists and nothing names it, so a run that is killed, times
+// out, or loses the pointer race leaves a complete set behind. The run stages its
+// snapshot ID before the first chunk write, which makes that set findable from the
+// next run rather than from a deferred cleanup this one may never reach.
+const (
+	// abandonedAfter is how long a snapshot must have been staged before a later
+	// run may reclaim it. It has to exceed the longest an invocation can live, or a
+	// reclaim could expire chunks a publisher is still writing; Lambda's own
+	// ceiling is fifteen minutes, so this is generously past any run while staying
+	// inside the three-hourly cadence, and an abandoned set is reclaimed on the next
+	// schedule at the earliest and the one after it at the latest.
+	abandonedAfter = 2 * time.Hour
+
+	// abandonedRetention is how long a reclaimed set stays readable. No pointer
+	// ever named it, so no reader can be resolving it and the window exists only so
+	// an operator can inspect the payload of a publication that failed.
+	abandonedRetention = 24 * time.Hour
+
+	// stagingRetention bounds a staging marker itself, so a marker whose chunks are
+	// already gone cannot accumulate. It is far longer than the reclaim window on
+	// purpose: a marker that expired before its chunks were reclaimed would leave
+	// them unreachable again, which is the state staging exists to prevent.
+	stagingRetention = 30 * 24 * time.Hour
+
+	// maxReclaimsPerRun bounds the retention work one invocation does, so a table
+	// holding many abandoned sets is drained over several runs instead of turning
+	// one scheduled scan into an unbounded cleanup job.
+	maxReclaimsPerRun = 8
+)
+
 // Config is the scanner's whole configuration.
 type Config struct {
 	// Table is the DynamoDB table the entrypoint opens. The scanner itself never
@@ -136,6 +169,13 @@ type Config struct {
 	// Endpoint is the resolved Graph endpoint. It may embed an API key, so it is
 	// never logged and never published.
 	Endpoint string
+
+	// APIKey is the Graph credential, when one is configured. It is kept so the run
+	// can strip it from anything it logs or returns: it travels in the endpoint's
+	// path, and an error from a lower layer may quote text this process never
+	// composed, including a slice of an upstream response body. It is never a log
+	// field and never published.
+	APIKey string
 
 	// WordListDir is where the deployed word lists are read from.
 	WordListDir string
@@ -176,6 +216,7 @@ func LoadConfig(lookup func(string) string) (Config, error) {
 	config := Config{
 		Table:       get(EnvTable),
 		WordListDir: get(EnvWordListDir),
+		APIKey:      get(EnvAPIKey),
 	}
 	if config.WordListDir == "" {
 		config.WordListDir = defaultWordListDir
@@ -266,6 +307,14 @@ func (c Config) Validate() error {
 	return nil
 }
 
+// Redactor returns the redactor for this configuration. On top of the URL and
+// candidate-name patterns every Redactor applies, it strips the configured API key
+// and the resolved endpoint as literals, because the layer that produced an error
+// promises nothing about what its text quotes.
+func (c Config) Redactor() *Redactor {
+	return NewRedactor(c.APIKey, c.Endpoint)
+}
+
 // resolveEndpoint picks the Graph endpoint. An explicit URL wins, so an operator
 // can point a run at a self-hosted index; otherwise an API key and a subgraph ID
 // together select the authenticated gateway. The subgraph ID has no default on
@@ -304,17 +353,20 @@ func intSetting(raw, name string, fallback, low, high int) (int, error) {
 	return value, nil
 }
 
-// Store is the storage surface one run needs: the published snapshot contract,
-// plus the retention call that expires the snapshot this run supersedes.
+// Store is the storage surface one run needs: the published snapshot contract, the
+// staging registry that keeps an unpublished chunk set findable, and the retention
+// call that expires a snapshot this run no longer needs.
 //
 // It is an interface so this package imports no AWS SDK. The DynamoDB backend
 // satisfies it, and so does a local fake.
 type Store interface {
 	snapshot.Store
+	snapshot.StagingStore
 
-	// ExpireChunks assigns a TTL to a superseded snapshot's chunks. It refuses
-	// while the latest pointer still names that snapshot, so a run cannot expire
-	// what readers are serving.
+	// ExpireChunks assigns a TTL to the chunks of a snapshot that is not the
+	// published one. It refuses while the latest pointer names that snapshot, so a
+	// run cannot expire what readers are serving, and refuses on a pointer it
+	// cannot read, which proves nothing either way.
 	ExpireChunks(ctx context.Context, snapshotID string, expiresAt time.Time) error
 }
 
@@ -391,8 +443,19 @@ type Result struct {
 // normalization failure, a serialization failure, a write failure, a readback
 // failure, a checksum mismatch, a timeout, a cancellation, or a losing
 // compare-and-swap all leave the previous snapshot serving.
+//
+// A failure between the chunk write and the pointer write leaves a chunk set no
+// pointer names. The run stages its snapshot ID before it writes a chunk and
+// unstages it after the pointer moves, so the next run can find and reclaim what
+// this one abandoned. Staging is durable before anything can go wrong, which is what
+// separates it from a deferred cleanup: the failures that abandon a chunk set are
+// exactly the ones that never run a defer.
 func Run(ctx context.Context, deps Dependencies, event Event) (Result, error) {
 	logger := deps.Logger
+	// Every error this run logs is rendered through the configuration's redactor, so
+	// the credential in the endpoint's path cannot reach a log group even if a lower
+	// layer quotes text this process never composed.
+	logger.UseRedactor(deps.Config.Redactor())
 	started := deps.now()
 
 	group, err := parseGroup(event.Group)
@@ -419,11 +482,6 @@ func Run(ctx context.Context, deps Dependencies, event Event) (Result, error) {
 	}
 	logger.Log(LevelInfo, "lists_loaded", Fields{Group: group, Lists: len(inputs), Names: len(owner), Scanned: len(fresh)})
 
-	previous, previousLatest, err := readPrevious(ctx, deps, logger)
-	if err != nil {
-		return Result{}, deps.fail(logger, "previous_snapshot_read_failed", Fields{Group: group}, err)
-	}
-
 	scanContext, cancelScan := context.WithTimeout(ctx, deps.Config.ScanBudget)
 	results, stats, err := checker.Run(scanContext, deps.Client, fresh, checker.Options{
 		Workers:   deps.Config.Workers,
@@ -442,6 +500,18 @@ func Run(ctx context.Context, deps Dependencies, event Event) (Result, error) {
 		ScannedAt:    stats.ClassifiedAt.Format(time.RFC3339),
 		DurationMill: millis(deps.now().Sub(started)),
 	})
+
+	// The previous snapshot is read after the scan, not before it. A scan takes
+	// minutes, the other group's schedule can publish during those minutes, and
+	// carrying forward what was published before this scan started would overwrite
+	// that fresher data with a status this run never checked. Reading last also puts
+	// the bounded retry and its backoff after the Graph spend, which is the cost of
+	// carrying the newest published snapshot rather than the oldest one this run
+	// could have seen.
+	previous, previousLatest, err := readPrevious(ctx, deps, logger)
+	if err != nil {
+		return Result{}, deps.fail(logger, "previous_snapshot_read_failed", Fields{Group: group}, err)
+	}
 
 	// Every published status is checked against the instant the scan classified
 	// at, so carried results are re-derived at that same instant and the snapshot
@@ -465,10 +535,30 @@ func Run(ctx context.Context, deps Dependencies, event Event) (Result, error) {
 		return Result{}, deps.fail(logger, "snapshot_build_failed", Fields{Group: group}, err)
 	}
 
+	// Reclaiming runs here rather than at the top of the run, so it knows the
+	// snapshot ID this run is about to write and can leave it alone. A staged set
+	// this run went on to publish must never be carrying an expiry: the chunks would
+	// be identical, so the write would be skipped and the expiry would outlive the
+	// pointer that started naming them.
+	reclaimAbandoned(ctx, deps, logger, group, built.Metadata.SnapshotID, deps.now())
+
+	stagedAt := deps.now().Truncate(time.Second)
+	if err := deps.Store.StageSnapshot(ctx, built.Metadata.SnapshotID, stagedAt, stagedAt.Add(stagingRetention)); err != nil {
+		// Nothing has been written yet, so failing here publishes nothing and loses
+		// nothing. Writing chunks with no durable record of them is the one outcome
+		// worth refusing, because that is the orphan staging exists to prevent.
+		return Result{}, deps.fail(logger, "snapshot_stage_failed",
+			Fields{Group: group, SnapshotID: built.Metadata.SnapshotID}, err)
+	}
+
 	latest, err := snapshot.Publish(ctx, deps.Store, built, deps.now().Truncate(time.Second))
 	if err != nil {
 		return Result{}, deps.fail(logger, "publish_failed", Fields{Group: group, SnapshotID: built.Metadata.SnapshotID}, err)
 	}
+	// The snapshot is published, so its chunks are live and the marker has done its
+	// job. A marker left behind costs one wasted reclaim attempt, which is why this
+	// is not worth failing a successful publication over.
+	unstage(ctx, deps, logger, group, latest.SnapshotID)
 	logger.Log(LevelInfo, "snapshot_published", Fields{
 		Group:        group,
 		SnapshotID:   latest.SnapshotID,
@@ -645,6 +735,13 @@ func deriveSources(inputs []listInput, owner map[string]string, results []ens.Re
 // while publishing the group this run did scan is self-healing: the other group's
 // next scheduled run restores its names.
 //
+// A pointer that resolves but whose chunks are gone is neither of those. It is a
+// published snapshot that disappeared, so it is reported at warning level and named:
+// the run still publishes past it, and an operator who loses a whole group from the
+// site must not have to infer that from an informational record about a bootstrap.
+// Retrying it would be pointless, because a strongly consistent read that found no
+// chunk found none.
+//
 // A cancelled or expired context is not a bootstrap. It says nothing about what
 // is stored, and treating it as an empty store would publish a snapshot that
 // silently dropped the other group.
@@ -667,6 +764,12 @@ func readPrevious(ctx context.Context, deps Dependencies, logger *Logger) (*snap
 			logger.Log(LevelInfo, "previous_snapshot_absent", Fields{Attempt: attempt})
 			return nil, nil, nil
 		}
+		var missing *snapshot.ChunksMissingError
+		if errors.As(err, &missing) {
+			logger.LogError(LevelWarn, "previous_snapshot_chunks_missing",
+				Fields{PreviousID: missing.SnapshotID, Attempt: attempt}, err)
+			return nil, nil, nil
+		}
 		if ctx.Err() != nil {
 			return nil, nil, err
 		}
@@ -680,6 +783,108 @@ func readPrevious(ctx context.Context, deps Dependencies, logger *Logger) (*snap
 	}
 	logger.LogError(LevelWarn, "previous_snapshot_unreadable", Fields{Attempt: deps.Config.PreviousReadAttempts}, lastErr)
 	return nil, nil, nil
+}
+
+// reclaimAbandoned expires the chunks of snapshots that were staged and never
+// published, and removes their markers.
+//
+// It is what makes the retention story true rather than aspirational. A publication
+// that writes every chunk and then fails to move the pointer leaves a full chunk set
+// no pointer names, no query finds, and no TTL bounds, and retrying cannot finish it:
+// a re-invocation rescans, samples a new classification instant, and mints a
+// different snapshot ID, so the contract's per-chunk resume applies within one
+// publication and never across two. The set is reclaimed instead.
+//
+// The rules that keep this from destroying live data:
+//
+//   - keep is this run's own snapshot ID, which is never touched. A set this run
+//     goes on to publish must not be carrying an expiry.
+//   - a marker naming the published snapshot means a publisher was interrupted
+//     after its pointer write, so only the marker is stale. It is removed and the
+//     chunks are left alone. Nothing here can place an expiry on the live snapshot:
+//     the ID is skipped, and ExpireChunks refuses it as well.
+//   - a pointer that cannot be read defers the whole pass. It says nothing about
+//     which snapshot is live, so nothing may be reclaimed against it.
+//   - a marker younger than abandonedAfter is left alone, because a publisher may
+//     still be writing that set. Staging refreshes the marker, so a publisher that
+//     claims a snapshot ID again renews its own grace period.
+//
+// Every failure here is logged and none fails the run. This is cleanup after an
+// earlier invocation, so refusing to publish over it would turn one failed run into
+// a permanently stuck schedule.
+func reclaimAbandoned(ctx context.Context, deps Dependencies, logger *Logger, group Group, keep string, now time.Time) {
+	live := ""
+	switch latest, err := deps.Store.GetLatest(ctx); {
+	case err == nil:
+		live = latest.SnapshotID
+	case errors.Is(err, snapshot.ErrNotFound):
+		// Nothing is published, so no staged set can be the live one.
+	default:
+		logger.LogError(LevelWarn, "abandoned_chunks_deferred", Fields{Group: group}, err)
+		return
+	}
+
+	staged, err := deps.Store.StagedSnapshots(ctx)
+	if err != nil {
+		logger.LogError(LevelWarn, "abandoned_chunks_deferred", Fields{Group: group}, err)
+		return
+	}
+
+	reclaimed := 0
+	for _, entry := range staged {
+		if ctx.Err() != nil {
+			return
+		}
+		if entry.SnapshotID == keep {
+			continue
+		}
+		if entry.SnapshotID == live {
+			unstage(ctx, deps, logger, group, entry.SnapshotID)
+			continue
+		}
+		if now.Sub(entry.StagedAt) < abandonedAfter {
+			continue
+		}
+		if reclaimed >= maxReclaimsPerRun {
+			logger.Log(LevelWarn, "abandoned_chunks_deferred", Fields{
+				Group:     group,
+				Staged:    len(staged),
+				Reclaimed: reclaimed,
+			})
+			return
+		}
+
+		expiresAt := now.Add(abandonedRetention).UTC().Truncate(time.Second)
+		fields := Fields{
+			Group:      group,
+			SnapshotID: entry.SnapshotID,
+			StagedAt:   entry.StagedAt.UTC().Format(time.RFC3339),
+			ExpiresAt:  expiresAt.Format(time.RFC3339),
+		}
+		err := deps.Store.ExpireChunks(ctx, entry.SnapshotID, expiresAt)
+		switch {
+		case err == nil:
+			// A warning, not an informational record: an abandoned set means an
+			// earlier publication wrote a whole snapshot and never published it.
+			logger.Log(LevelWarn, "abandoned_chunks_expired", fields)
+			reclaimed++
+			unstage(ctx, deps, logger, group, entry.SnapshotID)
+		case errors.Is(err, snapshot.ErrNotFound):
+			// The chunks are already gone, so the marker is all that is left.
+			unstage(ctx, deps, logger, group, entry.SnapshotID)
+		default:
+			logger.LogError(LevelWarn, "abandoned_chunks_expire_failed", fields, err)
+		}
+	}
+}
+
+// unstage removes one staging marker. A marker that cannot be removed is reported
+// and kept: it costs one wasted reclaim attempt on a later run, which is cheaper
+// than any of the ways of guessing that it is safe to stop tracking a chunk set.
+func unstage(ctx context.Context, deps Dependencies, logger *Logger, group Group, snapshotID string) {
+	if err := deps.Store.UnstageSnapshot(ctx, snapshotID); err != nil {
+		logger.LogError(LevelWarn, "staging_marker_kept", Fields{Group: group, SnapshotID: snapshotID}, err)
+	}
 }
 
 // expireSuperseded assigns a TTL to the chunks of the snapshot this run replaced.

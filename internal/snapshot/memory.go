@@ -5,7 +5,11 @@ import (
 	"fmt"
 	"sort"
 	"sync"
+	"time"
 )
+
+// MemoryStore records staged snapshots as well as published ones.
+var _ StagingStore = (*MemoryStore)(nil)
 
 // MemoryStore is an in-memory Store for tests and local runs. It deep copies
 // chunk bytes and pointers on the way in and out, so a caller cannot reach into
@@ -18,13 +22,17 @@ import (
 type MemoryStore struct {
 	mutex     sync.RWMutex
 	chunks    map[string][]Chunk
+	staged    map[string]StagedSnapshot
 	latest    *Latest
 	published bool
 }
 
 // NewMemoryStore returns an empty store.
 func NewMemoryStore() *MemoryStore {
-	return &MemoryStore{chunks: make(map[string][]Chunk)}
+	return &MemoryStore{
+		chunks: make(map[string][]Chunk),
+		staged: make(map[string]StagedSnapshot),
+	}
 }
 
 // PutChunks stores chunks under a snapshot ID, applying the ChunkStore rule to
@@ -133,6 +141,56 @@ func (s *MemoryStore) GetLatest(ctx context.Context) (Latest, error) {
 		return Latest{}, fmt.Errorf("latest snapshot pointer: %w", ErrNotFound)
 	}
 	return s.latest.Clone(), nil
+}
+
+// StageSnapshot records that a publisher is about to write a snapshot's chunks,
+// refreshing the staging time when the same ID is claimed again.
+//
+// The expiry is validated and then discarded: this store has no clock to expire a
+// marker against, and no test outlives one. A real backend stores it as the item's
+// TTL, which is what keeps markers from accumulating there.
+func (s *MemoryStore) StageSnapshot(ctx context.Context, snapshotID string, stagedAt, expiresAt time.Time) error {
+	if err := ValidateStaging(ctx, snapshotID, stagedAt, expiresAt); err != nil {
+		return err
+	}
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+	s.staged[snapshotID] = StagedSnapshot{SnapshotID: snapshotID, StagedAt: stagedAt.UTC()}
+	return nil
+}
+
+// UnstageSnapshot removes a staging marker. Removing one that is not there
+// succeeds, so a publisher may unstage without first checking.
+func (s *MemoryStore) UnstageSnapshot(ctx context.Context, snapshotID string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := ValidateSnapshotID(snapshotID); err != nil {
+		return err
+	}
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+	delete(s.staged, snapshotID)
+	return nil
+}
+
+// StagedSnapshots returns every staging marker, sorted by snapshot ID. A real
+// backend returns them in sort-key order, which is the same order, so a caller
+// cannot come to depend on one store's iteration order.
+func (s *MemoryStore) StagedSnapshots(ctx context.Context) ([]StagedSnapshot, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	s.mutex.RLock()
+	defer s.mutex.RUnlock()
+	staged := make([]StagedSnapshot, 0, len(s.staged))
+	for _, entry := range s.staged {
+		staged = append(staged, entry)
+	}
+	sort.Slice(staged, func(i, j int) bool {
+		return staged[i].SnapshotID < staged[j].SnapshotID
+	})
+	return staged, nil
 }
 
 // SnapshotIDs returns the stored snapshot IDs in no particular order. It exists

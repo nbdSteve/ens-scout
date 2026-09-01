@@ -40,6 +40,11 @@ const (
 	// while a snapshot is current and is set only once the snapshot is superseded.
 	attrExpiresAt = "expires_at"
 
+	// attrStagedAt is when a publisher last claimed a snapshot ID, on a staging
+	// marker. It is stored as RFC3339 rather than as a Unix second so an operator
+	// reading the table can tell it apart from attrExpiresAt at a glance.
+	attrStagedAt = "staged_at"
+
 	// attrScannedAt and attrPointer hold the latest pointer. The pointer is stored
 	// as its canonical JSON, which is the same form snapshot.PlanLatestWrite
 	// compares, so what is stored and what the rule judges cannot drift apart.
@@ -63,6 +68,70 @@ func chunkItem(snapshotID string, chunk snapshot.Chunk) map[string]types.Attribu
 		attrChecksum:      stringValue(chunk.Checksum),
 		attrPayload:       &types.AttributeValueMemberB{Value: chunk.Bytes},
 	}
+}
+
+// stagingItem renders one staging marker as an item.
+//
+// Unlike a chunk it carries a TTL from the moment it is written: the marker is a
+// note that a publication is in flight, and a note nothing ever cleans up would
+// outlive the chunks it points at. The window is the caller's, and has to be far
+// longer than the interval between reclaim passes.
+func stagingItem(snapshotID string, stagedAt, expiresAt time.Time) map[string]types.AttributeValue {
+	return map[string]types.AttributeValue{
+		attrPartition:     stringValue(snapshot.LatestPartition),
+		attrSort:          stringValue(snapshot.StagingSort(snapshotID)),
+		attrFormatVersion: numberValue(int64(snapshot.FormatVersion)),
+		attrSnapshotID:    stringValue(snapshotID),
+		attrStagedAt:      stringValue(stagedAt.UTC().Format(time.RFC3339)),
+		attrExpiresAt:     numberValue(expiresAt.UTC().Unix()),
+	}
+}
+
+// stagingKey is the primary key of one snapshot's staging marker.
+func stagingKey(snapshotID string) map[string]types.AttributeValue {
+	return map[string]types.AttributeValue{
+		attrPartition: stringValue(snapshot.LatestPartition),
+		attrSort:      stringValue(snapshot.StagingSort(snapshotID)),
+	}
+}
+
+// decodeStagingItem rebuilds a staging marker and fails closed on anything it
+// cannot account for, including a marker whose sort key disagrees with the snapshot
+// ID it claims. A reclaimer decides what to expire from these, so a marker that
+// named one snapshot under another's key would aim the expiry at the wrong chunks.
+func decodeStagingItem(item map[string]types.AttributeValue) (snapshot.StagedSnapshot, error) {
+	version, err := numberAttribute(item, attrFormatVersion)
+	if err != nil {
+		return snapshot.StagedSnapshot{}, err
+	}
+	if version != int64(snapshot.FormatVersion) {
+		return snapshot.StagedSnapshot{}, fmt.Errorf("staging marker declares format version %d (want %d)", version, snapshot.FormatVersion)
+	}
+
+	snapshotID, err := stringAttribute(item, attrSnapshotID)
+	if err != nil {
+		return snapshot.StagedSnapshot{}, err
+	}
+	if err := snapshot.ValidateSnapshotID(snapshotID); err != nil {
+		return snapshot.StagedSnapshot{}, err
+	}
+	sort, err := stringAttribute(item, attrSort)
+	if err != nil {
+		return snapshot.StagedSnapshot{}, err
+	}
+	if want := snapshot.StagingSort(snapshotID); sort != want {
+		return snapshot.StagedSnapshot{}, fmt.Errorf("staging marker for snapshot %q is keyed %q, want %q", snapshotID, sort, want)
+	}
+
+	raw, err := stringAttribute(item, attrStagedAt)
+	if err != nil {
+		return snapshot.StagedSnapshot{}, err
+	}
+	stagedAt, err := time.Parse(time.RFC3339, raw)
+	if err != nil {
+		return snapshot.StagedSnapshot{}, fmt.Errorf("staging marker for snapshot %q has an unreadable staging time: %w", snapshotID, err)
+	}
+	return snapshot.StagedSnapshot{SnapshotID: snapshotID, StagedAt: stagedAt.UTC()}, nil
 }
 
 // latestKey is the primary key of the single pointer item.

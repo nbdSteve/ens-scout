@@ -36,13 +36,18 @@ func (c *fakeClient) Lookup(_ context.Context, labels []string) ([]ens.Lookup, e
 	return lookups, nil
 }
 
-// fakeStore is a memory store with the TTL call the scanner needs. Expiry is a
-// no-op because no test here supersedes a snapshot.
+// fakeStore is a memory store with the TTL call the scanner needs. The memory store
+// carries the staging registry itself. Expiry is a no-op because no test here
+// supersedes or abandons a snapshot.
 type fakeStore struct {
 	*snapshot.MemoryStore
 }
 
 func (s fakeStore) ExpireChunks(_ context.Context, _ string, _ time.Time) error { return nil }
+
+// testAPIKey is invented here and is not a credential. Every assertion about it is
+// that it is absent from what the handler returns.
+const testAPIKey = "test-graph-key-0123456789abcdef"
 
 func testDependencies(t *testing.T, client *fakeClient) scanner.Dependencies {
 	t.Helper()
@@ -60,7 +65,8 @@ func testDependencies(t *testing.T, client *fakeClient) scanner.Dependencies {
 	return scanner.Dependencies{
 		Config: scanner.Config{
 			Table:                "snapshots",
-			Endpoint:             "https://subgraph.test/graphql",
+			Endpoint:             "https://subgraph.test/graphql/" + testAPIKey,
+			APIKey:               testAPIKey,
 			WordListDir:          dir,
 			Workers:              2,
 			BatchSize:            2,
@@ -118,10 +124,12 @@ func TestHandlerReportsCountsAndNoCandidateNames(t *testing.T) {
 }
 
 func TestHandlerRedactsTheErrorItReturns(t *testing.T) {
-	// The Lambda runtime writes the returned error to the log group itself, and the
-	// Graph gateway carries the API key in its path.
+	// The Lambda runtime writes the returned error to the log group itself. The Graph
+	// gateway carries the API key in its path, and the client quotes a slice of
+	// whatever the gateway sent back, which can hold the key with no URL around it.
 	deps := testDependencies(t, &fakeClient{
-		err: errors.New("post https://gateway.thegraph.com/api/secret-key/subgraphs/id/abc: zap.eth failed"),
+		err: errors.New("post https://gateway.thegraph.com/api/secret-key/subgraphs/id/abc: " +
+			`zap.eth failed: {"message":"invalid api key ` + testAPIKey + `"}`),
 	})
 
 	got, err := handler(deps)(context.Background(), scanner.Event{Group: scanner.GroupShort})
@@ -132,7 +140,7 @@ func TestHandlerRedactsTheErrorItReturns(t *testing.T) {
 		t.Errorf("response = %+v, want the zero value on failure", got)
 	}
 	message := err.Error()
-	for _, forbidden := range []string{"secret-key", "gateway.thegraph.com", "https://", "zap.eth"} {
+	for _, forbidden := range []string{"secret-key", "gateway.thegraph.com", "https://", "zap.eth", testAPIKey} {
 		if strings.Contains(message, forbidden) {
 			t.Errorf("error %q contains %q", message, forbidden)
 		}

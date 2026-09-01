@@ -717,6 +717,133 @@ func TestSupersededSnapshotsAreRemovableAfterPublication(t *testing.T) {
 	}
 }
 
+// TestReadDistinguishesABootstrapFromAVanishedSnapshot covers the one thing a
+// publisher merging a previous snapshot forward has to be able to tell apart:
+// nothing published yet, and a pointer whose snapshot is gone. Both are absences, but
+// only the second means a published snapshot disappeared.
+func TestReadDistinguishesABootstrapFromAVanishedSnapshot(t *testing.T) {
+	built := mustBuild(t, lifecycleResults(t, fixedNow))
+
+	for name, store := range newStores(t) {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+
+			if _, _, err := Read(ctx, store); !errors.Is(err, ErrNotFound) {
+				t.Fatalf("Read before publication returned %v, want ErrNotFound", err)
+			}
+
+			if _, err := Publish(ctx, store, built, fixedNow.Add(time.Minute)); err != nil {
+				t.Fatalf("Publish: %v", err)
+			}
+			if err := store.DeleteChunks(ctx, built.Metadata.SnapshotID); err != nil {
+				t.Fatalf("DeleteChunks: %v", err)
+			}
+
+			_, _, err := Read(ctx, store)
+			if !errors.Is(err, ErrChunksMissing) {
+				t.Fatalf("Read returned %v, want ErrChunksMissing", err)
+			}
+			if errors.Is(err, ErrNotFound) {
+				t.Errorf("a vanished snapshot is indistinguishable from an empty store: %v", err)
+			}
+			var missing *ChunksMissingError
+			if !errors.As(err, &missing) {
+				t.Fatalf("Read returned %v, which does not name the snapshot that vanished", err)
+			}
+			if missing.SnapshotID != built.Metadata.SnapshotID {
+				t.Errorf("the error names %q, want %q", missing.SnapshotID, built.Metadata.SnapshotID)
+			}
+		})
+	}
+}
+
+// TestStagingRegistryRules drives the StagingStore rules through both fakes,
+// because a reclaimer decides what to destroy from what one of them reports.
+func TestStagingRegistryRules(t *testing.T) {
+	for name, store := range newStagingStores(t) {
+		t.Run(name, func(t *testing.T) { assertStagingRules(t, store) })
+	}
+}
+
+func newStagingStores(t *testing.T) map[string]StagingStore {
+	t.Helper()
+	return map[string]StagingStore{
+		"memory": NewMemoryStore(),
+		"file":   NewFileStore(t.TempDir()),
+	}
+}
+
+func assertStagingRules(t *testing.T, store StagingStore) {
+	t.Helper()
+	ctx := context.Background()
+	expires := fixedNow.Add(30 * 24 * time.Hour)
+
+	staged, err := store.StagedSnapshots(ctx)
+	if err != nil || len(staged) != 0 {
+		t.Fatalf("StagedSnapshots on an empty store returned %v, %v", staged, err)
+	}
+
+	if err := store.StageSnapshot(ctx, "scan-second", fixedNow.Add(time.Hour), expires); err != nil {
+		t.Fatalf("StageSnapshot: %v", err)
+	}
+	if err := store.StageSnapshot(ctx, "scan-first", fixedNow, expires); err != nil {
+		t.Fatalf("StageSnapshot: %v", err)
+	}
+	if staged, err = store.StagedSnapshots(ctx); err != nil {
+		t.Fatalf("StagedSnapshots: %v", err)
+	}
+	if len(staged) != 2 || staged[0].SnapshotID != "scan-first" || staged[1].SnapshotID != "scan-second" {
+		t.Fatalf("StagedSnapshots returned %v, want both markers in id order", staged)
+	}
+
+	// Claiming an id again refreshes its staging time, which is how a publisher that
+	// is still working renews the grace period a reclaimer waits out.
+	refreshed := fixedNow.Add(5 * time.Hour)
+	if err := store.StageSnapshot(ctx, "scan-first", refreshed, expires); err != nil {
+		t.Fatalf("restaging: %v", err)
+	}
+	if staged, err = store.StagedSnapshots(ctx); err != nil {
+		t.Fatalf("StagedSnapshots: %v", err)
+	}
+	if len(staged) != 2 || !staged[0].StagedAt.Equal(refreshed) {
+		t.Fatalf("restaging left %v, want scan-first staged at %s", staged, refreshed)
+	}
+
+	if err := store.UnstageSnapshot(ctx, "scan-first"); err != nil {
+		t.Fatalf("UnstageSnapshot: %v", err)
+	}
+	if err := store.UnstageSnapshot(ctx, "scan-first"); err != nil {
+		t.Errorf("a repeated UnstageSnapshot failed: %v", err)
+	}
+	if staged, err = store.StagedSnapshots(ctx); err != nil {
+		t.Fatalf("StagedSnapshots: %v", err)
+	}
+	if len(staged) != 1 || staged[0].SnapshotID != "scan-second" {
+		t.Errorf("StagedSnapshots returned %v, want only scan-second", staged)
+	}
+
+	// A marker that expires when it was staged would vanish before any reclaim pass
+	// could act on it, which is the state staging exists to prevent.
+	if err := store.StageSnapshot(ctx, "scan-third", fixedNow, fixedNow); err == nil {
+		t.Errorf("StageSnapshot accepted a marker that expires when it was staged")
+	}
+	if err := store.StageSnapshot(ctx, "../escape", fixedNow, expires); err == nil {
+		t.Errorf("StageSnapshot accepted an unsafe snapshot id")
+	}
+
+	cancelled, cancel := context.WithCancel(ctx)
+	cancel()
+	if err := store.StageSnapshot(cancelled, "scan-third", fixedNow, expires); !errors.Is(err, context.Canceled) {
+		t.Errorf("StageSnapshot on a cancelled context returned %v", err)
+	}
+	if err := store.UnstageSnapshot(cancelled, "scan-second"); !errors.Is(err, context.Canceled) {
+		t.Errorf("UnstageSnapshot on a cancelled context returned %v", err)
+	}
+	if _, err := store.StagedSnapshots(cancelled); !errors.Is(err, context.Canceled) {
+		t.Errorf("StagedSnapshots on a cancelled context returned %v", err)
+	}
+}
+
 // TestStoresKeepThePointerMonotonic drives the LatestStore ordering rule through
 // both fakes: an older scan is refused, an identical retry succeeds without
 // changing anything, and a different pointer at the same scan time is refused.

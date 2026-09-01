@@ -85,8 +85,9 @@ func (g *fakeGraph) asked() []string {
 	return asked
 }
 
-// fakeStore is a local Store: the contract's in-memory backend plus the retention
-// call, with injectable failures for each publication step.
+// fakeStore is a local Store: the contract's in-memory backend plus the staging
+// registry and the retention call, with injectable failures for each publication
+// step.
 //
 // ExpireChunks repeats the DynamoDB backend's guard rather than trusting the
 // caller, so a test that expired a live snapshot would fail here too.
@@ -101,6 +102,13 @@ type fakeStore struct {
 	putLatestErr error
 	getLatestErr error
 	expireErr    error
+	stageErr     error
+	stagedErr    error
+	unstageErr   error
+
+	// onPutChunks runs before the chunk write, so a test can end a run at the one
+	// point where a complete chunk set exists and no pointer names it.
+	onPutChunks func()
 }
 
 func newFakeStore() *fakeStore {
@@ -108,10 +116,34 @@ func newFakeStore() *fakeStore {
 }
 
 func (s *fakeStore) PutChunks(ctx context.Context, snapshotID string, chunks []snapshot.Chunk) error {
+	if s.onPutChunks != nil {
+		s.onPutChunks()
+	}
 	if s.putChunksErr != nil {
 		return s.putChunksErr
 	}
 	return s.MemoryStore.PutChunks(ctx, snapshotID, chunks)
+}
+
+func (s *fakeStore) StageSnapshot(ctx context.Context, snapshotID string, stagedAt, expiresAt time.Time) error {
+	if s.stageErr != nil {
+		return s.stageErr
+	}
+	return s.MemoryStore.StageSnapshot(ctx, snapshotID, stagedAt, expiresAt)
+}
+
+func (s *fakeStore) UnstageSnapshot(ctx context.Context, snapshotID string) error {
+	if s.unstageErr != nil {
+		return s.unstageErr
+	}
+	return s.MemoryStore.UnstageSnapshot(ctx, snapshotID)
+}
+
+func (s *fakeStore) StagedSnapshots(ctx context.Context) ([]snapshot.StagedSnapshot, error) {
+	if s.stagedErr != nil {
+		return nil, s.stagedErr
+	}
+	return s.MemoryStore.StagedSnapshots(ctx)
 }
 
 func (s *fakeStore) GetChunks(ctx context.Context, snapshotID string) ([]snapshot.Chunk, error) {
@@ -139,12 +171,18 @@ func (s *fakeStore) ExpireChunks(ctx context.Context, snapshotID string, expires
 	if s.expireErr != nil {
 		return s.expireErr
 	}
+	// The pointer decides what may be expired, exactly as the DynamoDB backend has
+	// it: the live snapshot is refused, an unreadable pointer is refused because it
+	// proves nothing, and an absent pointer means nothing is live at all.
 	published, err := s.GetLatest(ctx)
-	if err != nil {
+	switch {
+	case err == nil:
+		if published.SnapshotID == snapshotID {
+			return fmt.Errorf("refusing to expire snapshot %s because the latest pointer still names it", snapshotID)
+		}
+	case errors.Is(err, snapshot.ErrNotFound):
+	default:
 		return err
-	}
-	if published.SnapshotID == snapshotID {
-		return fmt.Errorf("refusing to expire snapshot %s because the latest pointer still names it", snapshotID)
 	}
 	if _, err := s.MemoryStore.GetChunks(ctx, snapshotID); err != nil {
 		return err
@@ -160,6 +198,55 @@ func (s *fakeStore) expiry(snapshotID string) (time.Time, bool) {
 	defer s.mu.Unlock()
 	expiry, found := s.expired[snapshotID]
 	return expiry, found
+}
+
+// stagedIDs is every snapshot ID with a staging marker, in ID order.
+func stagedIDs(t *testing.T, store *fakeStore) []string {
+	t.Helper()
+	staged, err := store.MemoryStore.StagedSnapshots(context.Background())
+	if err != nil {
+		t.Fatalf("StagedSnapshots: %v", err)
+	}
+	ids := make([]string, 0, len(staged))
+	for _, entry := range staged {
+		ids = append(ids, entry.SnapshotID)
+	}
+	return ids
+}
+
+func isStaged(t *testing.T, store *fakeStore, snapshotID string) bool {
+	t.Helper()
+	for _, id := range stagedIDs(t, store) {
+		if id == snapshotID {
+			return true
+		}
+	}
+	return false
+}
+
+// otherSnapshotID is the one stored snapshot ID that is none of the given ones,
+// which is how a test names the snapshot a failed publication abandoned.
+func otherSnapshotID(t *testing.T, store *fakeStore, known ...string) string {
+	t.Helper()
+	var found []string
+	for _, id := range store.SnapshotIDs() {
+		if !containsString(known, id) {
+			found = append(found, id)
+		}
+	}
+	if len(found) != 1 {
+		t.Fatalf("store holds %d snapshots other than %v, want 1", len(found), known)
+	}
+	return found[0]
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }
 
 var (
@@ -812,6 +899,352 @@ func TestRunSucceedsWhenTheTTLCannotBeApplied(t *testing.T) {
 	}
 }
 
+func TestRunCarriesTheSnapshotPublishedDuringItsScan(t *testing.T) {
+	store := newFakeStore()
+	dir := defaultLists(t)
+
+	// The three- and four-letter lists are published first, with zap.eth unregistered.
+	first := newTestRun(t, dir, newFakeGraph(nil), store)
+	if _, err := Run(context.Background(), first.deps, Event{Group: GroupShort}); err != nil {
+		t.Fatalf("first Run: %v", err)
+	}
+	if got := statuses(t, store)["zap.eth"]; got != ens.StatusAvailable {
+		t.Fatalf("zap.eth is %q before it is registered, want %q", got, ens.StatusAvailable)
+	}
+
+	// The daily scan starts an hour later and runs long enough for the three-hourly
+	// schedule to publish a fresher result for zap.eth while it is still scanning.
+	longGraph := newFakeGraph(nil)
+	long := newTestRun(t, dir, longGraph, store).at(fixedNow.Add(time.Hour))
+	longGraph.onLookup = func() {
+		registered := map[string]time.Time{"zap": fixedNow.Add(48 * time.Hour)}
+		concurrent := newTestRun(t, dir, newFakeGraph(registered), store).at(fixedNow.Add(30 * time.Minute))
+		if _, err := Run(context.Background(), concurrent.deps, Event{Group: GroupShort}); err != nil {
+			t.Errorf("the concurrent short run failed: %v", err)
+		}
+	}
+
+	result, err := Run(context.Background(), long.deps, Event{Group: GroupLong})
+	if err != nil {
+		t.Fatalf("daily Run: %v", err)
+	}
+
+	// The daily run never asks about zap.eth, and its own scan time is the newer one,
+	// so its pointer wins. The only honest thing for it to carry forward is what was
+	// published while it was scanning.
+	if got := statuses(t, store)["zap.eth"]; got != ens.StatusRegistered {
+		t.Errorf("zap.eth is %q, want %q: the run carried a snapshot older than its own scan",
+			got, ens.StatusRegistered)
+	}
+	if got, want := result.Carried, len(shortLabels); got != want {
+		t.Errorf("carried %d results, want %d", got, want)
+	}
+	_, latest, err := snapshot.Read(context.Background(), store)
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	if latest.SnapshotID != result.Latest.SnapshotID {
+		t.Errorf("the pointer names %q, want the daily run's %q", latest.SnapshotID, result.Latest.SnapshotID)
+	}
+}
+
+func TestRunWarnsWhenThePreviousSnapshotChunksAreMissing(t *testing.T) {
+	store := newFakeStore()
+	dir := defaultLists(t)
+
+	first := newTestRun(t, dir, newFakeGraph(nil), store)
+	previous, err := Run(context.Background(), first.deps, Event{Group: GroupShort})
+	if err != nil {
+		t.Fatalf("first Run: %v", err)
+	}
+	// The pointer still resolves, but the snapshot it names is gone: an operator
+	// rolled the pointer back to a snapshot whose recovery window had passed.
+	if err := store.MemoryStore.DeleteChunks(context.Background(), previous.Latest.SnapshotID); err != nil {
+		t.Fatalf("DeleteChunks: %v", err)
+	}
+
+	second := newTestRun(t, dir, newFakeGraph(nil), store).at(fixedNow.Add(3 * time.Hour))
+	result, err := Run(context.Background(), second.deps, Event{Group: GroupLong})
+	if err != nil {
+		t.Fatalf("second Run: %v", err)
+	}
+
+	logs := second.logs.String()
+	if !strings.Contains(logs, "previous_snapshot_chunks_missing") {
+		t.Errorf("a vanished snapshot was not reported: %s", logs)
+	}
+	if !strings.Contains(logs, `"level":"warn"`) {
+		t.Errorf("a vanished snapshot was reported below warning level: %s", logs)
+	}
+	if !strings.Contains(logs, previous.Latest.SnapshotID) {
+		t.Errorf("the report does not name the snapshot that vanished: %s", logs)
+	}
+	// Losing a whole group must not look like a first run, and a strongly consistent
+	// read that found no chunk will not find one on a retry either.
+	if strings.Contains(logs, "previous_snapshot_absent") {
+		t.Errorf("a vanished snapshot was reported as a bootstrap: %s", logs)
+	}
+	if len(second.slept) != 0 {
+		t.Errorf("waited %d times for chunks that are definitively absent", len(second.slept))
+	}
+	if result.Carried != 0 || result.Previous != "" {
+		t.Errorf("a run that could not read the previous snapshot carried state anyway: %+v", result)
+	}
+	if got, want := publishedNames(t, store), qualify(longLabels); !equalStrings(got, want) {
+		t.Errorf("published %v, want %v", got, want)
+	}
+}
+
+// TestAbandonedChunksAreReclaimedAfterAFailedPublication drives the whole staging
+// mechanism: a publication that ends between the chunk write and the pointer write
+// leaves a chunk set nothing names, and the next run finds and expires it.
+//
+// Nothing here relies on the failed run cleaning up after itself. Both cases end the
+// run at a point a killed function would reach the same way, and the recovery
+// happens in a later run reading durable state.
+func TestAbandonedChunksAreReclaimedAfterAFailedPublication(t *testing.T) {
+	tests := []struct {
+		name        string
+		inject      func(store *fakeStore, cancel context.CancelFunc)
+		chunksExist bool
+	}{
+		{
+			name: "the pointer write fails once every chunk is stored",
+			inject: func(store *fakeStore, cancel context.CancelFunc) {
+				store.putLatestErr = errInjected
+			},
+			chunksExist: true,
+		},
+		{
+			name: "the run is cancelled with the chunk write in flight",
+			inject: func(store *fakeStore, cancel context.CancelFunc) {
+				store.onPutChunks = cancel
+			},
+			chunksExist: false,
+		},
+	}
+
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			store := newFakeStore()
+			dir := defaultLists(t)
+
+			first := newTestRun(t, dir, newFakeGraph(nil), store)
+			live, err := Run(context.Background(), first.deps, Event{Group: GroupShort})
+			if err != nil {
+				t.Fatalf("first Run: %v", err)
+			}
+
+			abandonedAt := fixedNow.Add(time.Hour)
+			second := newTestRun(t, dir, newFakeGraph(nil), store).at(abandonedAt)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			test.inject(store, cancel)
+			if _, err := Run(ctx, second.deps, Event{Group: GroupLong}); err == nil {
+				t.Fatalf("the second run published despite the injected failure")
+			}
+			store.putLatestErr = nil
+			store.onPutChunks = nil
+
+			staged := stagedIDs(t, store)
+			if len(staged) != 1 {
+				t.Fatalf("staged snapshots are %v, want exactly the abandoned one", staged)
+			}
+			abandoned := staged[0]
+			if abandoned == live.Latest.SnapshotID {
+				t.Fatalf("the published snapshot %q is still staged", abandoned)
+			}
+			if got := containsString(store.SnapshotIDs(), abandoned); got != test.chunksExist {
+				t.Fatalf("chunks stored for the abandoned snapshot = %v, want %v", got, test.chunksExist)
+			}
+
+			reclaimAt := abandonedAt.Add(abandonedAfter + time.Minute)
+			third := newTestRun(t, dir, newFakeGraph(nil), store).at(reclaimAt)
+			current, err := Run(context.Background(), third.deps, Event{Group: GroupShort})
+			if err != nil {
+				t.Fatalf("third Run: %v", err)
+			}
+
+			if isStaged(t, store, abandoned) {
+				t.Errorf("the abandoned snapshot %q is still staged after a reclaim pass", abandoned)
+			}
+			expiry, found := store.expiry(abandoned)
+			if found != test.chunksExist {
+				t.Fatalf("the abandoned snapshot has an expiry = %v, want %v", found, test.chunksExist)
+			}
+			if test.chunksExist {
+				if want := reclaimAt.Add(abandonedRetention); !expiry.Equal(want) {
+					t.Errorf("TTL %s, want %s", expiry, want)
+				}
+				if !strings.Contains(third.logs.String(), "abandoned_chunks_expired") {
+					t.Errorf("the reclaim was not reported: %s", third.logs.String())
+				}
+			}
+
+			// A reclaim pass must never reach what this run published.
+			if _, found := store.expiry(current.Latest.SnapshotID); found {
+				t.Errorf("the published snapshot was given a TTL")
+			}
+			published, latest, err := snapshot.Read(context.Background(), store)
+			if err != nil {
+				t.Fatalf("the reclaim pass left no readable snapshot: %v", err)
+			}
+			if latest.SnapshotID != current.Latest.SnapshotID || len(published.Results) != latest.Names {
+				t.Errorf("readers see %q with %d of %d results", latest.SnapshotID, len(published.Results), latest.Names)
+			}
+		})
+	}
+}
+
+func TestAbandonedChunksSurviveUntilTheGracePeriodPasses(t *testing.T) {
+	store := newFakeStore()
+	dir := defaultLists(t)
+
+	first := newTestRun(t, dir, newFakeGraph(nil), store)
+	if _, err := Run(context.Background(), first.deps, Event{Group: GroupShort}); err != nil {
+		t.Fatalf("first Run: %v", err)
+	}
+
+	abandonedAt := fixedNow.Add(time.Hour)
+	store.putLatestErr = errInjected
+	second := newTestRun(t, dir, newFakeGraph(nil), store).at(abandonedAt)
+	if _, err := Run(context.Background(), second.deps, Event{Group: GroupLong}); err == nil {
+		t.Fatalf("the second run published despite the injected failure")
+	}
+	store.putLatestErr = nil
+	staged := stagedIDs(t, store)
+	if len(staged) != 1 {
+		t.Fatalf("staged snapshots are %v, want exactly the abandoned one", staged)
+	}
+	abandoned := staged[0]
+
+	// A publisher may still be writing a set this young, so nothing may expire it.
+	// Staging refreshes the marker, so a publisher that keeps working keeps its grace.
+	third := newTestRun(t, dir, newFakeGraph(nil), store).at(abandonedAt.Add(abandonedAfter - time.Minute))
+	if _, err := Run(context.Background(), third.deps, Event{Group: GroupShort}); err != nil {
+		t.Fatalf("third Run: %v", err)
+	}
+	if _, found := store.expiry(abandoned); found {
+		t.Errorf("a snapshot staged less than %s ago was expired", abandonedAfter)
+	}
+	if !isStaged(t, store, abandoned) {
+		t.Errorf("the marker of a snapshot still inside its grace period was removed")
+	}
+	if !containsString(store.SnapshotIDs(), abandoned) {
+		t.Errorf("the chunks of a snapshot still inside its grace period were removed")
+	}
+}
+
+func TestReclaimNeverExpiresTheLiveSnapshot(t *testing.T) {
+	store := newFakeStore()
+	dir := defaultLists(t)
+
+	first := newTestRun(t, dir, newFakeGraph(nil), store)
+	live, err := Run(context.Background(), first.deps, Event{Group: GroupShort})
+	if err != nil {
+		t.Fatalf("first Run: %v", err)
+	}
+
+	// A publisher interrupted after its pointer write leaves the live snapshot's own
+	// marker behind, and it is old enough for any grace period to have passed.
+	stagedAt := fixedNow.Add(-2 * abandonedAfter)
+	if err := store.StageSnapshot(context.Background(), live.Latest.SnapshotID, stagedAt, stagedAt.Add(stagingRetention)); err != nil {
+		t.Fatalf("StageSnapshot: %v", err)
+	}
+
+	// The next run fails to publish, so nothing but the reclaim pass could put a TTL
+	// on the snapshot readers are being served.
+	store.putLatestErr = errInjected
+	second := newTestRun(t, dir, newFakeGraph(nil), store).at(fixedNow.Add(time.Hour))
+	if _, err := Run(context.Background(), second.deps, Event{Group: GroupLong}); err == nil {
+		t.Fatalf("the second run published despite the injected failure")
+	}
+
+	if expiry, found := store.expiry(live.Latest.SnapshotID); found {
+		t.Fatalf("the snapshot the pointer names was given a TTL of %s", expiry)
+	}
+	if isStaged(t, store, live.Latest.SnapshotID) {
+		t.Errorf("the published snapshot's stale marker was kept")
+	}
+	if _, latest, err := snapshot.Read(context.Background(), store); err != nil || latest.SnapshotID != live.Latest.SnapshotID {
+		t.Errorf("readers no longer see %q: %v", live.Latest.SnapshotID, err)
+	}
+}
+
+func TestReclaimIsDeferredWhenThePointerCannotBeRead(t *testing.T) {
+	store := newFakeStore()
+	dir := defaultLists(t)
+
+	first := newTestRun(t, dir, newFakeGraph(nil), store)
+	if _, err := Run(context.Background(), first.deps, Event{Group: GroupShort}); err != nil {
+		t.Fatalf("first Run: %v", err)
+	}
+
+	abandonedAt := fixedNow.Add(time.Hour)
+	store.putLatestErr = errInjected
+	second := newTestRun(t, dir, newFakeGraph(nil), store).at(abandonedAt)
+	if _, err := Run(context.Background(), second.deps, Event{Group: GroupLong}); err == nil {
+		t.Fatalf("the second run published despite the injected failure")
+	}
+	store.putLatestErr = nil
+	staged := stagedIDs(t, store)
+	if len(staged) != 1 {
+		t.Fatalf("staged snapshots are %v, want exactly the abandoned one", staged)
+	}
+	abandoned := staged[0]
+
+	// A pointer that cannot be read says nothing about which snapshot is live, so
+	// nothing may be reclaimed against it. The run still publishes past it.
+	store.getLatestErr = errInjected
+	third := newTestRun(t, dir, newFakeGraph(nil), store).at(abandonedAt.Add(abandonedAfter + time.Hour))
+	if _, err := Run(context.Background(), third.deps, Event{Group: GroupShort}); err != nil {
+		t.Fatalf("third Run: %v", err)
+	}
+	if !strings.Contains(third.logs.String(), "abandoned_chunks_deferred") {
+		t.Errorf("the deferred reclaim was not reported: %s", third.logs.String())
+	}
+	if _, found := store.expiry(abandoned); found {
+		t.Errorf("a snapshot was expired against a pointer that could not be read")
+	}
+	if !isStaged(t, store, abandoned) {
+		t.Errorf("a staging marker was dropped without reclaiming its chunks")
+	}
+
+	store.getLatestErr = nil
+	if _, _, err := snapshot.Read(context.Background(), store); err != nil {
+		t.Errorf("the published snapshot is not readable: %v", err)
+	}
+}
+
+func TestRunRefusesToWriteChunksItCannotStage(t *testing.T) {
+	store := newFakeStore()
+	dir := defaultLists(t)
+
+	first := newTestRun(t, dir, newFakeGraph(nil), store)
+	live, err := Run(context.Background(), first.deps, Event{Group: GroupShort})
+	if err != nil {
+		t.Fatalf("first Run: %v", err)
+	}
+
+	// Writing chunks with no durable record of them is the one orphan staging exists
+	// to prevent, so a run that cannot stage must not write any.
+	store.stageErr = errInjected
+	second := newTestRun(t, dir, newFakeGraph(nil), store).at(fixedNow.Add(time.Hour))
+	if _, err := Run(context.Background(), second.deps, Event{Group: GroupLong}); err == nil {
+		t.Fatalf("Run published a snapshot it could not stage")
+	}
+	if !strings.Contains(second.logs.String(), "snapshot_stage_failed") {
+		t.Errorf("the staging failure was not reported: %s", second.logs.String())
+	}
+	if got := store.SnapshotIDs(); !equalStrings(sortedCopy(got), []string{live.Latest.SnapshotID}) {
+		t.Errorf("the store holds %v, want only %q", got, live.Latest.SnapshotID)
+	}
+	if _, latest, err := snapshot.Read(context.Background(), store); err != nil || latest.SnapshotID != live.Latest.SnapshotID {
+		t.Errorf("readers no longer see %q: %v", live.Latest.SnapshotID, err)
+	}
+}
+
 func TestConcurrentRunsLeaveOneCoherentSnapshot(t *testing.T) {
 	store := newFakeStore()
 	dir := defaultLists(t)
@@ -877,6 +1310,68 @@ func TestLogsCarryNoCandidateNamesOrCredentials(t *testing.T) {
 		if strings.Contains(success.logs.String(), label) {
 			t.Errorf("the log names the candidate %q: %s", label, success.logs.String())
 		}
+	}
+}
+
+// testAPIKey is invented here and is not a credential. Every assertion about it is
+// that it is absent from output, which is the only safe thing to assert about one.
+const testAPIKey = "test-graph-key-0123456789abcdef"
+
+func TestLogsCarryNoBareAPIKey(t *testing.T) {
+	store := newFakeStore()
+	dir := defaultLists(t)
+	graph := newFakeGraph(nil)
+	run := newTestRun(t, dir, graph, store)
+	run.deps.Config.APIKey = testAPIKey
+	// The Graph client folds a slice of the gateway's response body into its error, so
+	// a gateway that echoed the credential back would put a bare key in the log group
+	// with no URL for the endpoint pattern to match.
+	graph.err = fmt.Errorf(`ENS subgraph returned 401 Unauthorized: {"message":"invalid api key %s"}`, testAPIKey)
+
+	if _, err := Run(context.Background(), run.deps, Event{Group: GroupShort}); err == nil {
+		t.Fatalf("Run succeeded despite a failing subgraph")
+	}
+	logs := run.logs.String()
+	if strings.Contains(logs, testAPIKey) {
+		t.Errorf("the log carries the configured credential: %s", logs)
+	}
+	if !strings.Contains(logs, "[redacted]") {
+		t.Errorf("the credential was not replaced with a placeholder: %s", logs)
+	}
+}
+
+func TestRedactorStripsConfiguredSecrets(t *testing.T) {
+	config := Config{APIKey: testAPIKey, Endpoint: "https://gateway.test/api/" + testAPIKey + "/subgraphs/id/abc"}
+	redactor := config.Redactor()
+
+	bare := redactor.Error(fmt.Errorf("invalid api key %s", testAPIKey))
+	if strings.Contains(bare, testAPIKey) {
+		t.Errorf("a bare credential survived redaction: %q", bare)
+	}
+	if bare != "invalid api key [redacted]" {
+		t.Errorf("redacted error = %q, want the message with a placeholder", bare)
+	}
+
+	quoted := redactor.Error(fmt.Errorf("post %s: lookup zap.eth failed", config.Endpoint))
+	for _, forbidden := range []string{testAPIKey, "gateway.test"} {
+		if strings.Contains(quoted, forbidden) {
+			t.Errorf("redacted error %q still contains %q", quoted, forbidden)
+		}
+	}
+	if strings.Contains(quoted, "zap.eth") {
+		t.Errorf("redacted error %q still names a candidate", quoted)
+	}
+
+	// A store with no credential configured must behave exactly like the default.
+	empty := Config{}.Redactor()
+	if got, want := empty.Error(errInjected), Redact(errInjected); got != want {
+		t.Errorf("an unconfigured redactor rendered %q, want %q", got, want)
+	}
+	// A literal too short to be a credential is left alone, so an ordinary message
+	// cannot be mangled by one.
+	short := NewRedactor("ab")
+	if got, want := short.Error(errors.New("chunk ab checksum mismatch")), "chunk ab checksum mismatch"; got != want {
+		t.Errorf("redacted error = %q, want %q", got, want)
 	}
 }
 

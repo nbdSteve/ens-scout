@@ -151,6 +151,16 @@ snapshot already published, and writes a new latest pointer only after every
 chunk of the new snapshot is stored, read back, and checksum-verified. A failure
 at any stage leaves the previous snapshot serving.
 
+The group being carried forward is read after the fresh scan finishes, so a
+snapshot the other schedule published during those minutes is carried rather than
+overwritten.
+
+A publication that stores every chunk and then fails to move the pointer leaves a
+chunk set nothing references. Each run records the snapshot it is about to write
+before it writes a chunk, so a later run finds that set and gives it a TTL. The
+record is durable before anything can go wrong, which is what makes this work for
+a run that was killed rather than one that failed politely.
+
 Two schedules drive it, each sending only a group name:
 
 ```json
@@ -183,7 +193,9 @@ scan of this size must fail at startup on a missing credential rather than fail
 slowly against a rate-limited endpoint.
 
 Logs are JSON lines on stdout. They carry counts, identifiers, and durations, and
-never a candidate name, an endpoint, or a credential.
+never a candidate name, an endpoint, or a credential. Error text from any layer is
+redacted first, including the configured API key as a literal, because an upstream
+response body can quote a credential with no URL around it.
 
 Build it for the Lambda runtime:
 
