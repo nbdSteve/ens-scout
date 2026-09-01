@@ -178,12 +178,49 @@ func (l Latest) Validate() error {
 	return nil
 }
 
-// ChunkStore stores immutable snapshot chunks. Implementations must reject a
-// write to a snapshot ID that already exists, because chunks are never revised.
+// ChunkStore stores immutable snapshot chunks.
+//
+// Chunks are never revised, so PutChunks must reject a write to a snapshot ID
+// that already exists with different chunks. Re-writing the identical chunks is
+// not a revision though, and publication is retried: a run whose pointer write
+// fails has already stored and verified every chunk, so refusing the retry would
+// leave a complete scan permanently unpublishable. Implementations must apply
+// this rule:
+//
+//   - a snapshot ID that does not exist yet is written;
+//   - a snapshot ID that exists with chunks byte-identical to the incoming ones
+//     succeeds and writes nothing;
+//   - a snapshot ID that exists and differs in bytes, count, order, index, or
+//     checksum is rejected, and so is one whose stored chunks cannot be read
+//     back to prove they match.
 type ChunkStore interface {
 	PutChunks(ctx context.Context, snapshotID string, chunks []Chunk) error
 	GetChunks(ctx context.Context, snapshotID string) ([]Chunk, error)
 	DeleteChunks(ctx context.Context, snapshotID string) error
+}
+
+// chunksIdentical reports whether two chunk sets are the same on the wire, which
+// is what makes storing them a second time a safe no-op. Comparing the canonical
+// JSON of each chunk covers the payload bytes and the whole envelope, so a
+// difference in index, count, order, or checksum is never treated as identical.
+func chunksIdentical(stored, incoming []Chunk) (bool, error) {
+	if len(stored) != len(incoming) {
+		return false, nil
+	}
+	for i := range stored {
+		left, err := json.Marshal(stored[i])
+		if err != nil {
+			return false, err
+		}
+		right, err := json.Marshal(incoming[i])
+		if err != nil {
+			return false, err
+		}
+		if !bytes.Equal(left, right) {
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
 // LatestStore stores the single pointer to the newest valid snapshot.
@@ -195,14 +232,21 @@ type ChunkStore interface {
 // Implementations must apply this rule against the stored pointer:
 //
 //   - an older ScannedAt is rejected with ErrPointerConflict;
-//   - the same ScannedAt with a byte-identical pointer succeeds and stores
+//   - the same ScannedAt with an otherwise identical pointer succeeds and stores
 //     nothing new, so retrying one publication is safe;
 //   - the same ScannedAt with any other difference is rejected with
 //     ErrPointerConflict as a same-time conflict;
 //   - a newer ScannedAt replaces the stored pointer.
 //
-// A real backend enforces this with a conditional write rather than a read
-// followed by a write, so two concurrent publishers cannot both win.
+// The rule compares scans, so it applies only to a stored pointer that can be
+// read and validated. A missing, unparseable, corrupt, or unsupported-version
+// pointer says nothing about which scan is newer and must be replaceable, or a
+// FormatVersion bump would wedge an existing store with no way to publish into
+// it. GetLatest and Read still fail closed on such a pointer and never repair
+// one, so this narrowing only ever affects the publication path.
+//
+// A real backend enforces this with a conditional write on ScannedAt rather than
+// a read followed by a write, so two concurrent publishers cannot both win.
 type LatestStore interface {
 	PutLatest(ctx context.Context, latest Latest) error
 	GetLatest(ctx context.Context) (Latest, error)
@@ -210,7 +254,8 @@ type LatestStore interface {
 
 // checkPutLatest applies the LatestStore ordering rule. The first return value
 // reports whether the caller should store the incoming pointer; false with a nil
-// error is the accepted no-op for an identical retry.
+// error is the accepted no-op for an identical retry, which leaves the stored
+// PublishedAt as the first attempt recorded it.
 func checkPutLatest(stored *Latest, incoming Latest) (bool, error) {
 	if stored == nil {
 		return true, nil
@@ -242,7 +287,14 @@ func checkPutLatest(stored *Latest, incoming Latest) (bool, error) {
 
 // pointersIdentical compares two pointers by their canonical JSON, which is the
 // same form a backend stores, so "identical" means identical on the wire.
+//
+// PublishedAt is excluded because it describes the write and not the scan. A
+// retry samples its own publication clock, and refusing it over that one field
+// would make the same-scan-time no-op unreachable. Every other field, including
+// both checksums and the whole summary, must still match exactly.
 func pointersIdentical(left, right Latest) (bool, error) {
+	left.PublishedAt = time.Time{}
+	right.PublishedAt = time.Time{}
 	leftBytes, err := json.Marshal(left)
 	if err != nil {
 		return false, err
@@ -274,6 +326,13 @@ type Store interface {
 // scan that finishes out of order is refused with ErrPointerConflict rather than
 // moving readers back to an older scan. The refusal is returned to the caller;
 // the chunks it already wrote are left for retention to remove.
+//
+// Publish is safe to retry with the same snapshot after a transient failure, and
+// may be called with a freshly sampled publishedAt: step 2 accepts the chunks it
+// already stored because they are identical, and step 4 accepts the pointer
+// because PublishedAt is not part of pointer identity. A retry that reaches step
+// 4 after the pointer was already written returns the pointer it would have
+// written, which differs from the stored one only in PublishedAt.
 func Publish(ctx context.Context, store Store, snapshot Snapshot, publishedAt time.Time) (Latest, error) {
 	if store == nil {
 		return Latest{}, fmt.Errorf("snapshot store is required")

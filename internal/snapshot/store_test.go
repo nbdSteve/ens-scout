@@ -70,11 +70,168 @@ func TestPublishAndReadThroughStores(t *testing.T) {
 			}
 			assertSamePayload(t, payload, roundTripped)
 
-			// Chunks are immutable: a snapshot ID is never rewritten.
-			if err := store.PutChunks(ctx, snapshot.Metadata.SnapshotID, payload.Chunks); err == nil {
-				t.Error("PutChunks overwrote an existing snapshot")
-			} else if !strings.Contains(err.Error(), "immutable") {
-				t.Errorf("error %q does not mention immutability", err)
+		})
+	}
+}
+
+// TestPutChunksIsIdempotentButNeverRevises drives the ChunkStore immutability
+// rule through both fakes. Storing the identical chunks again is the no-op a
+// retried publication depends on; any real difference under a stored ID is still
+// refused.
+func TestPutChunksIsIdempotentButNeverRevises(t *testing.T) {
+	ctx := context.Background()
+	snapshot := mustBuild(t, lifecycleResults(t, fixedNow))
+	payload, err := Encode(snapshot)
+	if err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+	if len(payload.Chunks) != 1 {
+		t.Fatalf("this test assumes a single chunk, got %d", len(payload.Chunks))
+	}
+
+	// A second snapshot at the same scan time, so its chunks are valid on their
+	// own but hold different bytes under the same id.
+	otherResults := lifecycleResults(t, fixedNow)
+	otherResults = otherResults[:len(otherResults)-1]
+	other, err := Build(snapshot.Metadata.SnapshotID, fixedNow, testSources(len(otherResults)), otherResults)
+	if err != nil {
+		t.Fatalf("Build the other snapshot: %v", err)
+	}
+	otherPayload, err := Encode(other)
+	if err != nil {
+		t.Fatalf("Encode the other snapshot: %v", err)
+	}
+
+	relabelChecksum := func(chunks []Chunk) []Chunk {
+		chunks[0].Checksum = checksum(chunks[0].Bytes)
+		return chunks
+	}
+
+	tests := []struct {
+		name    string
+		write   func() []Chunk
+		wantErr bool
+	}{
+		{
+			name:  "identical chunks are a no-op",
+			write: func() []Chunk { return CloneChunks(payload.Chunks) },
+		},
+		{
+			name:    "different bytes are refused",
+			write:   func() []Chunk { return CloneChunks(otherPayload.Chunks) },
+			wantErr: true,
+		},
+		{
+			name: "a truncated final chunk is refused",
+			write: func() []Chunk {
+				chunks := CloneChunks(payload.Chunks)
+				chunks[0].Bytes = chunks[0].Bytes[:len(chunks[0].Bytes)-1]
+				return relabelChecksum(chunks)
+			},
+			wantErr: true,
+		},
+		{
+			name: "a different declared count is refused",
+			write: func() []Chunk {
+				chunks := CloneChunks(payload.Chunks)
+				chunks = append(chunks, chunks[0].Clone())
+				chunks[0].Count = 2
+				chunks[1].Count = 2
+				chunks[1].Index = 1
+				chunks[0].Bytes = make([]byte, MaxChunkBytes)
+				return relabelChecksum(chunks)
+			},
+			wantErr: true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			for name, store := range newStores(t) {
+				t.Run(name, func(t *testing.T) {
+					if err := store.PutChunks(ctx, snapshot.Metadata.SnapshotID, payload.Chunks); err != nil {
+						t.Fatalf("PutChunks of the first copy: %v", err)
+					}
+
+					err := store.PutChunks(ctx, snapshot.Metadata.SnapshotID, test.write())
+					if test.wantErr {
+						if err == nil {
+							t.Fatal("PutChunks revised a stored snapshot")
+						}
+					} else if err != nil {
+						t.Fatalf("PutChunks refused identical chunks: %v", err)
+					}
+
+					// Either way the stored chunks are the ones first written.
+					stored, err := store.GetChunks(ctx, snapshot.Metadata.SnapshotID)
+					if err != nil {
+						t.Fatalf("GetChunks: %v", err)
+					}
+					identical, err := chunksIdentical(payload.Chunks, stored)
+					if err != nil {
+						t.Fatalf("chunksIdentical: %v", err)
+					}
+					if !identical {
+						t.Fatal("the stored chunks are no longer the ones first written")
+					}
+				})
+			}
+		})
+	}
+}
+
+// TestPublishRetriesAfterAFailedPointerWrite is the sequence the idempotent rules
+// exist for: the chunks are stored and verified, the pointer write fails
+// transiently, and the publisher calls Publish again with the same snapshot and a
+// freshly sampled publication time. The retry must publish.
+func TestPublishRetriesAfterAFailedPointerWrite(t *testing.T) {
+	ctx := context.Background()
+	snapshot := mustBuild(t, lifecycleResults(t, fixedNow))
+
+	firstAttempt := fixedNow.Add(time.Minute)
+	// The retry samples its own clock, so it never matches the first attempt.
+	retryAttempt := fixedNow.Add(4 * time.Minute)
+
+	for name, store := range newStores(t) {
+		t.Run(name, func(t *testing.T) {
+			if _, err := Publish(ctx, failingLatestStore{Store: store}, snapshot, firstAttempt); err == nil {
+				t.Fatal("Publish succeeded despite a failing pointer write")
+			}
+			if _, err := store.GetLatest(ctx); !errors.Is(err, ErrNotFound) {
+				t.Fatalf("GetLatest after the failed attempt returned %v, want ErrNotFound", err)
+			}
+
+			published, err := Publish(ctx, store, snapshot, retryAttempt)
+			if err != nil {
+				t.Fatalf("the retry could not publish an already stored scan: %v", err)
+			}
+			if !published.PublishedAt.Equal(retryAttempt) {
+				t.Errorf("the retry published at %s, want %s", published.PublishedAt, retryAttempt)
+			}
+
+			readSnapshot, readLatest, err := Read(ctx, store)
+			if err != nil {
+				t.Fatalf("Read after the retry: %v", err)
+			}
+			if readLatest.SnapshotID != snapshot.Metadata.SnapshotID {
+				t.Fatalf("the pointer names %q, want %q", readLatest.SnapshotID, snapshot.Metadata.SnapshotID)
+			}
+			if readSnapshot.Metadata.Names != snapshot.Metadata.Names {
+				t.Fatalf("readers see %d names, want %d", readSnapshot.Metadata.Names, snapshot.Metadata.Names)
+			}
+
+			// Retrying once more, after the pointer is already published, is still
+			// accepted and leaves the published pointer alone.
+			thirdAttempt := fixedNow.Add(9 * time.Minute)
+			if _, err := Publish(ctx, store, snapshot, thirdAttempt); err != nil {
+				t.Fatalf("a second retry was refused: %v", err)
+			}
+			served, err := store.GetLatest(ctx)
+			if err != nil {
+				t.Fatalf("GetLatest: %v", err)
+			}
+			if !served.PublishedAt.Equal(retryAttempt) {
+				t.Errorf("the no-op retry moved the stored publication time to %s, want %s", served.PublishedAt, retryAttempt)
 			}
 		})
 	}
@@ -238,8 +395,18 @@ func TestStoresKeepThePointerMonotonic(t *testing.T) {
 	}
 	newer := mustPointer(t, laterSnapshot, later.Add(time.Minute))
 
-	// Same scan time, different publication time: a genuinely different pointer.
-	republished := mustPointer(t, mustBuild(t, lifecycleResults(t, fixedNow)), fixedNow.Add(2*time.Minute))
+	// A second scan of the same instant under a different id: the same-time
+	// conflict a real backend has to refuse.
+	rivalResults := lifecycleResults(t, fixedNow)
+	rivalSnapshot, err := Build("rival-snapshot", fixedNow, testSources(len(rivalResults)), rivalResults)
+	if err != nil {
+		t.Fatalf("Build the rival snapshot: %v", err)
+	}
+	rival := mustPointer(t, rivalSnapshot, fixedNow.Add(time.Minute))
+
+	// The same scan and the same chunks, published a minute later. PublishedAt
+	// describes the write rather than the scan, so this is the same pointer.
+	retried := mustPointer(t, mustBuild(t, lifecycleResults(t, fixedNow)), fixedNow.Add(2*time.Minute))
 
 	tests := []struct {
 		name       string
@@ -259,8 +426,13 @@ func TestStoresKeepThePointerMonotonic(t *testing.T) {
 			wantServed: published,
 		},
 		{
-			name:       "same scan time with a different pointer is refused",
-			write:      republished,
+			name:       "a re-sampled publication time is still the same pointer",
+			write:      retried,
+			wantServed: published,
+		},
+		{
+			name:       "same scan time with a different snapshot is refused",
+			write:      rival,
 			wantErr:    true,
 			wantServed: published,
 		},
@@ -602,6 +774,116 @@ func TestStoresRejectCancelledContext(t *testing.T) {
 // editLatestFile rewrites part of the committed pointer file, standing in for a
 // pointer item that was edited in place. It fails the test when the target text is
 // absent, so a serialization change cannot quietly turn the case into a no-op.
+// TestFileStorePutLatestReplacesAnUnreadablePointer covers the publication side of
+// the ordering rule. The rule compares scans, so a stored pointer that says
+// nothing about a scan must not block a publication: otherwise a FormatVersion
+// bump would wedge an existing directory with no way to publish into it. Reads
+// still fail closed on the same pointer, which the second half asserts.
+func TestFileStorePutLatestReplacesAnUnreadablePointer(t *testing.T) {
+	ctx := context.Background()
+	snapshot := mustBuild(t, lifecycleResults(t, fixedNow))
+	publishedAt := fixedNow.Add(time.Minute)
+
+	tests := []struct {
+		name     string
+		contents string
+		wantRead string
+	}{
+		{
+			name:     "not json at all",
+			contents: "this is not a pointer",
+			wantRead: "read latest snapshot pointer",
+		},
+		{
+			name:     "truncated json",
+			contents: `{"format_version":1,"snapshot_id":"test-sna`,
+			wantRead: "read latest snapshot pointer",
+		},
+		{
+			name:     "empty file",
+			contents: "",
+			wantRead: "read latest snapshot pointer",
+		},
+		{
+			name:     "an unsupported format version",
+			contents: `{"format_version":99,"snapshot_id":"old-snapshot"}`,
+			wantRead: "unsupported latest pointer format version",
+		},
+		{
+			name:     "a valid version that fails validation",
+			contents: `{"format_version":1,"snapshot_id":"old-snapshot"}`,
+			wantRead: "latest pointer needs a scan time",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			dir := t.TempDir()
+			store := NewFileStore(dir)
+			path := filepath.Join(dir, fileStoreLatestName)
+			if err := os.WriteFile(path, []byte(test.contents), 0o644); err != nil {
+				t.Fatalf("write the stored pointer: %v", err)
+			}
+
+			// A reader must never be handed this pointer.
+			if _, err := store.GetLatest(ctx); err == nil {
+				t.Fatal("GetLatest served an unreadable pointer")
+			} else if !strings.Contains(err.Error(), test.wantRead) {
+				t.Fatalf("error %q does not contain %q", err, test.wantRead)
+			}
+			if _, _, err := Read(ctx, store); err == nil {
+				t.Fatal("Read served an unreadable pointer")
+			}
+
+			// A publisher must be able to replace it.
+			if _, err := Publish(ctx, store, snapshot, publishedAt); err != nil {
+				t.Fatalf("Publish could not replace an unreadable pointer: %v", err)
+			}
+			served, err := store.GetLatest(ctx)
+			if err != nil {
+				t.Fatalf("GetLatest after replacing the pointer: %v", err)
+			}
+			if served.SnapshotID != snapshot.Metadata.SnapshotID {
+				t.Fatalf("the pointer names %q, want %q", served.SnapshotID, snapshot.Metadata.SnapshotID)
+			}
+			if _, _, err := Read(ctx, store); err != nil {
+				t.Fatalf("Read after replacing the pointer: %v", err)
+			}
+		})
+	}
+}
+
+// TestFileStorePutLatestStillRefusesAnOlderReadablePointer is the other half of
+// the narrowing: a stored pointer that does parse keeps its ordering authority.
+func TestFileStorePutLatestStillRefusesAnOlderReadablePointer(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	store := NewFileStore(dir)
+
+	newer := mustBuild(t, lifecycleResults(t, fixedNow))
+	if _, err := Publish(ctx, store, newer, fixedNow.Add(time.Minute)); err != nil {
+		t.Fatalf("Publish the newer snapshot: %v", err)
+	}
+
+	earlier := fixedNow.Add(-3 * time.Hour)
+	earlierResults := lifecycleResults(t, earlier)
+	older, err := Build("earlier-snapshot", earlier, testSources(len(earlierResults)), earlierResults)
+	if err != nil {
+		t.Fatalf("Build the earlier snapshot: %v", err)
+	}
+	if _, err := Publish(ctx, store, older, fixedNow.Add(2*time.Minute)); !errors.Is(err, ErrPointerConflict) {
+		t.Fatalf("Publish returned %v, want ErrPointerConflict", err)
+	}
+
+	served, err := store.GetLatest(ctx)
+	if err != nil {
+		t.Fatalf("GetLatest: %v", err)
+	}
+	if served.SnapshotID != newer.Metadata.SnapshotID {
+		t.Fatalf("the pointer names %q, want %q", served.SnapshotID, newer.Metadata.SnapshotID)
+	}
+}
+
 func editLatestFile(from, to string) func(t *testing.T, dir, snapshotID string) {
 	return func(t *testing.T, dir, snapshotID string) {
 		t.Helper()

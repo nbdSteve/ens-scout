@@ -23,7 +23,7 @@ func TestEncodeDecodeRoundTrip(t *testing.T) {
 		t.Errorf("compression did not shrink the payload: %d compressed, %d raw", payload.CompressedBytes, payload.RawBytes)
 	}
 
-	decoded, err := Decode(payload.Chunks)
+	decoded, err := Decode(snapshot.Metadata.SnapshotID, payload.Chunks)
 	if err != nil {
 		t.Fatalf("Decode: %v", err)
 	}
@@ -283,7 +283,7 @@ func TestDecodeFailsClosed(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			chunks := test.mutate(CloneChunks(payload.Chunks))
-			_, err := Decode(chunks)
+			_, err := Decode(snapshot.Metadata.SnapshotID, chunks)
 			if err == nil {
 				t.Fatalf("Decode accepted damaged chunks")
 			}
@@ -486,7 +486,7 @@ func TestDecodeRejectsNonCanonicalPayload(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			chunks := chunkRaw(t, snapshot.Metadata.SnapshotID, test.raw)
-			if _, err := Decode(chunks); err == nil {
+			if _, err := Decode(snapshot.Metadata.SnapshotID, chunks); err == nil {
 				t.Fatalf("Decode accepted a non-canonical payload")
 			} else if !strings.Contains(err.Error(), test.want) {
 				t.Fatalf("error %q does not contain %q", err, test.want)
@@ -495,9 +495,72 @@ func TestDecodeRejectsNonCanonicalPayload(t *testing.T) {
 	}
 }
 
+// TestDecodeAnchorsOnTheRequestedSnapshotID covers the relabelled-chunk case: a
+// chunk checksum covers only the payload bytes, so a copy of one snapshot's
+// chunks with the envelope rewritten to another ID is internally consistent.
+// Decode must reject it rather than hand back a snapshot the caller did not ask
+// for.
+func TestDecodeAnchorsOnTheRequestedSnapshotID(t *testing.T) {
+	snapshot := mustBuild(t, lifecycleResults(t, fixedNow))
+	payload, err := Encode(snapshot)
+	if err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+
+	// Relabel every chunk and refresh each checksum, exactly as copying a stored
+	// snapshot directory under a new ID and editing the envelope would.
+	relabelled := CloneChunks(payload.Chunks)
+	for i := range relabelled {
+		relabelled[i].SnapshotID = "other-snapshot"
+		relabelled[i].Checksum = checksum(relabelled[i].Bytes)
+	}
+
+	tests := []struct {
+		name       string
+		snapshotID string
+		chunks     []Chunk
+		want       string
+	}{
+		{
+			name:       "relabelled chunks under the id they claim",
+			snapshotID: "other-snapshot",
+			chunks:     relabelled,
+			want:       `hold id "test-snapshot" but "other-snapshot" was requested`,
+		},
+		{
+			name:       "relabelled chunks under the id they came from",
+			snapshotID: snapshot.Metadata.SnapshotID,
+			chunks:     relabelled,
+			want:       "belongs to snapshot",
+		},
+		{
+			name:       "genuine chunks under a foreign id",
+			snapshotID: "other-snapshot",
+			chunks:     CloneChunks(payload.Chunks),
+			want:       "belongs to snapshot",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := Decode(test.snapshotID, test.chunks); err == nil {
+				t.Fatal("Decode returned a snapshot the caller did not ask for")
+			} else if !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("error %q does not contain %q", err, test.want)
+			}
+		})
+	}
+
+	// The same chunks still decode under their own id, so the anchor rejects only
+	// the mismatch and not the snapshot itself.
+	if _, err := Decode(snapshot.Metadata.SnapshotID, payload.Chunks); err != nil {
+		t.Fatalf("Decode rejected the snapshot under its own id: %v", err)
+	}
+}
+
 func TestDecodeRejectsUnreadableStream(t *testing.T) {
 	chunks := split("test-snapshot", []byte("this is not a gzip stream"))
-	if _, err := Decode(chunks); err == nil {
+	if _, err := Decode("test-snapshot", chunks); err == nil {
 		t.Fatal("Decode accepted a stream that is not gzip")
 	} else if !strings.Contains(err.Error(), "read snapshot stream") {
 		t.Fatalf("error %q does not mention the snapshot stream", err)
@@ -515,7 +578,7 @@ func TestDecodeBoundsDecompression(t *testing.T) {
 	maxRawBytes = len(raw) - 1
 	defer func() { maxRawBytes = previous }()
 
-	if _, err := Decode(chunkRaw(t, snapshot.Metadata.SnapshotID, raw)); err == nil {
+	if _, err := Decode(snapshot.Metadata.SnapshotID, chunkRaw(t, snapshot.Metadata.SnapshotID, raw)); err == nil {
 		t.Fatal("Decode accepted a payload above the decompression bound")
 	} else if !strings.Contains(err.Error(), "exceeds the") {
 		t.Fatalf("error %q does not mention the payload limit", err)

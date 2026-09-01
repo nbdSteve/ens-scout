@@ -349,9 +349,18 @@ func TestBuildRejectsInvalidInput(t *testing.T) {
 			snapshotID: "test-snapshot",
 			sources:    testSources(1),
 			results:    []ens.Result{{Name: "zap", Status: ens.StatusGracePeriod, GraceEnds: &fixedNow}},
-			want:       "grace end without an expiry",
+			want:       "grace or premium end without an expiry",
 		},
 		{
+			name:       "premium end without expiry",
+			snapshotID: "test-snapshot",
+			sources:    testSources(1),
+			results:    []ens.Result{{Name: "zap", Status: ens.StatusPremium, PremiumEnds: &fixedNow}},
+			want:       "grace or premium end without an expiry",
+		},
+		{
+			// The grace end no longer follows the 90-day rule, which ens.Classify
+			// owns, so the mismatch surfaces as a disagreement with the expiry.
 			name:       "grace end breaks the lifecycle rules",
 			snapshotID: "test-snapshot",
 			sources:    testSources(1),
@@ -361,7 +370,20 @@ func TestBuildRejectsInvalidInput(t *testing.T) {
 				Expiry:    &fixedNow,
 				GraceEnds: timePointer(fixedNow.Add(30 * 24 * time.Hour)),
 			}},
-			want: "does not follow the ENS grace period",
+			want: "lifecycle timestamps disagree with its expiry at the scan time",
+		},
+		{
+			// A premium end with no grace end under it cannot come from Classify.
+			name:       "premium end without a grace end",
+			snapshotID: "test-snapshot",
+			sources:    testSources(1),
+			results: []ens.Result{{
+				Name:        "zap",
+				Status:      ens.StatusPremium,
+				Expiry:      timePointer(fixedNow.Add(-100 * 24 * time.Hour)),
+				PremiumEnds: timePointer(fixedNow.Add(11 * 24 * time.Hour)),
+			}},
+			want: "lifecycle timestamps disagree with its expiry at the scan time",
 		},
 	}
 

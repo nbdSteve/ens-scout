@@ -407,21 +407,10 @@ func normalizeResult(result ens.Result, scannedAt time.Time) (ens.Result, error)
 		GraceEnds:   canonicalTimePointer(result.GraceEnds),
 		PremiumEnds: canonicalTimePointer(result.PremiumEnds),
 	}
-	if normalized.GraceEnds != nil {
-		if normalized.Expiry == nil {
-			return ens.Result{}, fmt.Errorf("result %q has a grace end without an expiry", result.Name)
-		}
-		if !normalized.GraceEnds.Equal(normalized.Expiry.Add(ens.GracePeriod)) {
-			return ens.Result{}, fmt.Errorf("result %q grace end does not follow the ENS grace period", result.Name)
-		}
-	}
-	if normalized.PremiumEnds != nil {
-		if normalized.GraceEnds == nil {
-			return ens.Result{}, fmt.Errorf("result %q has a premium end without a grace end", result.Name)
-		}
-		if !normalized.PremiumEnds.Equal(normalized.GraceEnds.Add(ens.PremiumPeriod)) {
-			return ens.Result{}, fmt.Errorf("result %q premium end does not follow the ENS premium period", result.Name)
-		}
+	// Without an expiry there is nothing for ens.Classify to derive a grace or
+	// premium end from, so this is the one shape the check below cannot judge.
+	if normalized.Expiry == nil && (normalized.GraceEnds != nil || normalized.PremiumEnds != nil) {
+		return ens.Result{}, fmt.Errorf("result %q has a grace or premium end without an expiry", result.Name)
 	}
 	if err := checkStatusAgainstScanTime(normalized, scannedAt); err != nil {
 		return ens.Result{}, err
@@ -429,9 +418,11 @@ func normalizeResult(result ens.Result, scannedAt time.Time) (ens.Result, error)
 	return normalized, nil
 }
 
-// checkStatusAgainstScanTime proves the published status is one ens.Classify
-// could produce from the published timestamps at the scan time, so a snapshot can
-// never publish a lifecycle label that its own timestamps contradict.
+// checkStatusAgainstScanTime proves the published status and timestamps are ones
+// ens.Classify could produce at the scan time, so a snapshot can never publish a
+// lifecycle label or a derived timestamp that its own expiry contradicts. It is
+// also why the grace and premium durations appear only inside internal/ens:
+// comparing against Classify's output covers the arithmetic without restating it.
 //
 // The soon window is not on the wire, so classification runs with a zero window
 // and each soon status is accepted wherever its steady-state sibling is. That is

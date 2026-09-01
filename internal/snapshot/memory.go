@@ -22,15 +22,23 @@ func NewMemoryStore() *MemoryStore {
 	return &MemoryStore{chunks: make(map[string][]Chunk)}
 }
 
-// PutChunks stores chunks for a snapshot that does not exist yet.
+// PutChunks stores chunks for a snapshot that does not exist yet, and accepts a
+// re-write of identical chunks as a no-op so a publication can be retried.
 func (s *MemoryStore) PutChunks(ctx context.Context, snapshotID string, chunks []Chunk) error {
 	if err := checkPutChunks(ctx, snapshotID, chunks); err != nil {
 		return err
 	}
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
-	if _, exists := s.chunks[snapshotID]; exists {
-		return fmt.Errorf("snapshot %s already exists and chunks are immutable", snapshotID)
+	if existing, exists := s.chunks[snapshotID]; exists {
+		identical, err := chunksIdentical(existing, chunks)
+		if err != nil {
+			return err
+		}
+		if !identical {
+			return fmt.Errorf("snapshot %s already exists and chunks are immutable", snapshotID)
+		}
+		return nil
 	}
 	s.chunks[snapshotID] = CloneChunks(chunks)
 	return nil
@@ -70,7 +78,8 @@ func (s *MemoryStore) DeleteChunks(ctx context.Context, snapshotID string) error
 
 // PutLatest moves the pointer forward, applying the LatestStore ordering rule.
 // Holding the write lock across the comparison and the write stands in for the
-// conditional write a real backend uses.
+// conditional write a real backend uses. This store only ever holds a pointer it
+// already validated, so it has no unreadable-pointer case to narrow around.
 func (s *MemoryStore) PutLatest(ctx context.Context, latest Latest) error {
 	if err := ctx.Err(); err != nil {
 		return err

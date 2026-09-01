@@ -75,13 +75,25 @@ scanner, the read API, the local preview, and the browser all agree.
   keep the documented base64 safety margin below DynamoDB's 400 KB item limit.
 - Fail closed on missing, duplicated, reordered, corrupt, checksum-mismatched,
   or non-canonical payloads. Never repair one.
+- Anchor chunk identity on an independently supplied snapshot ID. A chunk
+  checksum covers only its payload bytes, so the envelope is unauthenticated and
+  relabelled chunks would otherwise verify against their own label.
+- Make publication retryable. `ChunkStore.PutChunks` accepts a re-write of
+  byte-identical chunks as a no-op and rejects any real difference, and pointer
+  identity excludes `PublishedAt` because that describes the write, not the scan.
+  A run whose pointer write fails has already stored and verified every chunk, so
+  refusing the retry would strand a complete scan.
 - Pass `checker.Run`'s `Stats.ClassifiedAt` to `snapshot.Build` as the scan time.
   Every published status is re-checked against that instant, so sampling the
   clock again after a long scan rejects the whole snapshot.
 - Keep the pointer monotonic. `LatestStore.PutLatest` rejects an older scan time,
-  treats a byte-identical pointer at the same scan time as a successful no-op so
-  a retry is safe, and rejects any other pointer at the same scan time. Scans
-  overlap, so an unconditional write would quietly serve an older scan.
+  treats an otherwise identical pointer at the same scan time as a successful
+  no-op so a retry is safe, and rejects any other pointer at the same scan time.
+  Scans overlap, so an unconditional write would quietly serve an older scan.
+  The rule compares scans, so it applies only to a stored pointer that reads and
+  validates. A missing, corrupt, or unsupported-version pointer is replaceable on
+  the publication path, or a `FormatVersion` bump would wedge an existing store.
+  `GetLatest` and `Read` still fail closed on one.
 - Write the latest pointer last, after chunks are stored, read back, and
   verified, so a failed publication leaves the previous snapshot serving.
 - Publish staleness thresholds, not a stale flag. Clients resolve staleness

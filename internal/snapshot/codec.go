@@ -117,19 +117,31 @@ func Encode(snapshot Snapshot) (Payload, error) {
 	}, nil
 }
 
-// Decode reassembles chunks and returns the snapshot they hold. It fails closed
-// on missing, duplicated, reordered, or corrupt chunks, and on any payload that
-// is not in canonical form.
-func Decode(chunks []Chunk) (Snapshot, error) {
+// Decode reassembles the chunks of the snapshot the caller asked for and returns
+// the snapshot they hold. It fails closed on missing, duplicated, reordered, or
+// corrupt chunks, and on any payload that is not in canonical form.
+//
+// snapshotID is the identity the caller independently expects, for example the
+// key it fetched the chunks under. It must not come from the chunks themselves:
+// a chunk checksum covers only its payload bytes, so the envelope is
+// unauthenticated and a relabelled copy of another snapshot would otherwise
+// verify against its own label.
+func Decode(snapshotID string, chunks []Chunk) (Snapshot, error) {
 	if len(chunks) == 0 {
 		return Snapshot{}, fmt.Errorf("no snapshot chunks supplied")
 	}
-	compressed, err := Assemble(chunks[0].SnapshotID, chunks)
+	compressed, err := Assemble(snapshotID, chunks)
 	if err != nil {
 		return Snapshot{}, err
 	}
 	snapshot, _, err := decodeCompressed(compressed)
-	return snapshot, err
+	if err != nil {
+		return Snapshot{}, err
+	}
+	if snapshot.Metadata.SnapshotID != snapshotID {
+		return Snapshot{}, fmt.Errorf("snapshot chunks hold id %q but %q was requested", snapshot.Metadata.SnapshotID, snapshotID)
+	}
+	return snapshot, nil
 }
 
 // Verify decodes chunks and additionally checks them against a latest pointer,
@@ -207,6 +219,10 @@ func Verify(latest Latest, chunks []Chunk) (Snapshot, error) {
 
 // Assemble validates chunk identity, ordering, size, and checksums, then
 // concatenates them into the compressed stream.
+//
+// snapshotID is the identity the caller independently expects, never one read
+// out of the chunks being checked. Callers pass the ID the latest pointer names
+// or the key they fetched under.
 func Assemble(snapshotID string, chunks []Chunk) ([]byte, error) {
 	if err := ValidateSnapshotID(snapshotID); err != nil {
 		return nil, err

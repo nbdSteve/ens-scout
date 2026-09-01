@@ -3,7 +3,6 @@ package snapshot
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -40,14 +39,28 @@ func NewFileStore(dir string) *FileStore {
 	return &FileStore{root: dir}
 }
 
-// PutChunks writes chunks for a snapshot that does not exist yet.
+// PutChunks writes chunks for a snapshot that does not exist yet, and accepts a
+// re-write of identical chunks as a no-op so a publication can be retried.
 func (s *FileStore) PutChunks(ctx context.Context, snapshotID string, chunks []Chunk) error {
 	if err := checkPutChunks(ctx, snapshotID, chunks); err != nil {
 		return err
 	}
 	dir := s.snapshotDir(snapshotID)
 	if _, err := os.Stat(dir); err == nil {
-		return fmt.Errorf("snapshot %s already exists and chunks are immutable", snapshotID)
+		// Chunks that cannot be read back cannot be proved identical, so the
+		// directory stays immutable rather than being silently rewritten.
+		existing, readErr := s.GetChunks(ctx, snapshotID)
+		if readErr != nil {
+			return fmt.Errorf("snapshot %s already exists and chunks are immutable", snapshotID)
+		}
+		identical, err := chunksIdentical(existing, chunks)
+		if err != nil {
+			return err
+		}
+		if !identical {
+			return fmt.Errorf("snapshot %s already exists and chunks are immutable", snapshotID)
+		}
+		return nil
 	} else if !os.IsNotExist(err) {
 		return err
 	}
@@ -126,10 +139,6 @@ func (s *FileStore) DeleteChunks(ctx context.Context, snapshotID string) error {
 
 // PutLatest replaces the pointer file, applying the LatestStore ordering rule.
 // The write is atomic, so a reader never observes a half-written pointer.
-//
-// The stored pointer must still be readable and valid: this store never
-// overwrites a pointer it cannot understand, because that pointer may be the
-// only record of what readers are currently served.
 func (s *FileStore) PutLatest(ctx context.Context, latest Latest) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -138,11 +147,8 @@ func (s *FileStore) PutLatest(ctx context.Context, latest Latest) error {
 		return err
 	}
 
-	var stored *Latest
-	current, err := s.GetLatest(ctx)
-	if err == nil {
-		stored = &current
-	} else if !errors.Is(err, ErrNotFound) {
+	stored, err := s.orderingPointer()
+	if err != nil {
 		return err
 	}
 	write, err := checkPutLatest(stored, latest)
@@ -161,6 +167,34 @@ func (s *FileStore) PutLatest(ctx context.Context, latest Latest) error {
 		return err
 	}
 	return writeFileAtomically(filepath.Join(s.root, fileStoreLatestName), encoded)
+}
+
+// orderingPointer returns the stored pointer the ordering rule is applied
+// against, or nil when there is nothing to compare scans with.
+//
+// A pointer file that is missing, unparseable, or invalid under the current
+// build, including one carrying an unsupported FormatVersion, yields nil so it
+// can be replaced. It cannot say which scan is newer, and treating it as a
+// blocker would wedge the directory until someone deleted the file by hand.
+// Only a real I/O failure is returned, because that is transient rather than a
+// statement about the stored scan. GetLatest still fails closed on any pointer
+// this treats as absent, so no reader is ever served one.
+func (s *FileStore) orderingPointer() (*Latest, error) {
+	encoded, err := os.ReadFile(filepath.Join(s.root, fileStoreLatestName))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var stored Latest
+	if err := json.Unmarshal(encoded, &stored); err != nil {
+		return nil, nil
+	}
+	if err := stored.Validate(); err != nil {
+		return nil, nil
+	}
+	return &stored, nil
 }
 
 // GetLatest reads the pointer file, or reports ErrNotFound before publication.
