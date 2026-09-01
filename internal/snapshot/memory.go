@@ -31,20 +31,20 @@ func NewMemoryStore() *MemoryStore {
 // anything already stored there. Only missing indices are added, and the stored
 // chunks keep the exact bytes they already held.
 func (s *MemoryStore) PutChunks(ctx context.Context, snapshotID string, chunks []Chunk) error {
-	if err := checkPutChunks(ctx, snapshotID, chunks); err != nil {
+	if err := ValidatePutChunks(ctx, snapshotID, chunks); err != nil {
 		return err
 	}
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 	existing := s.chunks[snapshotID]
-	decision, missing, err := decideChunkWrite(existing, chunks)
+	decision, missing, err := PlanChunkWrite(existing, chunks)
 	if err != nil {
 		return err
 	}
 	switch decision {
-	case chunkWriteSkip:
+	case ChunkWriteSkip:
 		return nil
-	case chunkWriteRefuse:
+	case ChunkWriteRefuse:
 		return errChunksImmutable(snapshotID)
 	}
 	s.chunks[snapshotID] = mergeStoredChunks(existing, missing)
@@ -109,7 +109,7 @@ func (s *MemoryStore) PutLatest(ctx context.Context, latest Latest) error {
 	}
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
-	write, err := checkPutLatest(s.latest, latest)
+	write, err := PlanLatestWrite(s.latest, latest)
 	if err != nil {
 		return err
 	}
@@ -189,17 +189,4 @@ func (s *MemoryStore) TruncateChunks(snapshotID string, from, to int) {
 	kept = append(kept, chunks[:from]...)
 	kept = append(kept, chunks[to:]...)
 	s.chunks[snapshotID] = kept
-}
-
-func checkPutChunks(ctx context.Context, snapshotID string, chunks []Chunk) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	if err := ValidateSnapshotID(snapshotID); err != nil {
-		return err
-	}
-	if _, err := Assemble(snapshotID, chunks); err != nil {
-		return err
-	}
-	return nil
 }

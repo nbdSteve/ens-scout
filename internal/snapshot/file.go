@@ -56,21 +56,21 @@ func NewFileStore(dir string) *FileStore {
 // returned, because a cancelled context or an I/O failure says nothing about what
 // is stored and must not be able to destroy a published snapshot.
 func (s *FileStore) PutChunks(ctx context.Context, snapshotID string, chunks []Chunk) error {
-	if err := checkPutChunks(ctx, snapshotID, chunks); err != nil {
+	if err := ValidatePutChunks(ctx, snapshotID, chunks); err != nil {
 		return err
 	}
 	existing, err := s.GetChunks(ctx, snapshotID)
 	if err != nil && !errors.Is(err, ErrNotFound) {
 		return err
 	}
-	decision, missing, err := decideChunkWrite(existing, chunks)
+	decision, missing, err := PlanChunkWrite(existing, chunks)
 	if err != nil {
 		return err
 	}
 	switch decision {
-	case chunkWriteSkip:
+	case ChunkWriteSkip:
 		return nil
-	case chunkWriteRefuse:
+	case ChunkWriteRefuse:
 		return errChunksImmutable(snapshotID)
 	}
 
@@ -167,7 +167,7 @@ func (s *FileStore) PutLatest(ctx context.Context, latest Latest) error {
 	if err != nil {
 		return err
 	}
-	write, err := checkPutLatest(stored, latest)
+	write, err := PlanLatestWrite(stored, latest)
 	if err != nil {
 		return err
 	}

@@ -18,8 +18,8 @@ import (
 // a string partition key and a string sort key can hold the whole model:
 //
 //	PK                       SK          Attributes
-//	SNAPSHOT#<snapshot-id>   CHUNK#00000 bytes, checksum, count, expireAt
-//	SNAPSHOT#<snapshot-id>   CHUNK#00001 bytes, checksum, count, expireAt
+//	SNAPSHOT#<snapshot-id>   CHUNK#00000 payload, checksum, index, count, TTL
+//	SNAPSHOT#<snapshot-id>   CHUNK#00001 payload, checksum, index, count, TTL
 //	META                     LATEST      the Latest pointer
 //
 // Chunk sort keys are zero padded so lexical order matches numeric order and a
@@ -29,8 +29,11 @@ const (
 	LatestPartition = "META"
 	LatestSort      = "LATEST"
 
+	// ChunkSortPrefix begins every chunk sort key, so a backend can address one
+	// snapshot's chunks and nothing else with a single prefix query.
+	ChunkSortPrefix = "CHUNK#"
+
 	snapshotPartitionPrefix = "SNAPSHOT#"
-	chunkSortPrefix         = "CHUNK#"
 	// chunkSortDigits supports 99,999 chunks, about 18 GiB of compressed
 	// payload, which is far beyond any planned scan.
 	chunkSortDigits = 5
@@ -54,7 +57,7 @@ func SnapshotPartition(snapshotID string) string {
 
 // ChunkSort returns the sort key for one chunk index.
 func ChunkSort(index int) string {
-	return fmt.Sprintf("%s%0*d", chunkSortPrefix, chunkSortDigits, index)
+	return fmt.Sprintf("%s%0*d", ChunkSortPrefix, chunkSortDigits, index)
 }
 
 // Latest is the pointer to the newest valid snapshot. Readers resolve it first
@@ -206,45 +209,78 @@ type ChunkStore interface {
 	DeleteChunks(ctx context.Context, snapshotID string) error
 }
 
-// chunkWriteDecision is what PutChunks must do about chunks already stored under
+// ChunkWriteDecision is what PutChunks must do about chunks already stored under
 // the snapshot ID it was asked to write.
-type chunkWriteDecision int
+type ChunkWriteDecision int
 
 const (
-	// chunkWriteRefuse protects stored chunks from being revised. It is the zero
+	// ChunkWriteRefuse protects stored chunks from being revised. It is the zero
 	// value so a decision that is never set cannot authorize a write.
-	chunkWriteRefuse chunkWriteDecision = iota
-	// chunkWriteSkip is the idempotent no-op for a set that is already stored.
-	chunkWriteSkip
-	// chunkWriteResume writes the chunks an interrupted write did not store.
-	chunkWriteResume
+	ChunkWriteRefuse ChunkWriteDecision = iota
+	// ChunkWriteSkip is the idempotent no-op for a set that is already stored.
+	ChunkWriteSkip
+	// ChunkWriteResume writes the chunks an interrupted write did not store.
+	ChunkWriteResume
 )
 
-// decideChunkWrite applies the ChunkStore rule to chunks already stored under the
-// snapshot ID. On chunkWriteResume the second return value is the subset of
+// ErrChunksImmutable reports that a chunk write was refused because it would
+// revise a stored snapshot. A publisher must treat it as a permanent conflict
+// rather than a transient failure: the stored chunks are the published ones.
+var ErrChunksImmutable = errors.New("snapshot chunks are immutable")
+
+// ValidatePutChunks is the check every PutChunks implementation runs on its
+// arguments before it touches storage: a live context, a usable snapshot ID, and a
+// chunk set that assembles into a complete, in-order, checksum-clean payload for
+// that ID. Rejecting an incomplete or mislabelled set here is what lets
+// PlanChunkWrite treat the incoming set as whole, which is how a stored index
+// outside it proves a different payload holds the same ID.
+func ValidatePutChunks(ctx context.Context, snapshotID string, chunks []Chunk) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := ValidateSnapshotID(snapshotID); err != nil {
+		return err
+	}
+	if _, err := Assemble(snapshotID, chunks); err != nil {
+		return err
+	}
+	return nil
+}
+
+// ChunkConflictError builds the refusal every backend returns for a conflicting
+// chunk write, so callers can match one error against every store.
+func ChunkConflictError(snapshotID string) error {
+	return errChunksImmutable(snapshotID)
+}
+
+// PlanChunkWrite applies the ChunkStore rule to chunks already stored under the
+// snapshot ID. On ChunkWriteResume the second return value is the subset of
 // incoming chunks that are missing and may be written; every other stored chunk
 // stays untouched.
+//
+// It is exported so a real storage backend decides exactly as MemoryStore and
+// FileStore do. The rule is part of the contract, so no backend restates it.
 //
 // A caller that could not read the stored chunks must not call this: an
 // unreadable set is not a statement about what is stored, so it can neither
 // authorize a write nor prove a conflict.
-func decideChunkWrite(stored, incoming []Chunk) (chunkWriteDecision, []Chunk, error) {
+func PlanChunkWrite(stored, incoming []Chunk) (ChunkWriteDecision, []Chunk, error) {
 	if len(stored) == 0 {
-		return chunkWriteResume, incoming, nil
+		return ChunkWriteResume, incoming, nil
 	}
 
 	storedByIndex := make(map[int]Chunk, len(stored))
 	for _, chunk := range stored {
 		if _, exists := storedByIndex[chunk.Index]; exists {
-			return chunkWriteRefuse, nil, nil
+			return ChunkWriteRefuse, nil, nil
 		}
 		storedByIndex[chunk.Index] = chunk
 	}
-	// checkPutChunks assembles the incoming set first, so its length is the whole
-	// chunk count. A stored index outside it belongs to some other payload.
+	// ValidatePutChunks assembled the incoming set first, so its length is the
+	// whole chunk count. A stored index outside it belongs to some other payload.
 	for index := range storedByIndex {
 		if index < 0 || index >= len(incoming) {
-			return chunkWriteRefuse, nil, nil
+			return ChunkWriteRefuse, nil, nil
 		}
 	}
 
@@ -257,21 +293,21 @@ func decideChunkWrite(stored, incoming []Chunk) (chunkWriteDecision, []Chunk, er
 		}
 		identical, err := chunkIdentical(have, want)
 		if err != nil {
-			return chunkWriteRefuse, nil, err
+			return ChunkWriteRefuse, nil, err
 		}
 		if !identical {
-			return chunkWriteRefuse, nil, nil
+			return ChunkWriteRefuse, nil, nil
 		}
 	}
 	if len(missing) == 0 {
-		return chunkWriteSkip, nil, nil
+		return ChunkWriteSkip, nil, nil
 	}
-	return chunkWriteResume, missing, nil
+	return ChunkWriteResume, missing, nil
 }
 
-// errChunksImmutable is the refusal for a complete stored set that differs.
+// errChunksImmutable is the refusal for a stored set that differs.
 func errChunksImmutable(snapshotID string) error {
-	return fmt.Errorf("snapshot %s already exists and chunks are immutable", snapshotID)
+	return fmt.Errorf("snapshot %s already exists and chunks are immutable: %w", snapshotID, ErrChunksImmutable)
 }
 
 // chunksIdentical reports whether two chunk sets are the same on the wire, which
@@ -344,11 +380,21 @@ type LatestStore interface {
 	GetLatest(ctx context.Context) (Latest, error)
 }
 
-// checkPutLatest applies the LatestStore ordering rule. The first return value
-// reports whether the caller should store the incoming pointer; false with a nil
-// error is the accepted no-op for an identical retry, which leaves the stored
-// PublishedAt as the first attempt recorded it.
-func checkPutLatest(stored *Latest, incoming Latest) (bool, error) {
+// PlanLatestWrite applies the LatestStore ordering rule against the pointer a
+// backend read, and reports whether the incoming pointer should be stored. False
+// with a nil error is the accepted no-op for an identical retry, which leaves the
+// stored PublishedAt as the first attempt recorded it.
+//
+// stored is nil when there is nothing to compare scans with, which covers both an
+// absent pointer and one the backend could not read or validate. LatestStore
+// documents why an unreadable pointer must be replaceable, and why replacing one
+// has to preserve it first.
+//
+// It is exported for the same reason PlanChunkWrite is: a real storage backend
+// decides exactly as MemoryStore and FileStore do, and no backend restates the
+// rule. A backend that enforces the same ordering with a conditional write still
+// calls this first, so the two can never disagree about what is a conflict.
+func PlanLatestWrite(stored *Latest, incoming Latest) (bool, error) {
 	if stored == nil {
 		return true, nil
 	}
