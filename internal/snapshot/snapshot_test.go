@@ -18,7 +18,8 @@ var fixedNow = time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
 const testSoon = 7 * 24 * time.Hour
 
 // lifecycleLookups returns one lookup per ENS lifecycle status, so every test
-// that uses it exercises the complete status set.
+// that uses it exercises the complete status set. Names carry the .eth suffix
+// because that is what ens.Client.Lookup hands the classifier.
 func lifecycleLookups(now time.Time) []ens.Lookup {
 	day := 24 * time.Hour
 	at := func(offset time.Duration) *time.Time {
@@ -26,14 +27,14 @@ func lifecycleLookups(now time.Time) []ens.Lookup {
 		return &value
 	}
 	return []ens.Lookup{
-		{Name: "zap", Found: true, Expiry: at(200 * day)},    // registered
-		{Name: "helm", Found: true, Expiry: at(3 * day)},     // expiring-soon
-		{Name: "dusk", Found: true, Expiry: at(-10 * day)},   // grace-period
-		{Name: "flux", Found: true, Expiry: at(-87 * day)},   // grace-ending-soon
-		{Name: "vex", Found: true, Expiry: at(-100 * day)},   // premium
-		{Name: "amber", Found: true, Expiry: at(-200 * day)}, // available after premium
-		{Name: "orb", Found: false},                          // available, never registered
-		{Name: "nova", Found: true},                          // unknown
+		{Name: "zap.eth", Found: true, Expiry: at(200 * day)},    // registered
+		{Name: "helm.eth", Found: true, Expiry: at(3 * day)},     // expiring-soon
+		{Name: "dusk.eth", Found: true, Expiry: at(-10 * day)},   // grace-period
+		{Name: "flux.eth", Found: true, Expiry: at(-87 * day)},   // grace-ending-soon
+		{Name: "vex.eth", Found: true, Expiry: at(-100 * day)},   // premium
+		{Name: "amber.eth", Found: true, Expiry: at(-200 * day)}, // available after premium
+		{Name: "orb.eth", Found: false},                          // available, never registered
+		{Name: "nova.eth", Found: true},                          // unknown
 	}
 }
 
@@ -63,7 +64,7 @@ func TestBuildProducesCanonicalOrderAndCounts(t *testing.T) {
 		t.Fatalf("Build: %v", err)
 	}
 
-	wantOrder := []string{"amber", "dusk", "flux", "helm", "nova", "orb", "vex", "zap"}
+	wantOrder := []string{"amber.eth", "dusk.eth", "flux.eth", "helm.eth", "nova.eth", "orb.eth", "vex.eth", "zap.eth"}
 	if len(snapshot.Results) != len(wantOrder) {
 		t.Fatalf("got %d results, want %d", len(snapshot.Results), len(wantOrder))
 	}
@@ -104,7 +105,7 @@ func TestBuildDerivesLifecycleTimestamps(t *testing.T) {
 		byName[result.Name] = result
 	}
 
-	premium := byName["vex"]
+	premium := byName["vex.eth"]
 	if premium.Status != ens.StatusPremium {
 		t.Fatalf("vex is %q, want %q", premium.Status, ens.StatusPremium)
 	}
@@ -118,10 +119,10 @@ func TestBuildDerivesLifecycleTimestamps(t *testing.T) {
 		t.Errorf("premium end %s does not follow grace end %s", premium.PremiumEnds, premium.GraceEnds)
 	}
 
-	if never := byName["orb"]; never.Expiry != nil || never.GraceEnds != nil || never.PremiumEnds != nil {
+	if never := byName["orb.eth"]; never.Expiry != nil || never.GraceEnds != nil || never.PremiumEnds != nil {
 		t.Errorf("never-registered result carries timestamps: %+v", never)
 	}
-	if unknown := byName["nova"]; unknown.Status != ens.StatusUnknown {
+	if unknown := byName["nova.eth"]; unknown.Status != ens.StatusUnknown {
 		t.Errorf("nova is %q, want %q", unknown.Status, ens.StatusUnknown)
 	}
 
@@ -260,6 +261,54 @@ func TestBuildAcceptsTheCheckerClassificationInstant(t *testing.T) {
 	}
 }
 
+// TestBuildStoresTheFullyQualifiedName pins the canonical name form. Both input
+// spellings a producer might use are accepted, and both are stored as the
+// fully-qualified name, so the snapshot agrees with ens.Result, internal/report,
+// and the CLI.
+func TestBuildStoresTheFullyQualifiedName(t *testing.T) {
+	tests := []struct {
+		name  string
+		given string
+		want  string
+	}{
+		{name: "bare label", given: "zap", want: "zap.eth"},
+		{name: "already qualified", given: "zap.eth", want: "zap.eth"},
+		{name: "mixed case label", given: "ZaP", want: "zap.eth"},
+		{name: "mixed case qualified", given: "ZaP.ETH", want: "zap.eth"},
+		{name: "surrounding space", given: "  zap.eth  ", want: "zap.eth"},
+		{name: "hyphenated label", given: "za-p", want: "za-p.eth"},
+		{name: "digits", given: "z4p.eth", want: "z4p.eth"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			result := ens.Result{Name: test.given, Status: ens.StatusAvailable}
+			snapshot, err := Build("test-snapshot", fixedNow, testSources(1), []ens.Result{result})
+			if err != nil {
+				t.Fatalf("Build rejected %q: %v", test.given, err)
+			}
+			if got := snapshot.Results[0].Name; got != test.want {
+				t.Fatalf("stored name is %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
+// TestValidateRejectsABareStoredName proves the stored form is enforced on read,
+// not only produced on write: a payload carrying the version 1 bare label is not
+// in canonical form for this version.
+func TestValidateRejectsABareStoredName(t *testing.T) {
+	snapshot := mustBuild(t, lifecycleResults(t, fixedNow))
+	bare := cloneSnapshot(snapshot)
+	bare.Results[0].Name = strings.TrimSuffix(bare.Results[0].Name, NameSuffix)
+
+	if err := bare.Validate(); err == nil {
+		t.Fatal("Validate accepted a bare stored name")
+	} else if !strings.Contains(err.Error(), "not in canonical form") {
+		t.Fatalf("error %q does not mention canonical form", err)
+	}
+}
+
 func TestBuildRejectsInvalidInput(t *testing.T) {
 	results := lifecycleResults(t, fixedNow)
 	sources := testSources(len(results))
@@ -331,11 +380,25 @@ func TestBuildRejectsInvalidInput(t *testing.T) {
 			want:       "sorted by name without duplicates",
 		},
 		{
-			name:       "unnormalized name",
+			name:       "empty name",
 			snapshotID: "test-snapshot",
 			sources:    testSources(1),
-			results:    []ens.Result{{Name: "Zap", Status: ens.StatusAvailable}},
-			want:       "not a normalized ENS label",
+			results:    []ens.Result{{Name: "", Status: ens.StatusAvailable}},
+			want:       "empty ENS label",
+		},
+		{
+			name:       "name with whitespace",
+			snapshotID: "test-snapshot",
+			sources:    testSources(1),
+			results:    []ens.Result{{Name: "two words.eth", Status: ens.StatusAvailable}},
+			want:       "contains whitespace",
+		},
+		{
+			name:       "subdomain rather than a second-level name",
+			snapshotID: "test-snapshot",
+			sources:    testSources(1),
+			results:    []ens.Result{{Name: "sub.zap.eth", Status: ens.StatusAvailable}},
+			want:       "expected a label or second-level .eth name",
 		},
 		{
 			name:       "unknown status",
@@ -613,7 +676,7 @@ func TestValidateRejectsNonCanonicalSnapshot(t *testing.T) {
 			name: "status contradicts its timestamps",
 			mutate: func(s *Snapshot) {
 				for i := range s.Results {
-					if s.Results[i].Name == "zap" {
+					if s.Results[i].Name == "zap.eth" {
 						s.Results[i].Status = ens.StatusAvailable
 					}
 				}

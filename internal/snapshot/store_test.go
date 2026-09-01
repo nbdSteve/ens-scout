@@ -180,6 +180,186 @@ func TestPutChunksIsIdempotentButNeverRevises(t *testing.T) {
 	}
 }
 
+// TestPutChunksReplacesAnIncompleteStoredSet covers the other half of the
+// ChunkStore rule: immutability protects a complete stored set, but a set left
+// half-written by an interrupted call is not a snapshot and must not lock the
+// snapshot ID. Each case damages the stored chunks, then retries the original
+// write and requires it to succeed and leave the full set behind.
+func TestPutChunksReplacesAnIncompleteStoredSet(t *testing.T) {
+	ctx := context.Background()
+	snapshot := largeSnapshot(t, chunkTestResults)
+	payload, err := Encode(snapshot)
+	if err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+	if len(payload.Chunks) < 3 {
+		t.Fatalf("this test needs at least 3 chunks, got %d", len(payload.Chunks))
+	}
+	snapshotID := snapshot.Metadata.SnapshotID
+
+	tests := []struct {
+		name   string
+		damage func(t *testing.T, dir string, store Store)
+	}{
+		{
+			// The shape an interrupted write leaves behind: a strict prefix.
+			name: "only a prefix of the chunks was written",
+			damage: func(t *testing.T, dir string, store Store) {
+				t.Helper()
+				removeStoredChunks(t, dir, store, snapshotID, 1, len(payload.Chunks))
+			},
+		},
+		{
+			name: "only the final chunk is missing",
+			damage: func(t *testing.T, dir string, store Store) {
+				t.Helper()
+				removeStoredChunks(t, dir, store, snapshotID, len(payload.Chunks)-1, len(payload.Chunks))
+			},
+		},
+		{
+			name: "a middle chunk is missing",
+			damage: func(t *testing.T, dir string, store Store) {
+				t.Helper()
+				removeStoredChunks(t, dir, store, snapshotID, 1, 2)
+			},
+		},
+		{
+			// A set that reads but fails its own checksum cannot be proved to
+			// match, so it is replaceable rather than immutable.
+			name: "a stored chunk no longer matches its checksum",
+			damage: func(t *testing.T, dir string, store Store) {
+				t.Helper()
+				corruptStoredChunk(t, dir, store, snapshotID, 0)
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			dir := t.TempDir()
+			stores := map[string]Store{
+				"memory": NewMemoryStore(),
+				"file":   NewFileStore(dir),
+			}
+			for name, store := range stores {
+				t.Run(name, func(t *testing.T) {
+					if err := store.PutChunks(ctx, snapshotID, payload.Chunks); err != nil {
+						t.Fatalf("PutChunks of the first copy: %v", err)
+					}
+					test.damage(t, dir, store)
+
+					if err := store.PutChunks(ctx, snapshotID, payload.Chunks); err != nil {
+						t.Fatalf("PutChunks refused to complete an interrupted write: %v", err)
+					}
+
+					stored, err := store.GetChunks(ctx, snapshotID)
+					if err != nil {
+						t.Fatalf("GetChunks: %v", err)
+					}
+					identical, err := chunksIdentical(payload.Chunks, stored)
+					if err != nil {
+						t.Fatalf("chunksIdentical: %v", err)
+					}
+					if !identical {
+						t.Fatalf("the retry stored %d chunks that are not the intended set", len(stored))
+					}
+					if _, err := Decode(snapshotID, stored); err != nil {
+						t.Fatalf("the completed set does not decode: %v", err)
+					}
+				})
+			}
+		})
+	}
+}
+
+// TestPublishRecoversFromAnInterruptedChunkWrite is the end-to-end version: a
+// publication dies part way through writing chunks, and the next run with the
+// same snapshot must be able to finish and publish.
+func TestPublishRecoversFromAnInterruptedChunkWrite(t *testing.T) {
+	ctx := context.Background()
+	snapshot := largeSnapshot(t, chunkTestResults)
+	payload, err := Encode(snapshot)
+	if err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+	snapshotID := snapshot.Metadata.SnapshotID
+
+	dir := t.TempDir()
+	stores := map[string]Store{
+		"memory": NewMemoryStore(),
+		"file":   NewFileStore(dir),
+	}
+	for name, store := range stores {
+		t.Run(name, func(t *testing.T) {
+			// Stand in for a write that stopped after the first chunk.
+			if err := store.PutChunks(ctx, snapshotID, payload.Chunks); err != nil {
+				t.Fatalf("PutChunks: %v", err)
+			}
+			removeStoredChunks(t, dir, store, snapshotID, 1, len(payload.Chunks))
+
+			if _, err := Publish(ctx, store, snapshot, fixedNow.Add(time.Minute)); err != nil {
+				t.Fatalf("Publish could not recover an interrupted chunk write: %v", err)
+			}
+			readSnapshot, _, err := Read(ctx, store)
+			if err != nil {
+				t.Fatalf("Read after recovery: %v", err)
+			}
+			if readSnapshot.Metadata.SnapshotID != snapshotID {
+				t.Fatalf("readers see %q, want %q", readSnapshot.Metadata.SnapshotID, snapshotID)
+			}
+		})
+	}
+}
+
+// removeStoredChunks drops chunks in [from, to) from whichever fake is given, so
+// one table can damage both without knowing how each stores its chunks.
+func removeStoredChunks(t *testing.T, dir string, store Store, snapshotID string, from, to int) {
+	t.Helper()
+	switch typed := store.(type) {
+	case *MemoryStore:
+		typed.TruncateChunks(snapshotID, from, to)
+	case *FileStore:
+		for index := from; index < to; index++ {
+			if err := os.Remove(chunkPath(dir, snapshotID, index)); err != nil {
+				t.Fatalf("remove chunk %d: %v", index, err)
+			}
+		}
+	default:
+		t.Fatalf("unsupported store %T", store)
+	}
+}
+
+// corruptStoredChunk rewrites one stored chunk's bytes without its checksum.
+func corruptStoredChunk(t *testing.T, dir string, store Store, snapshotID string, index int) {
+	t.Helper()
+	switch typed := store.(type) {
+	case *MemoryStore:
+		if err := typed.CorruptChunk(snapshotID, index); err != nil {
+			t.Fatalf("CorruptChunk: %v", err)
+		}
+	case *FileStore:
+		path := chunkPath(dir, snapshotID, index)
+		encoded, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read chunk: %v", err)
+		}
+		var chunk Chunk
+		if err := json.Unmarshal(encoded, &chunk); err != nil {
+			t.Fatalf("decode chunk: %v", err)
+		}
+		chunk.Bytes[0] ^= 0xff
+		edited, err := json.Marshal(chunk)
+		if err != nil {
+			t.Fatalf("encode chunk: %v", err)
+		}
+		if err := os.WriteFile(path, edited, 0o644); err != nil {
+			t.Fatalf("write chunk: %v", err)
+		}
+	default:
+		t.Fatalf("unsupported store %T", store)
+	}
+}
+
 // TestPublishRetriesAfterAFailedPointerWrite is the sequence the idempotent rules
 // exist for: the chunks are stored and verified, the pointer write fails
 // transiently, and the publisher calls Publish again with the same snapshot and a
@@ -690,7 +870,7 @@ func TestFileStoreDetectsTamperedFiles(t *testing.T) {
 		},
 		{
 			name:   "pointer file edited",
-			damage: editLatestFile(`"format_version":1`, `"format_version":99`),
+			damage: editLatestFile(`"format_version":2`, `"format_version":99`),
 			want:   "unsupported latest pointer format version",
 		},
 		{
@@ -771,9 +951,6 @@ func TestStoresRejectCancelledContext(t *testing.T) {
 	}
 }
 
-// editLatestFile rewrites part of the committed pointer file, standing in for a
-// pointer item that was edited in place. It fails the test when the target text is
-// absent, so a serialization change cannot quietly turn the case into a no-op.
 // TestFileStorePutLatestReplacesAnUnreadablePointer covers the publication side of
 // the ordering rule. The rule compares scans, so a stored pointer that says
 // nothing about a scan must not block a publication: otherwise a FormatVersion
@@ -796,7 +973,7 @@ func TestFileStorePutLatestReplacesAnUnreadablePointer(t *testing.T) {
 		},
 		{
 			name:     "truncated json",
-			contents: `{"format_version":1,"snapshot_id":"test-sna`,
+			contents: `{"format_version":2,"snapshot_id":"test-sna`,
 			wantRead: "read latest snapshot pointer",
 		},
 		{
@@ -811,7 +988,7 @@ func TestFileStorePutLatestReplacesAnUnreadablePointer(t *testing.T) {
 		},
 		{
 			name:     "a valid version that fails validation",
-			contents: `{"format_version":1,"snapshot_id":"old-snapshot"}`,
+			contents: `{"format_version":2,"snapshot_id":"old-snapshot"}`,
 			wantRead: "latest pointer needs a scan time",
 		},
 	}
@@ -849,7 +1026,94 @@ func TestFileStorePutLatestReplacesAnUnreadablePointer(t *testing.T) {
 			if _, _, err := Read(ctx, store); err != nil {
 				t.Fatalf("Read after replacing the pointer: %v", err)
 			}
+
+			// The replaced pointer is the only evidence of why publication was
+			// blocked, so it must survive somewhere reads never look.
+			quarantined := quarantinedPointers(t, dir)
+			if len(quarantined) != 1 {
+				t.Fatalf("found %d quarantined pointers, want 1: %v", len(quarantined), quarantined)
+			}
+			preserved, err := os.ReadFile(filepath.Join(dir, quarantined[0]))
+			if err != nil {
+				t.Fatalf("read the quarantined pointer: %v", err)
+			}
+			if string(preserved) != test.contents {
+				t.Fatalf("the quarantined pointer holds %q, want %q", preserved, test.contents)
+			}
+
+			// A second publication over a valid pointer quarantines nothing more.
+			laterResults := lifecycleResults(t, fixedNow.Add(3*time.Hour))
+			later, err := Build("later-snapshot", fixedNow.Add(3*time.Hour), testSources(len(laterResults)), laterResults)
+			if err != nil {
+				t.Fatalf("Build the later snapshot: %v", err)
+			}
+			if _, err := Publish(ctx, store, later, publishedAt.Add(3*time.Hour)); err != nil {
+				t.Fatalf("Publish over a valid pointer: %v", err)
+			}
+			if again := quarantinedPointers(t, dir); len(again) != 1 {
+				t.Fatalf("a valid pointer was quarantined too: %v", again)
+			}
 		})
+	}
+}
+
+// quarantinedPointers lists the quarantined pointer files under dir. The names
+// are part of the store's on-disk layout, which is an owned contract: a
+// quarantined pointer is a diagnostic artifact an operator has to be able to find.
+func quarantinedPointers(t *testing.T, dir string) []string {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("read the store directory: %v", err)
+	}
+	var found []string
+	for _, entry := range entries {
+		if !entry.IsDir() && strings.HasPrefix(entry.Name(), fileStoreQuarantinePrefix) {
+			found = append(found, entry.Name())
+		}
+	}
+	return found
+}
+
+// TestFileStoreFailsPublicationWhenThePointerCannotBeQuarantined proves the
+// preservation is not best effort: an invalid pointer that cannot be moved aside
+// stops the publication instead of being destroyed.
+func TestFileStoreFailsPublicationWhenThePointerCannotBeQuarantined(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	store := NewFileStore(dir)
+	snapshot := mustBuild(t, lifecycleResults(t, fixedNow))
+	publishedAt := fixedNow.Add(time.Minute)
+
+	pointer := filepath.Join(dir, fileStoreLatestName)
+	if err := os.WriteFile(pointer, []byte("this is not a pointer"), 0o644); err != nil {
+		t.Fatalf("write the stored pointer: %v", err)
+	}
+	// Occupy every quarantine path this publication could use, so the move has
+	// nowhere to go.
+	stamp := publishedAt.UTC().Format("20060102T150405Z")
+	for attempt := 0; attempt < maxQuarantineAttempts; attempt++ {
+		candidate := filepath.Join(dir, fileStoreQuarantinePrefix+stamp)
+		if attempt > 0 {
+			candidate = fmt.Sprintf("%s-%d", candidate, attempt)
+		}
+		if err := os.WriteFile(candidate+fileStoreChunkExt, []byte("taken"), 0o644); err != nil {
+			t.Fatalf("occupy a quarantine path: %v", err)
+		}
+	}
+
+	if _, err := Publish(ctx, store, snapshot, publishedAt); err == nil {
+		t.Fatal("Publish replaced a pointer it could not preserve")
+	} else if !strings.Contains(err.Error(), "quarantine the unreadable latest pointer") {
+		t.Fatalf("error %q does not mention quarantining", err)
+	}
+
+	preserved, err := os.ReadFile(pointer)
+	if err != nil {
+		t.Fatalf("the pointer was destroyed: %v", err)
+	}
+	if string(preserved) != "this is not a pointer" {
+		t.Fatalf("the pointer holds %q, want the original contents", preserved)
 	}
 }
 
@@ -884,6 +1148,9 @@ func TestFileStorePutLatestStillRefusesAnOlderReadablePointer(t *testing.T) {
 	}
 }
 
+// editLatestFile rewrites part of the committed pointer file, standing in for a
+// pointer item that was edited in place. It fails the test when the target text is
+// absent, so a serialization change cannot quietly turn the case into a no-op.
 func editLatestFile(from, to string) func(t *testing.T, dir, snapshotID string) {
 	return func(t *testing.T, dir, snapshotID string) {
 		t.Helper()

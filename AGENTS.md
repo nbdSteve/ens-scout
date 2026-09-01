@@ -64,6 +64,11 @@ and fixed timestamps so tests remain fast and deterministic.
 scanner, the read API, the local preview, and the browser all agree.
 
 - Reuse `ens.Classify` and `ens.Result`. Never add a second classifier.
+- Store the fully-qualified name, `zap.eth`, which is what `ens.Client`,
+  `internal/report`, and the CLI all carry. `normalizeResult` accepts either form
+  on input and requalifies what `names.Normalize` returns, so `names.Normalize`
+  stays the one definition of a valid label. Canonical sorting is by the stored
+  fully-qualified name, and a client filtering on label length strips the suffix.
 - Keep the package free of AWS, HTTP, and frontend dependencies. Storage
   backends implement `ChunkStore`, `LatestStore`, and `Store`.
 - Keep serialization canonical: name-sorted results, UTC timestamps truncated to
@@ -82,7 +87,9 @@ scanner, the read API, the local preview, and the browser all agree.
   byte-identical chunks as a no-op and rejects any real difference, and pointer
   identity excludes `PublishedAt` because that describes the write, not the scan.
   A run whose pointer write fails has already stored and verified every chunk, so
-  refusing the retry would strand a complete scan.
+  refusing the retry would strand a complete scan. Immutability protects only a
+  complete stored set: one that cannot be read, or that does not assemble, is a
+  half-finished write no pointer names, so it is replaced rather than refused.
 - Pass `checker.Run`'s `Stats.ClassifiedAt` to `snapshot.Build` as the scan time.
   Every published status is re-checked against that instant, so sampling the
   clock again after a long scan rejects the whole snapshot.
@@ -93,7 +100,9 @@ scanner, the read API, the local preview, and the browser all agree.
   The rule compares scans, so it applies only to a stored pointer that reads and
   validates. A missing, corrupt, or unsupported-version pointer is replaceable on
   the publication path, or a `FormatVersion` bump would wedge an existing store.
-  `GetLatest` and `Read` still fail closed on one.
+  `GetLatest` and `Read` still fail closed on one. Replacing such a pointer must
+  preserve it somewhere reads never look, and must fail the publication rather
+  than destroy it, because it is the only evidence of why publication was stuck.
 - Write the latest pointer last, after chunks are stored, read back, and
   verified, so a failed publication leaves the previous snapshot serving.
 - Publish staleness thresholds, not a stale flag. Clients resolve staleness

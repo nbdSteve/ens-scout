@@ -133,9 +133,6 @@ func (l Latest) Validate() error {
 	if err != nil {
 		return err
 	}
-	if len(expectedSources) != len(l.Sources) {
-		return fmt.Errorf("latest pointer source lists are not canonical")
-	}
 	sourceNames := 0
 	for i, source := range l.Sources {
 		if source != expectedSources[i] {
@@ -180,23 +177,65 @@ func (l Latest) Validate() error {
 
 // ChunkStore stores immutable snapshot chunks.
 //
-// Chunks are never revised, so PutChunks must reject a write to a snapshot ID
-// that already exists with different chunks. Re-writing the identical chunks is
-// not a revision though, and publication is retried: a run whose pointer write
-// fails has already stored and verified every chunk, so refusing the retry would
-// leave a complete scan permanently unpublishable. Implementations must apply
-// this rule:
+// A complete stored chunk set is never revised. An incomplete one is not a
+// snapshot yet, so it carries no immutability claim: a chunk write can fail part
+// way through, and a backend that retries unprocessed batch writes leaves a
+// partial set behind as a matter of course. Refusing that retry would strand the
+// scan under an ID that can never be published. Implementations must apply this
+// rule to a write against an existing snapshot ID:
 //
-//   - a snapshot ID that does not exist yet is written;
-//   - a snapshot ID that exists with chunks byte-identical to the incoming ones
+//   - a stored set that assembles and is byte-identical to the incoming chunks
 //     succeeds and writes nothing;
-//   - a snapshot ID that exists and differs in bytes, count, order, index, or
-//     checksum is rejected, and so is one whose stored chunks cannot be read
-//     back to prove they match.
+//   - a stored set that assembles but differs in bytes, count, order, index, or
+//     checksum is rejected, because that would revise a published snapshot;
+//   - a stored set that cannot be read, or that reads but does not assemble into
+//     a complete self-consistent set, is replaced.
+//
+// The pointer is written last and names only verified chunks, so a replaceable
+// set is one no reader was ever sent to.
 type ChunkStore interface {
 	PutChunks(ctx context.Context, snapshotID string, chunks []Chunk) error
 	GetChunks(ctx context.Context, snapshotID string) ([]Chunk, error)
 	DeleteChunks(ctx context.Context, snapshotID string) error
+}
+
+// chunkWriteDecision is what PutChunks must do about chunks already stored under
+// the snapshot ID it was asked to write.
+type chunkWriteDecision int
+
+const (
+	// chunkWriteReplace covers a stored set that is unreadable or incomplete.
+	chunkWriteReplace chunkWriteDecision = iota
+	// chunkWriteSkip is the idempotent no-op for an identical complete set.
+	chunkWriteSkip
+	// chunkWriteRefuse protects a complete set from being revised.
+	chunkWriteRefuse
+)
+
+// decideChunkWrite applies the ChunkStore rule. storedErr is whatever the store
+// hit reading the existing chunks back, which counts as "cannot be read".
+func decideChunkWrite(snapshotID string, stored []Chunk, storedErr error, incoming []Chunk) (chunkWriteDecision, error) {
+	if storedErr != nil {
+		return chunkWriteReplace, nil
+	}
+	// Assemble is the definition of a complete self-consistent set: it proves the
+	// count, the index order, the sizes, and every chunk checksum.
+	if _, err := Assemble(snapshotID, stored); err != nil {
+		return chunkWriteReplace, nil
+	}
+	identical, err := chunksIdentical(stored, incoming)
+	if err != nil {
+		return chunkWriteRefuse, err
+	}
+	if identical {
+		return chunkWriteSkip, nil
+	}
+	return chunkWriteRefuse, nil
+}
+
+// errChunksImmutable is the refusal for a complete stored set that differs.
+func errChunksImmutable(snapshotID string) error {
+	return fmt.Errorf("snapshot %s already exists and chunks are immutable", snapshotID)
 }
 
 // chunksIdentical reports whether two chunk sets are the same on the wire, which
@@ -244,6 +283,12 @@ func chunksIdentical(stored, incoming []Chunk) (bool, error) {
 // FormatVersion bump would wedge an existing store with no way to publish into
 // it. GetLatest and Read still fail closed on such a pointer and never repair
 // one, so this narrowing only ever affects the publication path.
+//
+// Replacing an unreadable pointer must preserve it. It is the only evidence of
+// why publication was blocked, so an implementation moves it to a distinct
+// non-colliding location that reads never consult, and only then installs the new
+// pointer. Preserving it is not best effort: if the old pointer cannot be kept,
+// the write fails rather than destroying it.
 //
 // A real backend enforces this with a conditional write on ScannedAt rather than
 // a read followed by a write, so two concurrent publishers cannot both win.

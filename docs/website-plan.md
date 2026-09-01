@@ -102,6 +102,10 @@ Determinism is a contract requirement rather than a convenience.
 
 - Results are sorted by name, and timestamps are UTC truncated to the second, so
 the serialized bytes never depend on input order or worker completion order.
+- Each result carries the fully-qualified name, `zap.eth`, the same form the CLI
+and the reports use.
+The frontend renders it as-is and strips the `.eth` suffix before filtering on
+label length.
 - The gzip level and header are fixed, so the compressed bytes depend only on
 the canonical payload.
 - The snapshot is checksummed at three levels: the canonical JSON, the whole

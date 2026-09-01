@@ -24,7 +24,16 @@ import (
 // FormatVersion is the wire version of this contract. Readers must reject a
 // snapshot or latest pointer that declares any other version rather than
 // guessing at an unknown layout.
-const FormatVersion = 1
+//
+// Version 2 stores the fully-qualified name, "zap.eth", where version 1 stored
+// the bare label, "zap".
+const FormatVersion = 2
+
+// NameSuffix is the parent zone every stored name carries. A snapshot records the
+// fully-qualified name that ens.Result, internal/report, and the CLI all use, so
+// nothing downstream has to reattach it. A client filtering by label length
+// strips this suffix first.
+const NameSuffix = ".eth"
 
 // StaleFactor sets how long a published snapshot stays fresh. A snapshot is
 // stale once its age exceeds StaleFactor multiplied by the slowest source
@@ -266,9 +275,6 @@ func (s Snapshot) Validate() error {
 	if err != nil {
 		return err
 	}
-	if len(expectedSources) != len(s.Metadata.Sources) {
-		return fmt.Errorf("snapshot source lists are not canonical")
-	}
 	for i, source := range s.Metadata.Sources {
 		if source != expectedSources[i] {
 			return fmt.Errorf("snapshot source lists are not sorted by id")
@@ -381,13 +387,15 @@ func normalizeSources(sources []SourceList) ([]SourceList, error) {
 // results that break the ENS lifecycle rules in internal/ens. scannedAt is the
 // snapshot scan time, which is the instant the published status must describe.
 func normalizeResult(result ens.Result, scannedAt time.Time) (ens.Result, error) {
+	// names.Normalize is the single definition of a valid label, and it accepts
+	// both the bare label and the fully-qualified form, so the rules are applied
+	// here without being restated. Its bare output is then requalified, because
+	// the canonical stored name is the fully-qualified one.
 	label, err := names.Normalize(result.Name)
 	if err != nil {
 		return ens.Result{}, fmt.Errorf("result name %q: %w", result.Name, err)
 	}
-	if label != result.Name {
-		return ens.Result{}, fmt.Errorf("result name %q is not a normalized ENS label", result.Name)
-	}
+	name := label + NameSuffix
 
 	known := false
 	for _, status := range ens.Statuses {
@@ -401,7 +409,7 @@ func normalizeResult(result ens.Result, scannedAt time.Time) (ens.Result, error)
 	}
 
 	normalized := ens.Result{
-		Name:        label,
+		Name:        name,
 		Status:      result.Status,
 		Expiry:      canonicalTimePointer(result.Expiry),
 		GraceEnds:   canonicalTimePointer(result.GraceEnds),

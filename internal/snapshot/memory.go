@@ -22,8 +22,8 @@ func NewMemoryStore() *MemoryStore {
 	return &MemoryStore{chunks: make(map[string][]Chunk)}
 }
 
-// PutChunks stores chunks for a snapshot that does not exist yet, and accepts a
-// re-write of identical chunks as a no-op so a publication can be retried.
+// PutChunks stores chunks under a snapshot ID, applying the ChunkStore rule to
+// anything already stored there.
 func (s *MemoryStore) PutChunks(ctx context.Context, snapshotID string, chunks []Chunk) error {
 	if err := checkPutChunks(ctx, snapshotID, chunks); err != nil {
 		return err
@@ -31,14 +31,16 @@ func (s *MemoryStore) PutChunks(ctx context.Context, snapshotID string, chunks [
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 	if existing, exists := s.chunks[snapshotID]; exists {
-		identical, err := chunksIdentical(existing, chunks)
+		decision, err := decideChunkWrite(snapshotID, existing, nil, chunks)
 		if err != nil {
 			return err
 		}
-		if !identical {
-			return fmt.Errorf("snapshot %s already exists and chunks are immutable", snapshotID)
+		switch decision {
+		case chunkWriteSkip:
+			return nil
+		case chunkWriteRefuse:
+			return errChunksImmutable(snapshotID)
 		}
-		return nil
 	}
 	s.chunks[snapshotID] = CloneChunks(chunks)
 	return nil
@@ -144,6 +146,31 @@ func (s *MemoryStore) CorruptChunk(snapshotID string, index int) error {
 	}
 	chunks[index].Bytes[0] ^= 0xff
 	return nil
+}
+
+// TruncateChunks drops the stored chunks in [from, to), standing in for a chunk
+// write that stopped part way through, so tests can prove an incomplete set does
+// not lock the snapshot ID.
+func (s *MemoryStore) TruncateChunks(snapshotID string, from, to int) {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+	chunks, exists := s.chunks[snapshotID]
+	if !exists {
+		return
+	}
+	if from < 0 {
+		from = 0
+	}
+	if to > len(chunks) {
+		to = len(chunks)
+	}
+	if from >= to {
+		return
+	}
+	kept := make([]Chunk, 0, len(chunks)-(to-from))
+	kept = append(kept, chunks[:from]...)
+	kept = append(kept, chunks[to:]...)
+	s.chunks[snapshotID] = kept
 }
 
 func checkPutChunks(ctx context.Context, snapshotID string, chunks []Chunk) error {

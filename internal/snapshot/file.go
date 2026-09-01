@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 )
 
 // FileStore is a local-directory Store. It exists so the scanner, the read API,
@@ -31,6 +32,12 @@ const (
 	fileStoreChunkDir   = "snapshots"
 	fileStoreChunkGlob  = "chunk-"
 	fileStoreChunkExt   = ".json"
+	// fileStoreQuarantinePrefix names a pointer file kept for diagnosis rather
+	// than for serving. GetLatest reads only fileStoreLatestName, so a quarantined
+	// pointer is never served.
+	fileStoreQuarantinePrefix = "latest.invalid-"
+	// maxQuarantineAttempts bounds the search for a free quarantine path.
+	maxQuarantineAttempts = 100
 )
 
 // NewFileStore returns a store rooted at dir. The directory is created on
@@ -39,28 +46,31 @@ func NewFileStore(dir string) *FileStore {
 	return &FileStore{root: dir}
 }
 
-// PutChunks writes chunks for a snapshot that does not exist yet, and accepts a
-// re-write of identical chunks as a no-op so a publication can be retried.
+// PutChunks writes chunks under a snapshot ID, applying the ChunkStore rule to
+// anything already in the directory. A directory holding only a prefix of a
+// previous interrupted write is replaced, so a retry of that write succeeds.
 func (s *FileStore) PutChunks(ctx context.Context, snapshotID string, chunks []Chunk) error {
 	if err := checkPutChunks(ctx, snapshotID, chunks); err != nil {
 		return err
 	}
 	dir := s.snapshotDir(snapshotID)
 	if _, err := os.Stat(dir); err == nil {
-		// Chunks that cannot be read back cannot be proved identical, so the
-		// directory stays immutable rather than being silently rewritten.
 		existing, readErr := s.GetChunks(ctx, snapshotID)
-		if readErr != nil {
-			return fmt.Errorf("snapshot %s already exists and chunks are immutable", snapshotID)
-		}
-		identical, err := chunksIdentical(existing, chunks)
+		decision, err := decideChunkWrite(snapshotID, existing, readErr, chunks)
 		if err != nil {
 			return err
 		}
-		if !identical {
-			return fmt.Errorf("snapshot %s already exists and chunks are immutable", snapshotID)
+		switch decision {
+		case chunkWriteSkip:
+			return nil
+		case chunkWriteRefuse:
+			return errChunksImmutable(snapshotID)
 		}
-		return nil
+		// Clearing the directory keeps a longer previous set from leaving stray
+		// chunk files behind the shorter one being written.
+		if err := os.RemoveAll(dir); err != nil {
+			return err
+		}
 	} else if !os.IsNotExist(err) {
 		return err
 	}
@@ -139,6 +149,11 @@ func (s *FileStore) DeleteChunks(ctx context.Context, snapshotID string) error {
 
 // PutLatest replaces the pointer file, applying the LatestStore ordering rule.
 // The write is atomic, so a reader never observes a half-written pointer.
+//
+// An unreadable stored pointer is quarantined rather than overwritten, because it
+// is the only evidence of why publication was blocked. Quarantining happens
+// before the new pointer is installed and is not best effort: if the old file
+// cannot be preserved, the publication fails instead of destroying it.
 func (s *FileStore) PutLatest(ctx context.Context, latest Latest) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -147,7 +162,7 @@ func (s *FileStore) PutLatest(ctx context.Context, latest Latest) error {
 		return err
 	}
 
-	stored, err := s.orderingPointer()
+	stored, quarantine, err := s.orderingPointer()
 	if err != nil {
 		return err
 	}
@@ -166,11 +181,18 @@ func (s *FileStore) PutLatest(ctx context.Context, latest Latest) error {
 	if err != nil {
 		return err
 	}
+	if quarantine {
+		if err := s.quarantineLatest(latest.PublishedAt); err != nil {
+			return err
+		}
+	}
 	return writeFileAtomically(filepath.Join(s.root, fileStoreLatestName), encoded)
 }
 
 // orderingPointer returns the stored pointer the ordering rule is applied
-// against, or nil when there is nothing to compare scans with.
+// against, or nil when there is nothing to compare scans with. The second return
+// value reports that a file is present but unreadable, so it needs quarantining
+// before it is replaced.
 //
 // A pointer file that is missing, unparseable, or invalid under the current
 // build, including one carrying an unsupported FormatVersion, yields nil so it
@@ -179,22 +201,48 @@ func (s *FileStore) PutLatest(ctx context.Context, latest Latest) error {
 // Only a real I/O failure is returned, because that is transient rather than a
 // statement about the stored scan. GetLatest still fails closed on any pointer
 // this treats as absent, so no reader is ever served one.
-func (s *FileStore) orderingPointer() (*Latest, error) {
+func (s *FileStore) orderingPointer() (*Latest, bool, error) {
 	encoded, err := os.ReadFile(filepath.Join(s.root, fileStoreLatestName))
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, nil
+			return nil, false, nil
 		}
-		return nil, err
+		return nil, false, err
 	}
 	var stored Latest
 	if err := json.Unmarshal(encoded, &stored); err != nil {
-		return nil, nil
+		return nil, true, nil
 	}
 	if err := stored.Validate(); err != nil {
-		return nil, nil
+		return nil, true, nil
 	}
-	return &stored, nil
+	return &stored, false, nil
+}
+
+// quarantineLatest moves the unreadable pointer file aside so it survives as a
+// diagnostic artifact. The name is derived from the publication time rather than
+// from a fresh clock reading, so it is reproducible, and a counter keeps two
+// quarantines at the same instant from colliding.
+func (s *FileStore) quarantineLatest(publishedAt time.Time) error {
+	current := filepath.Join(s.root, fileStoreLatestName)
+	stamp := publishedAt.UTC().Format("20060102T150405Z")
+	for attempt := 0; attempt < maxQuarantineAttempts; attempt++ {
+		candidate := filepath.Join(s.root, fmt.Sprintf("%s%s", fileStoreQuarantinePrefix, stamp))
+		if attempt > 0 {
+			candidate = fmt.Sprintf("%s-%d", candidate, attempt)
+		}
+		candidate += fileStoreChunkExt
+		if _, err := os.Stat(candidate); err == nil {
+			continue
+		} else if !os.IsNotExist(err) {
+			return err
+		}
+		if err := os.Rename(current, candidate); err != nil {
+			return fmt.Errorf("quarantine the unreadable latest pointer: %w", err)
+		}
+		return nil
+	}
+	return fmt.Errorf("quarantine the unreadable latest pointer: no free path after %d attempts", maxQuarantineAttempts)
 }
 
 // GetLatest reads the pointer file, or reports ErrNotFound before publication.

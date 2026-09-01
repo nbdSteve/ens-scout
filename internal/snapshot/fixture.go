@@ -73,7 +73,9 @@ func Fixture(name string) (Snapshot, error) {
 	sources := fixtureSources(candidates)
 	results := make([]ens.Result, 0, len(candidates))
 	for _, candidate := range candidates {
-		lookup := ens.Lookup{Name: candidate.label, Found: candidate.found}
+		// ens.Client hands the classifier the fully-qualified name, so the fixture
+		// builder does too and the fixtures match what a real scan produces.
+		lookup := ens.Lookup{Name: candidate.label + NameSuffix, Found: candidate.found}
 		if candidate.expiryOffset != nil {
 			expiry := scannedAt.Add(*candidate.expiryOffset)
 			lookup.Expiry = &expiry
