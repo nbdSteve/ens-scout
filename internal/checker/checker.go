@@ -29,6 +29,13 @@ type Options struct {
 type Stats struct {
 	Names   int
 	Batches int
+	// ClassifiedAt is the single UTC instant every result was classified
+	// against. Run samples it once, so the whole run shares one view of the
+	// lifecycle boundaries no matter how long the lookups take. A caller that
+	// publishes these results must pass this instant to snapshot.Build as the
+	// scan time; any other instant can disagree with a stored status. Run always
+	// sets it when it returns a nil error.
+	ClassifiedAt time.Time
 }
 
 type batchResult struct {
@@ -51,11 +58,16 @@ func Run(ctx context.Context, client Client, names []string, options Options) ([
 	if options.Soon < 0 {
 		return nil, stats, errors.New("soon window cannot be negative")
 	}
-	if len(names) == 0 {
-		return nil, stats, nil
-	}
 	if options.Now == nil {
 		options.Now = time.Now
+	}
+	// The classification instant is sampled before any lookup starts and is
+	// reported back, so a publisher can reuse the exact instant the statuses
+	// describe rather than sampling the clock again.
+	now := options.Now().UTC()
+	stats.ClassifiedAt = now
+	if len(names) == 0 {
+		return nil, stats, nil
 	}
 
 	stats.Batches = (len(names) + options.BatchSize - 1) / options.BatchSize
@@ -109,7 +121,6 @@ func Run(ctx context.Context, client Client, names []string, options Options) ([
 		close(outputs)
 	}()
 
-	now := options.Now().UTC()
 	results := make([]ens.Result, 0, len(names))
 	var firstErr error
 	for output := range outputs {
