@@ -93,7 +93,7 @@ func largeSnapshot(t *testing.T, id string, scannedAt time.Time) snapshot.Snapsh
 // publish stores a snapshot and fails the test if publication does not succeed.
 func publish(t *testing.T, store *Store, built snapshot.Snapshot, publishedAt time.Time) snapshot.Latest {
 	t.Helper()
-	latest, err := snapshot.Publish(context.Background(), store, built, publishedAt)
+	latest, _, err := snapshot.Publish(context.Background(), store, built, publishedAt)
 	if err != nil {
 		t.Fatalf("Publish %s: %v", built.Metadata.SnapshotID, err)
 	}
@@ -575,7 +575,7 @@ func TestPutLatestKeepsThePointerMonotonic(t *testing.T) {
 
 	// An older scan is refused.
 	older := testSnapshot(t, "scan-t0", fixedNow.Add(-time.Hour), "zap", "orb")
-	if _, err := snapshot.Publish(context.Background(), store, older, fixedNow); !errors.Is(err, snapshot.ErrPointerConflict) {
+	if _, _, err := snapshot.Publish(context.Background(), store, older, fixedNow); !errors.Is(err, snapshot.ErrPointerConflict) {
 		t.Errorf("publishing an older scan returned %v, want ErrPointerConflict", err)
 	}
 	assertReadsSnapshot(t, store, "scan-t1")
@@ -594,17 +594,31 @@ func TestPutLatestKeepsThePointerMonotonic(t *testing.T) {
 		t.Errorf("the retry moved PublishedAt to %v, want the original %v", stored.PublishedAt, published.PublishedAt)
 	}
 
+	// A retry superseded nothing: the snapshot that was already serving still is, so
+	// nothing may be given a retention window on its behalf.
+	if _, retryReplaced, err := snapshot.Publish(context.Background(), store, first, fixedNow.Add(2*time.Minute)); err != nil {
+		t.Fatalf("Publish the same scan again: %v", err)
+	} else if retryReplaced.Previous != nil || retryReplaced.Unusable {
+		t.Errorf("an accepted retry reported replacing %+v, want nothing", retryReplaced)
+	}
+
 	// A different snapshot at the same scan time is a real conflict.
 	overlap := testSnapshot(t, "scan-t1-other", fixedNow, "zap", "orb", "helm")
-	if _, err := snapshot.Publish(context.Background(), store, overlap, fixedNow); !errors.Is(err, snapshot.ErrPointerConflict) {
+	if _, _, err := snapshot.Publish(context.Background(), store, overlap, fixedNow); !errors.Is(err, snapshot.ErrPointerConflict) {
 		t.Errorf("publishing a different snapshot at the same scan time returned %v, want ErrPointerConflict", err)
 	}
 	assertReadsSnapshot(t, store, "scan-t1")
 
-	// A newer scan moves the pointer.
+	// A newer scan moves the pointer, and reports the pointer it moved off.
 	newer := testSnapshot(t, "scan-t2", fixedNow.Add(3*time.Hour), "zap", "orb", "helm")
-	publish(t, store, newer, fixedNow.Add(3*time.Hour))
+	_, replaced, err := snapshot.Publish(context.Background(), store, newer, fixedNow.Add(3*time.Hour))
+	if err != nil {
+		t.Fatalf("Publish a newer scan: %v", err)
+	}
 	assertReadsSnapshot(t, store, "scan-t2")
+	if replaced.Previous == nil || replaced.Previous.SnapshotID != "scan-t1" {
+		t.Errorf("Publish reported replacing %+v, want snapshot scan-t1", replaced)
+	}
 }
 
 // TestPutLatestRePlansAfterLosingTheRace proves the pointer is a compare-and-swap
@@ -630,7 +644,10 @@ func TestPutLatestRePlansAfterLosingTheRace(t *testing.T) {
 			fake.putUnlocked(competitorItem)
 			return nil
 		}
-		publish(t, store, mine, fixedNow.Add(2*time.Hour))
+		_, replaced, err := snapshot.Publish(context.Background(), store, mine, fixedNow.Add(2*time.Hour))
+		if err != nil {
+			t.Fatalf("Publish: %v", err)
+		}
 		if got := fake.callCount("PutItem"); got != 2 {
 			t.Errorf("PutItem was called %d times, want 2: one lost race and one win", got)
 		}
@@ -640,6 +657,17 @@ func TestPutLatestRePlansAfterLosingTheRace(t *testing.T) {
 		}
 		if stored.SnapshotID != "scan-mine" {
 			t.Errorf("the pointer names %q, want the newer scan %q", stored.SnapshotID, "scan-mine")
+		}
+		// The first attempt read an empty store and the second read the competitor,
+		// so the competitor is what this publication superseded. A publisher that was
+		// told about the read that lost would put its retention window on the wrong
+		// snapshot and leave the competitor's chunks with none at all.
+		if replaced.Previous == nil {
+			t.Fatalf("Publish reported replacing nothing, want the competitor it overwrote")
+		}
+		if replaced.Previous.SnapshotID != "scan-competitor" {
+			t.Errorf("Publish reports it replaced %q, want %q",
+				replaced.Previous.SnapshotID, "scan-competitor")
 		}
 	})
 
@@ -662,7 +690,7 @@ func TestPutLatestRePlansAfterLosingTheRace(t *testing.T) {
 			fake.putUnlocked(winnerItem)
 			return nil
 		}
-		_, err := snapshot.Publish(context.Background(), store, mine, fixedNow.Add(time.Hour))
+		_, _, err := snapshot.Publish(context.Background(), store, mine, fixedNow.Add(time.Hour))
 		if !errors.Is(err, snapshot.ErrPointerConflict) {
 			t.Fatalf("Publish returned %v, want ErrPointerConflict", err)
 		}
@@ -706,7 +734,7 @@ func TestPutLatestBoundsTheCompareAndSwapLoop(t *testing.T) {
 		fake.putUnlocked(competitorItem)
 		return nil
 	}
-	err := store.PutLatest(context.Background(), minePayload.Latest(fixedNow))
+	_, err := store.PutLatest(context.Background(), minePayload.Latest(fixedNow))
 	if !errors.Is(err, snapshot.ErrPointerConflict) {
 		t.Fatalf("PutLatest returned %v, want ErrPointerConflict", err)
 	}
@@ -727,8 +755,22 @@ func TestPutLatestQuarantinesAnUnusablePointer(t *testing.T) {
 	fake.put(corrupt)
 
 	newer := testSnapshot(t, "scan-second", fixedNow.Add(3*time.Hour), "zap", "orb", "helm")
-	publish(t, store, newer, fixedNow.Add(3*time.Hour))
+	_, replaced, err := snapshot.Publish(context.Background(), store, newer, fixedNow.Add(3*time.Hour))
+	if err != nil {
+		t.Fatalf("Publish over an unusable pointer: %v", err)
+	}
 	assertReadsSnapshot(t, store, "scan-second")
+
+	// The publication replaced a real chunk set it cannot name. Reporting nothing
+	// would read as an empty store, and reporting the snapshot ID out of a pointer
+	// that failed validation would aim a retention window on that pointer's word.
+	if !replaced.Unusable {
+		t.Errorf("replacing an unusable pointer reported %+v, want an unusable replacement", replaced)
+	}
+	if replaced.Previous != nil {
+		t.Errorf("Publish named snapshot %q from a pointer that failed validation",
+			replaced.Previous.SnapshotID)
+	}
 
 	preserved := fake.stored(snapshot.LatestPartition, quarantineSort(0))
 	if preserved == nil {
@@ -777,7 +819,7 @@ func TestPutLatestFailsRatherThanDestroyEvidence(t *testing.T) {
 		return nil
 	}
 	newer := testSnapshot(t, "scan-second", fixedNow.Add(3*time.Hour), "zap", "orb", "helm")
-	_, err := snapshot.Publish(context.Background(), store, newer, fixedNow.Add(3*time.Hour))
+	_, _, err := snapshot.Publish(context.Background(), store, newer, fixedNow.Add(3*time.Hour))
 	if !errors.Is(err, errInjected) {
 		t.Fatalf("Publish returned %v, want the injected quarantine failure", err)
 	}
@@ -799,7 +841,7 @@ func TestPublicationBecomesVisibleOnlyWithACompleteChunkSet(t *testing.T) {
 	fake.onBatchWrite = func(call int, requests []types.WriteRequest) ([]types.WriteRequest, error) {
 		return requests[len(requests)-1:], nil
 	}
-	if _, err := snapshot.Publish(context.Background(), store, built, fixedNow); err == nil {
+	if _, _, err := snapshot.Publish(context.Background(), store, built, fixedNow); err == nil {
 		t.Fatalf("Publish succeeded without storing every chunk")
 	}
 	if _, err := store.GetLatest(context.Background()); !errors.Is(err, snapshot.ErrNotFound) {
@@ -910,7 +952,7 @@ func TestEveryInjectedFailureLeavesThePreviousSnapshotServing(t *testing.T) {
 
 			next := testSnapshot(t, "scan-second", fixedNow.Add(3*time.Hour), "zap", "orb", "helm", "amber")
 			ctx, restore := test.inject(t, fake, context.Background())
-			if _, err := snapshot.Publish(ctx, store, next, fixedNow.Add(3*time.Hour)); err == nil {
+			if _, _, err := snapshot.Publish(ctx, store, next, fixedNow.Add(3*time.Hour)); err == nil {
 				t.Fatalf("Publish succeeded despite the injected failure")
 			}
 			restore()
@@ -953,7 +995,7 @@ func TestConcurrentPublishersLeaveOneCoherentSnapshot(t *testing.T) {
 		wait.Add(1)
 		go func(i int) {
 			defer wait.Done()
-			_, errs[i] = snapshot.Publish(context.Background(), store, scans[i], scans[i].Metadata.ScannedAt)
+			_, _, errs[i] = snapshot.Publish(context.Background(), store, scans[i], scans[i].Metadata.ScannedAt)
 		}(i)
 	}
 	wait.Wait()

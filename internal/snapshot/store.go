@@ -481,6 +481,30 @@ func chunkIdentical(stored, incoming Chunk) (bool, error) {
 	return bytes.Equal(left, right), nil
 }
 
+// PointerReplacement reports what a successful PutLatest overwrote.
+//
+// A publisher expires the chunks of the snapshot it superseded, and the pointer
+// write is the only step that knows which snapshot that was. A publisher that
+// expired the snapshot it happened to read earlier instead would miss the one it
+// actually replaced whenever the two differ: a previous read that failed and was
+// published past, a stored pointer that had to be quarantined, or another
+// schedule's publication landing in between. The missed snapshot's chunks then
+// carry no expiry, and its publisher removed its staging marker when it succeeded,
+// so nothing in the store can ever find them again.
+type PointerReplacement struct {
+	// Previous is the pointer this write replaced, or nil when it replaced nothing:
+	// the first publication into an empty store, and an accepted identical retry
+	// that stored nothing, both replace nothing.
+	Previous *Latest
+
+	// Unusable reports that a stored pointer was replaced but did not read and
+	// validate, so which snapshot it named is unknown and cannot be expired by ID.
+	// The preserved pointer is the only remaining record of that chunk set, and a
+	// snapshot ID read out of a pointer that failed validation is not evidence
+	// enough to expire chunks against.
+	Unusable bool
+}
+
 // LatestStore stores the single pointer to the newest valid snapshot.
 // GetLatest returns ErrNotFound before anything is published.
 //
@@ -511,8 +535,14 @@ func chunkIdentical(stored, incoming Chunk) (bool, error) {
 //
 // A real backend enforces this with a conditional write on ScannedAt rather than
 // a read followed by a write, so two concurrent publishers cannot both win.
+//
+// A successful PutLatest reports the pointer it replaced, which is the pointer the
+// write actually superseded and not the one any earlier read observed. The reason
+// is PointerReplacement's: retention is driven off that report, so a store that
+// forgot it would leak the chunks of every snapshot whose pointer moved between a
+// publisher's read and its own write.
 type LatestStore interface {
-	PutLatest(ctx context.Context, latest Latest) error
+	PutLatest(ctx context.Context, latest Latest) (PointerReplacement, error)
 	GetLatest(ctx context.Context) (Latest, error)
 }
 
@@ -609,35 +639,40 @@ type Store interface {
 // because PublishedAt is not part of pointer identity. A retry that reaches step
 // 4 after the pointer was already written returns the pointer it would have
 // written, which differs from the stored one only in PublishedAt.
-func Publish(ctx context.Context, store Store, snapshot Snapshot, publishedAt time.Time) (Latest, error) {
+//
+// The second return value reports what step 4 replaced, so a caller can expire the
+// chunks it just superseded. It is what the pointer write itself observed, which is
+// the only reading that stays true when the pointer moved under this publication.
+func Publish(ctx context.Context, store Store, snapshot Snapshot, publishedAt time.Time) (Latest, PointerReplacement, error) {
 	if store == nil {
-		return Latest{}, fmt.Errorf("snapshot store is required")
+		return Latest{}, PointerReplacement{}, fmt.Errorf("snapshot store is required")
 	}
 	payload, err := Encode(snapshot)
 	if err != nil {
-		return Latest{}, err
+		return Latest{}, PointerReplacement{}, err
 	}
 	latest := payload.Latest(publishedAt)
 	if err := latest.Validate(); err != nil {
-		return Latest{}, err
+		return Latest{}, PointerReplacement{}, err
 	}
 
 	if err := store.PutChunks(ctx, latest.SnapshotID, payload.Chunks); err != nil {
-		return Latest{}, fmt.Errorf("write snapshot %s chunks: %w", latest.SnapshotID, err)
+		return Latest{}, PointerReplacement{}, fmt.Errorf("write snapshot %s chunks: %w", latest.SnapshotID, err)
 	}
 
 	stored, err := store.GetChunks(ctx, latest.SnapshotID)
 	if err != nil {
-		return Latest{}, fmt.Errorf("read back snapshot %s chunks: %w", latest.SnapshotID, err)
+		return Latest{}, PointerReplacement{}, fmt.Errorf("read back snapshot %s chunks: %w", latest.SnapshotID, err)
 	}
 	if _, err := Verify(latest, stored); err != nil {
-		return Latest{}, fmt.Errorf("verify snapshot %s: %w", latest.SnapshotID, err)
+		return Latest{}, PointerReplacement{}, fmt.Errorf("verify snapshot %s: %w", latest.SnapshotID, err)
 	}
 
-	if err := store.PutLatest(ctx, latest); err != nil {
-		return Latest{}, fmt.Errorf("publish snapshot %s: %w", latest.SnapshotID, err)
+	replaced, err := store.PutLatest(ctx, latest)
+	if err != nil {
+		return Latest{}, PointerReplacement{}, fmt.Errorf("publish snapshot %s: %w", latest.SnapshotID, err)
 	}
-	return latest, nil
+	return latest, replaced, nil
 }
 
 // Read resolves the latest pointer and returns the verified snapshot it names.

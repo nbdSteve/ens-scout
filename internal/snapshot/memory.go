@@ -104,30 +104,37 @@ func (s *MemoryStore) DeleteChunks(ctx context.Context, snapshotID string) error
 	return nil
 }
 
-// PutLatest moves the pointer forward, applying the LatestStore ordering rule.
-// Holding the write lock across the comparison and the write stands in for the
-// conditional write a real backend uses. This store only ever holds a pointer it
+// PutLatest moves the pointer forward, applying the LatestStore ordering rule, and
+// reports the pointer it replaced. Holding the write lock across the comparison, the
+// write, and the report stands in for the conditional write a real backend uses, so
+// the replacement a caller acts on is the one this write superseded and not one
+// another publisher moved on afterwards. This store only ever holds a pointer it
 // already validated, so it has no unreadable-pointer case to narrow around.
-func (s *MemoryStore) PutLatest(ctx context.Context, latest Latest) error {
+func (s *MemoryStore) PutLatest(ctx context.Context, latest Latest) (PointerReplacement, error) {
 	if err := ctx.Err(); err != nil {
-		return err
+		return PointerReplacement{}, err
 	}
 	if err := latest.Validate(); err != nil {
-		return err
+		return PointerReplacement{}, err
 	}
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 	write, err := PlanLatestWrite(s.latest, latest)
 	if err != nil {
-		return err
+		return PointerReplacement{}, err
 	}
 	if !write {
-		return nil
+		return PointerReplacement{}, nil
+	}
+	var replaced PointerReplacement
+	if s.latest != nil {
+		previous := s.latest.Clone()
+		replaced.Previous = &previous
 	}
 	stored := latest.Clone()
 	s.latest = &stored
 	s.published = true
-	return nil
+	return replaced, nil
 }
 
 // GetLatest returns the pointer, or ErrNotFound before anything is published.

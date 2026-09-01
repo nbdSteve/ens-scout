@@ -154,46 +154,52 @@ func (s *FileStore) DeleteChunks(ctx context.Context, snapshotID string) error {
 	return os.RemoveAll(s.snapshotDir(snapshotID))
 }
 
-// PutLatest replaces the pointer file, applying the LatestStore ordering rule.
+// PutLatest replaces the pointer file, applying the LatestStore ordering rule, and
+// reports the pointer it replaced so a caller can expire what it superseded.
 // The write is atomic, so a reader never observes a half-written pointer.
 //
 // An unreadable stored pointer is quarantined rather than overwritten, because it
 // is the only evidence of why publication was blocked. Quarantining happens
 // before the new pointer is installed and is not best effort: if the old file
-// cannot be preserved, the publication fails instead of destroying it.
-func (s *FileStore) PutLatest(ctx context.Context, latest Latest) error {
+// cannot be preserved, the publication fails instead of destroying it. Replacing one
+// is reported as an unusable replacement rather than as replacing nothing, because
+// the chunk set it named is real and is now unreferenced.
+func (s *FileStore) PutLatest(ctx context.Context, latest Latest) (PointerReplacement, error) {
 	if err := ctx.Err(); err != nil {
-		return err
+		return PointerReplacement{}, err
 	}
 	if err := latest.Validate(); err != nil {
-		return err
+		return PointerReplacement{}, err
 	}
 
 	stored, quarantine, err := s.orderingPointer()
 	if err != nil {
-		return err
+		return PointerReplacement{}, err
 	}
 	write, err := PlanLatestWrite(stored, latest)
 	if err != nil {
-		return err
+		return PointerReplacement{}, err
 	}
 	if !write {
-		return nil
+		return PointerReplacement{}, nil
 	}
 
 	if err := os.MkdirAll(s.root, 0o755); err != nil {
-		return err
+		return PointerReplacement{}, err
 	}
 	encoded, err := json.Marshal(latest)
 	if err != nil {
-		return err
+		return PointerReplacement{}, err
 	}
 	if quarantine {
 		if err := s.quarantineLatest(latest.PublishedAt); err != nil {
-			return err
+			return PointerReplacement{}, err
 		}
 	}
-	return writeFileAtomically(filepath.Join(s.root, fileStoreLatestName), encoded)
+	if err := writeFileAtomically(filepath.Join(s.root, fileStoreLatestName), encoded); err != nil {
+		return PointerReplacement{}, err
+	}
+	return PointerReplacement{Previous: stored, Unusable: quarantine}, nil
 }
 
 // orderingPointer returns the stored pointer the ordering rule is applied

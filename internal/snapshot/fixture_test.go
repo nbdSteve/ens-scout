@@ -104,7 +104,7 @@ func TestFixturesPublishAndRead(t *testing.T) {
 			}
 
 			store := NewFileStore(t.TempDir())
-			got, err := Publish(ctx, store, snapshot, want.PublishedAt)
+			got, _, err := Publish(ctx, store, snapshot, want.PublishedAt)
 			if err != nil {
 				t.Fatalf("Publish: %v", err)
 			}

@@ -108,6 +108,20 @@ type fakeStore struct {
 	stagedErr    error
 	unstageErr   error
 
+	// getLatestFailures fails that many pointer reads before the first success, which
+	// models a transient burst rather than a permanently broken table: the pointer
+	// itself stays perfectly readable, so a run can exhaust its previous-read attempts
+	// and still have its own pointer write replace the real stored pointer.
+	getLatestFailures int
+
+	// putLatestUnusable makes a successful pointer write report that it replaced a
+	// pointer it could not interpret, as the real backend does when it quarantines one.
+	putLatestUnusable bool
+
+	// unstageFailures fails that many marker removals before the first success, which
+	// is how a publisher ends up holding the marker of the snapshot it just published.
+	unstageFailures int
+
 	// stagedSkipped makes StagedSnapshots report markers it could not interpret
 	// alongside the ones it could, which is what a real registry does with a corrupt
 	// or unknown-version item.
@@ -140,6 +154,15 @@ func (s *fakeStore) StageSnapshot(ctx context.Context, snapshotID string, staged
 }
 
 func (s *fakeStore) UnstageSnapshot(ctx context.Context, snapshotID string) error {
+	s.mu.Lock()
+	transient := s.unstageFailures > 0
+	if transient {
+		s.unstageFailures--
+	}
+	s.mu.Unlock()
+	if transient {
+		return errInjected
+	}
 	if s.unstageErr != nil {
 		return s.unstageErr
 	}
@@ -164,14 +187,30 @@ func (s *fakeStore) GetChunks(ctx context.Context, snapshotID string) ([]snapsho
 	return s.MemoryStore.GetChunks(ctx, snapshotID)
 }
 
-func (s *fakeStore) PutLatest(ctx context.Context, latest snapshot.Latest) error {
+func (s *fakeStore) PutLatest(ctx context.Context, latest snapshot.Latest) (snapshot.PointerReplacement, error) {
 	if s.putLatestErr != nil {
-		return s.putLatestErr
+		return snapshot.PointerReplacement{}, s.putLatestErr
 	}
-	return s.MemoryStore.PutLatest(ctx, latest)
+	replaced, err := s.MemoryStore.PutLatest(ctx, latest)
+	if err == nil && s.putLatestUnusable {
+		// The real backend replaces a stored pointer it cannot interpret, quarantines
+		// it, and publishes past it. There is no snapshot ID to report then, so the
+		// replacement says only that something unnameable was superseded.
+		return snapshot.PointerReplacement{Unusable: true}, nil
+	}
+	return replaced, err
 }
 
 func (s *fakeStore) GetLatest(ctx context.Context) (snapshot.Latest, error) {
+	s.mu.Lock()
+	transient := s.getLatestFailures > 0
+	if transient {
+		s.getLatestFailures--
+	}
+	s.mu.Unlock()
+	if transient {
+		return snapshot.Latest{}, errInjected
+	}
 	if s.getLatestErr != nil {
 		return snapshot.Latest{}, s.getLatestErr
 	}
@@ -623,6 +662,73 @@ func expectConfigError(mention string) func(t *testing.T, config Config, err err
 	}
 }
 
+// TestConfigRejectsAKeyTooShortToRedact closes the redaction promise at
+// configuration time rather than leaving it length-dependent. A Redactor only strips
+// a configured literal that is long enough to be a credential, so a shorter key would
+// silently fall back to the URL pattern alone - and the one case the literal exists
+// for is a bare key echoed in a gateway response body, where there is no URL to match.
+// A credential that cannot be protected fails at startup, like every other unusable
+// credential here.
+//
+// Nothing in this test asserts on a real credential, and nothing asserted may narrow
+// the configured value: the rejection and the log must not quote it or any part of it.
+func TestConfigRejectsAKeyTooShortToRedact(t *testing.T) {
+	// Invented here, not a credential, and deliberately below the redactor's minimum.
+	const shortKey = "k9t2xq"
+
+	// The value must not be recoverable from what a rejection emits, so every prefix
+	// long enough to narrow it has to be absent as well as the whole thing.
+	assertHidesKey := func(t *testing.T, what, output string) {
+		t.Helper()
+		for length := 2; length <= len(shortKey); length++ {
+			if strings.Contains(output, shortKey[:length]) {
+				t.Fatalf("the %s quotes %d characters of the configured key: %s", what, length, output)
+			}
+		}
+	}
+
+	_, err := LoadConfig(func(name string) string {
+		switch name {
+		case EnvTable:
+			return "ens-snapshots"
+		case EnvAPIKey:
+			return shortKey
+		case EnvSubgraphID:
+			return "ens-subgraph"
+		}
+		return ""
+	})
+	if err == nil {
+		t.Fatalf("LoadConfig accepted a key too short to redact")
+	}
+	assertHidesKey(t, "rejection", err.Error())
+	if !strings.Contains(err.Error(), EnvAPIKey) {
+		t.Errorf("the rejection %q does not name the variable to fix", err)
+	}
+
+	// A run refuses it too, so a Dependencies built by hand cannot bypass the gate,
+	// and the refusal reaches the log without the key.
+	store := newFakeStore()
+	run := newTestRun(t, defaultLists(t), newFakeGraph(nil), store)
+	run.deps.Config.APIKey = shortKey
+	if _, err := Run(context.Background(), run.deps, Event{Group: GroupShort}); err == nil {
+		t.Fatalf("Run started with a key too short to redact")
+	}
+	requireRecordAt(t, run, "scan_rejected", LevelError)
+	assertHidesKey(t, "log", run.logs.String())
+	if _, err := store.GetLatest(context.Background()); !errors.Is(err, snapshot.ErrNotFound) {
+		t.Errorf("a rejected run published something: %v", err)
+	}
+
+	// A key long enough to be stripped as a literal is still accepted, so the gate
+	// rejects an unusable credential and not a usable one.
+	config := testConfig(t.TempDir())
+	config.APIKey = testAPIKey
+	if err := config.Validate(); err != nil {
+		t.Errorf("Validate rejected a key of usable length: %v", err)
+	}
+}
+
 func TestLoadConfigRejectsAMissingLookup(t *testing.T) {
 	if _, err := LoadConfig(nil); err == nil {
 		t.Fatalf("LoadConfig accepted a nil lookup")
@@ -986,6 +1092,172 @@ func TestRunSucceedsWhenTheTTLCannotBeApplied(t *testing.T) {
 	}
 }
 
+// TestRunExpiresThePointerItReplacedAfterAFailedPreviousRead is the case that needs
+// no concurrency at all: one burst of throttled pointer reads exhausts the
+// previous-snapshot attempts, so the run publishes past a snapshot it never read.
+// The pointer write still replaces that snapshot, and its chunks are what has to
+// carry the retention window. A run that expired what the read returned instead
+// would expire nothing here, and the replaced set would keep neither a TTL nor a
+// staging marker - its own publisher removed the marker when it succeeded - so
+// nothing in the store could ever find it again.
+func TestRunExpiresThePointerItReplacedAfterAFailedPreviousRead(t *testing.T) {
+	store := newFakeStore()
+	dir := defaultLists(t)
+
+	first := newTestRun(t, dir, newFakeGraph(nil), store)
+	previous, err := Run(context.Background(), first.deps, Event{Group: GroupShort})
+	if err != nil {
+		t.Fatalf("first Run: %v", err)
+	}
+
+	second := newTestRun(t, dir, newFakeGraph(nil), store).at(fixedNow.Add(3 * time.Hour))
+	// Every previous-read attempt fails and nothing after them does, which is what a
+	// throttling burst looks like from inside one invocation.
+	store.getLatestFailures = second.deps.Config.PreviousReadAttempts
+	current, err := Run(context.Background(), second.deps, Event{Group: GroupShort})
+	if err != nil {
+		t.Fatalf("second Run: %v", err)
+	}
+	requireRecordAt(t, second, "previous_snapshot_unreadable", LevelWarn)
+
+	expiry, found := store.expiry(previous.Latest.SnapshotID)
+	if !found {
+		t.Fatalf("the snapshot this publication replaced was left with no TTL: %s", second.logs.String())
+	}
+	window := time.Duration(previous.Latest.ScanAge.StaleAfterSeconds) * time.Second
+	if want := current.Latest.PublishedAt.Add(window); !expiry.Equal(want) {
+		t.Errorf("TTL %s, want %s", expiry, want)
+	}
+	if record := requireRecordAt(t, second, "superseded_chunks_expired", LevelInfo); record.PreviousID != previous.Latest.SnapshotID {
+		t.Errorf("the retention record names %q, want the replaced snapshot %q",
+			record.PreviousID, previous.Latest.SnapshotID)
+	}
+	if _, found := store.expiry(current.Latest.SnapshotID); found {
+		t.Errorf("the published snapshot was given a TTL")
+	}
+	if _, _, err := snapshot.Read(context.Background(), store); err != nil {
+		t.Errorf("the published snapshot is not readable: %v", err)
+	}
+}
+
+// TestRunExpiresThePointerAnotherRunLeftBehind is the concurrent case. The other
+// group publishes after this run has read the previous snapshot and before this run
+// writes its own pointer, so the snapshot this run supersedes is not the one it read.
+// Retention has to follow the pointer write, or the snapshot published in between is
+// replaced with nothing naming it and nothing expiring it.
+func TestRunExpiresThePointerAnotherRunLeftBehind(t *testing.T) {
+	store := newFakeStore()
+	dir := defaultLists(t)
+
+	first := newTestRun(t, dir, newFakeGraph(nil), store)
+	if _, err := Run(context.Background(), first.deps, Event{Group: GroupShort}); err != nil {
+		t.Fatalf("first Run: %v", err)
+	}
+
+	// The daily run reads the previous snapshot and is then overtaken: the three-hourly
+	// schedule publishes while it is writing its chunks. Its own scan time is the newer
+	// one, so its pointer still wins, and what it replaces is the overtaking snapshot.
+	long := newTestRun(t, dir, newFakeGraph(nil), store).at(fixedNow.Add(2 * time.Hour))
+	var overtaking string
+	store.onPutChunks = func() {
+		store.onPutChunks = nil
+		concurrent := newTestRun(t, dir, newFakeGraph(nil), store).at(fixedNow.Add(time.Hour))
+		result, err := Run(context.Background(), concurrent.deps, Event{Group: GroupShort})
+		if err != nil {
+			t.Errorf("the overtaking short run failed: %v", err)
+			return
+		}
+		overtaking = result.Latest.SnapshotID
+	}
+
+	current, err := Run(context.Background(), long.deps, Event{Group: GroupLong})
+	if err != nil {
+		t.Fatalf("daily Run: %v", err)
+	}
+	if overtaking == "" {
+		t.Fatalf("the overtaking run did not publish")
+	}
+	if current.Previous != overtaking {
+		t.Fatalf("the run reports superseding %q, want the snapshot it replaced, %q",
+			current.Previous, overtaking)
+	}
+	if _, found := store.expiry(overtaking); !found {
+		t.Errorf("the snapshot this run replaced was left with no TTL: %s", long.logs.String())
+	}
+	if _, found := store.expiry(current.Latest.SnapshotID); found {
+		t.Errorf("the published snapshot was given a TTL")
+	}
+	if _, latest, err := snapshot.Read(context.Background(), store); err != nil || latest.SnapshotID != current.Latest.SnapshotID {
+		t.Errorf("readers do not see %q: %v", current.Latest.SnapshotID, err)
+	}
+}
+
+// TestRunReportsASupersededSnapshotItCannotName covers the third way the replaced
+// pointer is not the one that was read: the stored pointer did not read at all, so
+// the backend quarantined it and published past it. Which snapshot it named is
+// unknowable, so nothing may be expired on its word, and an operator has to be told
+// that a chunk set was superseded without being named.
+func TestRunReportsASupersededSnapshotItCannotName(t *testing.T) {
+	store := newFakeStore()
+	dir := defaultLists(t)
+
+	store.putLatestUnusable = true
+	run := newTestRun(t, dir, newFakeGraph(nil), store)
+	result, err := Run(context.Background(), run.deps, Event{Group: GroupShort})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if result.Previous != "" {
+		t.Errorf("the run named %q as superseded from a pointer that could not be read", result.Previous)
+	}
+	requireRecordAt(t, run, "superseded_snapshot_unknown", LevelWarn)
+	if got := store.expireAttempts(result.Latest.SnapshotID); got != 0 {
+		t.Errorf("the run attempted %d expiries against a pointer it could not interpret", got)
+	}
+	if _, _, err := snapshot.Read(context.Background(), store); err != nil {
+		t.Errorf("the published snapshot is not readable: %v", err)
+	}
+}
+
+// TestReclaimRemovesTheMarkerOfTheSnapshotItPublished covers the marker a publisher
+// leaves behind when its own unstage fails after the pointer has moved. Only the
+// marker is stale, so the pass removes it and leaves the chunks alone. Skipping it
+// because it happens to name this run's own snapshot would leave it for a later run
+// to find as neither live nor its own, and that run would report a snapshot it is
+// serving as an abandoned chunk set and hand it a retention window.
+func TestReclaimRemovesTheMarkerOfTheSnapshotItPublished(t *testing.T) {
+	store := newFakeStore()
+	dir := defaultLists(t)
+
+	first := newTestRun(t, dir, newFakeGraph(nil), store)
+	if _, err := Run(context.Background(), first.deps, Event{Group: GroupShort}); err != nil {
+		t.Fatalf("first Run: %v", err)
+	}
+
+	// The unstage that follows the pointer write fails once, so the published
+	// snapshot keeps its own marker into the reclaim pass.
+	store.unstageFailures = 1
+	second := newTestRun(t, dir, newFakeGraph(nil), store).at(fixedNow.Add(3 * time.Hour))
+	current, err := Run(context.Background(), second.deps, Event{Group: GroupShort})
+	if err != nil {
+		t.Fatalf("second Run: %v", err)
+	}
+	requireRecordAt(t, second, "staging_marker_kept", LevelWarn)
+
+	if isStaged(t, store, current.Latest.SnapshotID) {
+		t.Errorf("the marker of the snapshot the run published was kept: %v", stagedIDs(t, store))
+	}
+	if _, found := store.expiry(current.Latest.SnapshotID); found {
+		t.Errorf("the published snapshot was given a TTL")
+	}
+	if hasRecord(t, second, "abandoned_chunks_expired") {
+		t.Errorf("the run reported its own published snapshot as abandoned: %s", second.logs.String())
+	}
+	if _, latest, err := snapshot.Read(context.Background(), store); err != nil || latest.SnapshotID != current.Latest.SnapshotID {
+		t.Errorf("readers do not see %q: %v", current.Latest.SnapshotID, err)
+	}
+}
+
 func TestRunCarriesTheSnapshotPublishedDuringItsScan(t *testing.T) {
 	store := newFakeStore()
 	dir := defaultLists(t)
@@ -1071,9 +1343,17 @@ func TestRunWarnsWhenThePreviousSnapshotChunksAreMissing(t *testing.T) {
 	if len(second.slept) != 0 {
 		t.Errorf("waited %d times for chunks that are definitively absent", len(second.slept))
 	}
-	if result.Carried != 0 || result.Previous != "" {
-		t.Errorf("a run that could not read the previous snapshot carried state anyway: %+v", result)
+	if result.Carried != 0 {
+		t.Errorf("a run that could not read the previous snapshot carried %d results", result.Carried)
 	}
+	// The read gave up, but the pointer write still replaced the pointer that read
+	// could not resolve, so that is the snapshot this publication superseded. Its
+	// chunks are already gone, which is nothing left to expire rather than a failure.
+	if result.Previous != previous.Latest.SnapshotID {
+		t.Errorf("the run reports superseding %q, want the pointer it replaced, %q",
+			result.Previous, previous.Latest.SnapshotID)
+	}
+	requireRecordAt(t, second, "superseded_chunks_absent", LevelInfo)
 	if got, want := publishedNames(t, store), qualify(longLabels); !equalStrings(got, want) {
 		t.Errorf("published %v, want %v", got, want)
 	}
@@ -1302,7 +1582,9 @@ func TestReclaimBudgetBoundsTheWorkOneRunAttempts(t *testing.T) {
 	if got := store.expireAttempts(abandoned...); got != maxReclaimsPerRun {
 		t.Errorf("the pass attempted %d expiries, want its budget of %d", got, maxReclaimsPerRun)
 	}
-	record := requireRecordAt(t, second, "abandoned_chunks_deferred", LevelWarn)
+	// An exhausted budget is the backlog draining as designed, so it must not be
+	// reported as the anomalies an unreadable pointer or registry are.
+	record := requireRecordAt(t, second, "abandoned_chunks_budget_reached", LevelInfo)
 	if record.Attempted != maxReclaimsPerRun || record.Reclaimed != 0 {
 		t.Errorf("the deferred record reports %d attempted and %d reclaimed, want %d and 0",
 			record.Attempted, record.Reclaimed, maxReclaimsPerRun)
@@ -1390,7 +1672,7 @@ func TestReclaimIsDeferredWhenThePointerCannotBeRead(t *testing.T) {
 	if _, err := Run(context.Background(), third.deps, Event{Group: GroupShort}); err != nil {
 		t.Fatalf("third Run: %v", err)
 	}
-	requireRecordAt(t, third, "abandoned_chunks_deferred", LevelWarn)
+	requireRecordAt(t, third, "abandoned_chunks_pointer_unreadable", LevelWarn)
 	if _, found := store.expiry(abandoned); found {
 		t.Errorf("a snapshot was expired against a pointer that could not be read")
 	}
@@ -1399,6 +1681,52 @@ func TestReclaimIsDeferredWhenThePointerCannotBeRead(t *testing.T) {
 	}
 
 	store.getLatestErr = nil
+	if _, _, err := snapshot.Read(context.Background(), store); err != nil {
+		t.Errorf("the published snapshot is not readable: %v", err)
+	}
+}
+
+// TestReclaimIsDeferredWhenTheRegistryCannotBeQueried is the other anomaly that
+// reclaims nothing. It is a distinct event from an unreadable pointer and from an
+// exhausted budget, so an operator can alarm on the two faults without being paged by
+// the backlog draining normally.
+func TestReclaimIsDeferredWhenTheRegistryCannotBeQueried(t *testing.T) {
+	store := newFakeStore()
+	dir := defaultLists(t)
+
+	first := newTestRun(t, dir, newFakeGraph(nil), store)
+	if _, err := Run(context.Background(), first.deps, Event{Group: GroupShort}); err != nil {
+		t.Fatalf("first Run: %v", err)
+	}
+
+	abandonedAt := fixedNow.Add(time.Hour)
+	store.putLatestErr = errInjected
+	second := newTestRun(t, dir, newFakeGraph(nil), store).at(abandonedAt)
+	if _, err := Run(context.Background(), second.deps, Event{Group: GroupLong}); err == nil {
+		t.Fatalf("the second run published despite the injected failure")
+	}
+	store.putLatestErr = nil
+	staged := stagedIDs(t, store)
+	if len(staged) != 1 {
+		t.Fatalf("staged snapshots are %v, want exactly the abandoned one", staged)
+	}
+	abandoned := staged[0]
+
+	// A registry that cannot be queried at all lists no marker, and a pass that acted
+	// on that would be acting on an empty answer it never got.
+	store.stagedErr = errInjected
+	third := newTestRun(t, dir, newFakeGraph(nil), store).at(abandonedAt.Add(abandonedAfter + time.Hour))
+	if _, err := Run(context.Background(), third.deps, Event{Group: GroupShort}); err != nil {
+		t.Fatalf("a failed registry query failed the run: %v", err)
+	}
+	requireRecordAt(t, third, "abandoned_chunks_registry_unreadable", LevelWarn)
+	if _, found := store.expiry(abandoned); found {
+		t.Errorf("a snapshot was expired without reading the staging registry")
+	}
+	store.stagedErr = nil
+	if !isStaged(t, store, abandoned) {
+		t.Errorf("a staging marker was dropped without reclaiming its chunks")
+	}
 	if _, _, err := snapshot.Read(context.Background(), store); err != nil {
 		t.Errorf("the published snapshot is not readable: %v", err)
 	}

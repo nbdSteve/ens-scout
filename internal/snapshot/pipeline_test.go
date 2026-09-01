@@ -137,7 +137,7 @@ func TestScanToSnapshotThroughTheRealClient(t *testing.T) {
 	ctx := context.Background()
 	for name, store := range newStores(t) {
 		t.Run(name, func(t *testing.T) {
-			if _, err := Publish(ctx, store, snapshot, stats.ClassifiedAt.Add(time.Minute)); err != nil {
+			if _, _, err := Publish(ctx, store, snapshot, stats.ClassifiedAt.Add(time.Minute)); err != nil {
 				t.Fatalf("Publish: %v", err)
 			}
 			readSnapshot, _, err := Read(ctx, store)

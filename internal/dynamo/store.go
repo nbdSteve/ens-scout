@@ -458,7 +458,8 @@ func (s *Store) GetLatest(ctx context.Context) (snapshot.Latest, error) {
 }
 
 // PutLatest moves the pointer forward under the LatestStore ordering rule, as a
-// compare-and-swap against the exact item it read.
+// compare-and-swap against the exact item it read, and reports the pointer that swap
+// replaced.
 //
 // A read followed by an unconditional write would let two overlapping publishers
 // both decide they may proceed and let the slower one land last. Instead the write
@@ -466,32 +467,37 @@ func (s *Store) GetLatest(ctx context.Context) (snapshot.Latest, error) {
 // a publisher that loses the race re-reads and submits its scan to the rule again.
 // It either turns out to be newer than the pointer that won, or it is refused with
 // ErrPointerConflict, which is a lost race and not a transient failure.
-func (s *Store) PutLatest(ctx context.Context, latest snapshot.Latest) error {
+//
+// The reported replacement is the item the winning attempt guarded on, so it names
+// the snapshot this write really superseded even when an earlier attempt lost the
+// race to another publisher. That is what makes retention correct: the caller
+// expires the chunks the pointer stopped naming, not the ones it read minutes ago.
+func (s *Store) PutLatest(ctx context.Context, latest snapshot.Latest) (snapshot.PointerReplacement, error) {
 	if err := ctx.Err(); err != nil {
-		return err
+		return snapshot.PointerReplacement{}, err
 	}
 	if err := latest.Validate(); err != nil {
-		return err
+		return snapshot.PointerReplacement{}, err
 	}
 	item, err := latestItem(latest)
 	if err != nil {
-		return err
+		return snapshot.PointerReplacement{}, err
 	}
 
 	for attempt := 0; attempt < maxPointerAttempts; attempt++ {
 		stored, err := s.readPointer(ctx)
 		if err != nil {
-			return err
+			return snapshot.PointerReplacement{}, err
 		}
 
 		// A stored pointer that does not read and validate says nothing about which
 		// scan is newer, so the rule is applied as if nothing were stored.
 		write, err := snapshot.PlanLatestWrite(stored.latest, latest)
 		if err != nil {
-			return err
+			return snapshot.PointerReplacement{}, err
 		}
 		if !write {
-			return nil
+			return snapshot.PointerReplacement{}, nil
 		}
 
 		if stored.item != nil && stored.latest == nil {
@@ -499,7 +505,7 @@ func (s *Store) PutLatest(ctx context.Context, latest snapshot.Latest) error {
 			// publication was stuck, so it is preserved first, and a failure to
 			// preserve it fails the publication instead.
 			if err := s.quarantinePointer(ctx, stored.item); err != nil {
-				return fmt.Errorf("preserve the unusable latest pointer before replacing it: %w", err)
+				return snapshot.PointerReplacement{}, fmt.Errorf("preserve the unusable latest pointer before replacing it: %w", err)
 			}
 		}
 
@@ -512,15 +518,15 @@ func (s *Store) PutLatest(ctx context.Context, latest snapshot.Latest) error {
 			ExpressionAttributeValues: guard.values,
 		})
 		if err == nil {
-			return nil
+			return stored.replacement(), nil
 		}
 		if !conditionFailed(err) {
-			return fmt.Errorf("write latest pointer: %w", err)
+			return snapshot.PointerReplacement{}, fmt.Errorf("write latest pointer: %w", err)
 		}
 		// Someone changed the pointer between the read and the write. Re-read and
 		// let the ordering rule judge whatever is there now.
 	}
-	return fmt.Errorf("%w: the latest pointer changed under all %d attempts to publish snapshot %s",
+	return snapshot.PointerReplacement{}, fmt.Errorf("%w: the latest pointer changed under all %d attempts to publish snapshot %s",
 		snapshot.ErrPointerConflict, maxPointerAttempts, latest.SnapshotID)
 }
 
@@ -533,6 +539,20 @@ type storedPointer struct {
 	latest *snapshot.Latest
 	// reason records why a stored item did not parse.
 	reason error
+}
+
+// replacement describes this stored pointer as the thing a successful write just
+// replaced. An item that held no usable pointer still named a chunk set, so it is
+// reported as an unusable replacement rather than as nothing at all.
+func (p storedPointer) replacement() snapshot.PointerReplacement {
+	if p.item == nil {
+		return snapshot.PointerReplacement{}
+	}
+	if p.latest == nil {
+		return snapshot.PointerReplacement{Unusable: true}
+	}
+	previous := p.latest.Clone()
+	return snapshot.PointerReplacement{Previous: &previous}
 }
 
 func (s *Store) readPointer(ctx context.Context) (storedPointer, error) {

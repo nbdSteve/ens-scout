@@ -134,6 +134,18 @@ scanner, the read API, the local preview, and the browser all agree.
   `GetLatest` and `Read` still fail closed on one. Replacing such a pointer must
   preserve it somewhere reads never look, and must fail the publication rather
   than destroy it, because it is the only evidence of why publication was stuck.
+- `PutLatest` reports the pointer it replaced, as `PointerReplacement`, and every
+  backend and local fake reports it the same way. Retention is driven off that
+  report and never off a pointer some earlier read observed: the two differ whenever
+  that read failed and was published past, whenever the stored pointer had to be
+  quarantined, and whenever another schedule published in between. Expiring what was
+  read in those cases leaves the snapshot that was really replaced with no TTL and,
+  because its own publisher unstaged it on success, no staging marker either, so
+  nothing in the store can ever find it again. A refused write and an accepted
+  identical retry replace nothing and must report nothing. Replacing a pointer that
+  did not read is reported as unusable rather than as nothing, because the chunk set
+  it named is real; its ID stays unknown, since a snapshot ID read out of a pointer
+  that failed validation is not evidence enough to expire chunks against.
 - Resume applies within one publication, never across two. A re-invocation
   rescans, samples a new `ClassifiedAt`, and so mints a different snapshot ID with
   different bytes, which is why the resume rule cannot finish an earlier run's
@@ -220,6 +232,10 @@ implement the snapshot contract above rather than restating it.
   echoed the key back would otherwise put a bare one in the log group. A store with
   no key configured behaves exactly like the pattern-only default, and a test
   asserts a key is absent from output rather than asserting on a real credential.
+  The guarantee is unconditional rather than length-dependent: a `Redactor` only
+  strips a literal long enough to be a credential, so `Config.Validate` rejects a
+  configured key shorter than that instead of degrading to the pattern alone. The
+  rejection names the variable and never the value or any prefix of it.
 - Log fields are a fixed struct, not a map, so a candidate label cannot reach a
   log line by accident. Adding a field is the moment to decide it is safe.
 - `internal/dynamo` holds every storage rule that is not in the contract:
@@ -236,18 +252,31 @@ implement the snapshot contract above rather than restating it.
   keeps the snapshot readers may still be resolving alive for as long as it could
   legitimately be served, and lets a rollback re-point at it, while still
   bounding table growth. A failed TTL write must never fail a publication that
-  already succeeded.
+  already succeeded, and chunks that are already gone are nothing left to expire
+  rather than a failure. The snapshot that gets the TTL is the one `PutLatest`
+  reports replacing, never the one the previous-snapshot read returned; the contract
+  above says why, and `Result.Previous` therefore names what the run superseded and
+  not what it merged forward from.
 - Abandoned chunk sets are reclaimed, which is what makes the TTL actually bound
   table growth rather than only bounding it for snapshots that were published. The
-  rules are what keep a pass from destroying live data: it skips its own run's
-  snapshot ID, because a set the run publishes must not carry an expiry that would
-  outlive the pointer naming it; it removes the marker and leaves the chunks alone
-  when the marker names the published snapshot; it defers the whole pass when the
+  rules are what keep a pass from destroying live data: it removes the marker and
+  leaves the chunks alone when the marker names the published snapshot; it otherwise
+  skips its own run's snapshot ID, because a set the run publishes must not carry an
+  expiry that would outlive the pointer naming it; it defers the whole pass when the
   pointer cannot be read, because then nothing proves which snapshot is live; and it
   leaves a marker younger than the grace period alone, because a publisher may still
-  be writing that set. The grace exceeds the longest an invocation can live. Every
+  be writing that set. The grace exceeds the longest an invocation can live. The
+  published-snapshot rule is judged before the own-run rule, because on the success
+  path they name the same snapshot: judging its own ID first would skip the marker of
+  the snapshot it just published, and a later run would then see a marker that is
+  neither live nor its own and report a snapshot it is serving as abandoned. Every
   failure here is logged, never returned: this is cleanup after an earlier
   invocation, so failing on it would turn one bad run into a stuck schedule.
+- The three ways a reclaim pass stops short are three distinct log events, because an
+  operator alarms on them. An unreadable pointer and a failed registry query
+  reclaimed nothing and stay at warning level; an exhausted per-run budget is the
+  backlog draining as designed and is informational, or a record raised every three
+  hours in normal operation would train an operator past the two that matter.
 - Reclaim after the publication attempt, and after it either way. Before it, cleanup
   sits on the critical path of the write it exists to clean up after, and a throttled
   table can spend the invocation's remaining deadline there and leave the run
