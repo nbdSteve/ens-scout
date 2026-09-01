@@ -1,10 +1,10 @@
 import type { ReactNode } from 'react'
 import {
-  formatAbsolute,
   formatAgo,
   formatCoarseDuration,
   formatPreciseDuration,
   secondsBetween,
+  splitAbsolute,
   toIsoSecond,
 } from '../format/time'
 import type { Boundary, BoundaryKind } from '../snapshot/lifecycle'
@@ -43,13 +43,19 @@ export function Countdown({ boundary, now }: CountdownProps): ReactNode {
   const remaining = secondsBetween(now, boundary.at)
   const passed = remaining <= 0
   const what = passed ? PASSED_LABEL[boundary.kind] : boundary.label
+  const { day, clock } = splitAbsolute(boundary.at)
 
   return (
     <div className="countdown">
       <p className="countdown__what">{what}</p>
       <p className="countdown__at">
+        {/*
+          Two spans rather than one string, so the only place the instant can break
+          is between the date and the clock time. Either half is unbreakable, which
+          is what keeps a phone-width cell to two lines instead of four.
+        */}
         <time className="mono" dateTime={toIsoSecond(boundary.at)}>
-          {formatAbsolute(boundary.at)}
+          <span>{day}</span> <span>{clock}</span>
         </time>
       </p>
       <p className="countdown__left">

@@ -1,6 +1,7 @@
 import { render, screen, within } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
 import { sortResults } from '../state/filter'
+import { instant } from '../test/dom'
 import { buildSnapshot, SCANNED_AT } from '../test/factory'
 import type { SnapshotResult } from '../snapshot/types'
 import { ResultsTable } from './ResultsTable'
@@ -115,9 +116,13 @@ describe('ResultsTable rows', () => {
     // grace-period counts down to grace_ends, never to a grace end derived from
     // the expiry beside it.
     expect(within(row('ddddd.eth')).getByText('grace period ends')).toBeInTheDocument()
-    expect(within(row('ddddd.eth')).getByText('2026-05-21 00:00:00 UTC')).toBeInTheDocument()
+    expect(
+      within(row('ddddd.eth')).getByText(instant('2026-05-21 00:00:00 UTC')),
+    ).toBeInTheDocument()
     expect(within(row('bbbb.eth')).getByText('premium ends')).toBeInTheDocument()
-    expect(within(row('bbbb.eth')).getByText('2026-03-05 00:00:00 UTC')).toBeInTheDocument()
+    expect(
+      within(row('bbbb.eth')).getByText(instant('2026-03-05 00:00:00 UTC')),
+    ).toBeInTheDocument()
   })
 
   it('says why a name has no date instead of showing an empty cell', () => {

@@ -1,6 +1,7 @@
 import { render, screen } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
 import type { Boundary } from '../snapshot/lifecycle'
+import { instant } from '../test/dom'
 import { Countdown } from './Countdown'
 
 /**
@@ -26,7 +27,7 @@ describe('Countdown ahead of the clock', () => {
   it('shows the exact instant, a machine-readable copy of it, and the time left', () => {
     render(<Countdown boundary={boundary('2026-03-04T15:04:05Z')} now={NOW} />)
 
-    const stamp = screen.getByText('2026-03-04 15:04:05 UTC')
+    const stamp = screen.getByText(instant('2026-03-04 15:04:05 UTC'))
     expect(stamp.tagName).toBe('TIME')
     expect(stamp).toHaveAttribute('datetime', '2026-03-04T15:04:05Z')
     expect(screen.getByText('3d 03:04:05')).toBeInTheDocument()

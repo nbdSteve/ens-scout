@@ -18,8 +18,19 @@ const DAY = 24 * HOUR
  * comparing notes disagree about which scan they are looking at.
  */
 export function formatAbsolute(date: Date): string {
+  const { day, clock } = splitAbsolute(date)
+  return `${day} ${clock}`
+}
+
+/**
+ * The same instant as its two halves, so a caller in a narrow column can keep each
+ * half whole and break only between them. Left as one string, the browser is free
+ * to break after every `-` and every `:`, and in a phone-width table cell
+ * `2026-03-04 12:00:00 UTC` becomes four lines.
+ */
+export function splitAbsolute(date: Date): { readonly day: string; readonly clock: string } {
   const iso = date.toISOString()
-  return `${iso.slice(0, 10)} ${iso.slice(11, 19)} UTC`
+  return { day: iso.slice(0, 10), clock: `${iso.slice(11, 19)} UTC` }
 }
 
 /** The same instant as a machine-readable attribute value. */

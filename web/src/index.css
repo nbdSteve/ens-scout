@@ -77,7 +77,13 @@
     --ink-muted: #4a5769;
     --ink-faint: #64748b;
 
-    --accent: #0f766e;
+    /*
+     * Dark enough to clear 4.5:1 on the lightest tinted background a link sits on,
+     * which is `--danger-quiet`. The obvious teal, #0f766e, reaches 4.43:1 there:
+     * it passes on white and fails inside exactly the banners a visitor is meant to
+     * read, which is the worst place to lose contrast.
+     */
+    --accent: #0d6b64;
     --accent-ink: #ffffff;
     --accent-quiet: #d6f2ee;
 
@@ -218,8 +224,16 @@ a:hover {
 }
 
 /* A single column with one consistent gap, for sections that just follow each other. */
+/*
+ * `minmax(0, 1fr)`, not the implied `auto`. An `auto` column never shrinks below the
+ * widest item's minimum content width, so one wide card - a table with three
+ * unbreakable columns, say - silently widens every sibling and the page scrolls
+ * sideways. Capping the column at the container keeps a mistake inside the card that
+ * made it.
+ */
 .stack {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--space-5);
   align-content: start;
 }
@@ -342,15 +356,30 @@ a:hover {
   letter-spacing: -0.01em;
 }
 
+/*
+ * `8.5rem`, which is the largest track that still fits all seven statuses on one
+ * row at 1440px. A wider track drops the seventh onto a row of its own, and a
+ * lone card under six is read as a rendering fault rather than as a count. Seven
+ * divides only by one and seven, so any intermediate width leaves a short last
+ * row; the track is chosen so the widths that matter most are the whole ones.
+ */
 .counts {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(9.5rem, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(8.5rem, 1fr));
   gap: var(--space-3);
   margin: 0;
 }
 
+/*
+ * `align-content: start` for the reason `.field` needs it: the cards in a row are
+ * stretched to the tallest one, and a grid of `auto` rows answers the extra height
+ * by growing the gap. "Grace ending soon" wraps to two lines at phone width, so
+ * without this the label of every shorter card in that row drifts away from its
+ * number and the row stops reading as one set of counts.
+ */
 .count {
   display: grid;
+  align-content: start;
   gap: var(--space-1);
   padding: var(--space-3);
   border-radius: var(--radius-2);
@@ -525,18 +554,25 @@ a:hover {
 /* ---- views ---- */
 
 /*
- * The view links scroll sideways on a narrow screen rather than wrapping into a
- * ragged block. `scrollbar-gutter` is deliberately not set: the row is short and a
- * reserved gutter would show an empty channel on every wide screen.
+ * The view links wrap onto as many rows as they need.
+ *
+ * A sideways-scrolling strip was tidier on a wide screen and wrong on a narrow one:
+ * at 320px the five views are 649px of content in a 304px box, so two of them are
+ * off-screen entirely and a third is clipped mid-word, with no scrollbar drawn on a
+ * touch device to say that anything is hidden. A ragged second row is not as neat,
+ * but every view is visible and reachable without a swipe nobody was told about.
+ *
+ * The padding and the matching negative margin keep a focus ring from being clipped
+ * by the card edges, which is why they are on the container rather than the list.
  */
 .views {
-  overflow-x: auto;
   margin-inline: calc(var(--space-1) * -1);
   padding: var(--space-1);
 }
 
 .views__list {
   display: flex;
+  flex-wrap: wrap;
   gap: var(--space-2);
   list-style: none;
   margin: 0;
@@ -608,8 +644,17 @@ a:hover {
   }
 }
 
+/*
+ * `align-content: start`, because the fields in a row are not the same height: one
+ * carries a hint under its control and one carries a second control. A grid whose
+ * rows are all `auto` stretches them to fill a taller row, so the label and the
+ * control of the shortest field drift downwards and the row of inputs no longer
+ * lines up. Keeping the rows at their content height leaves the slack at the bottom
+ * of the field, where nothing is looking.
+ */
 .field {
   display: grid;
+  align-content: start;
   gap: var(--space-2);
   min-width: 0;
 }
@@ -733,8 +778,15 @@ a:hover {
 
 /* ---- results ---- */
 
+/*
+ * `minmax(0, 1fr)` for the same reason `.stack` needs it: an implied `auto` column
+ * never shrinks below its widest item, so a table whose three columns cannot all fit
+ * would widen the card itself and, through it, the page. Capping the column makes
+ * the table the only thing that has to give.
+ */
 .results-card {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--space-4);
 }
 
@@ -769,12 +821,17 @@ a:hover {
   vertical-align: top;
 }
 
+/*
+ * The headings wrap. `white-space: nowrap` here reads as a tidier header row, but
+ * "Status at the scan time" is then a hard minimum width that the browser takes
+ * out of the name column, and names start breaking mid-token: "amber.e / th".
+ * A heading over two lines costs one row; an unreadable name costs every row.
+ */
 .results thead th {
   border-top: 0;
   border-bottom: 1px solid var(--border-strong);
   font-size: var(--step--1);
   color: var(--ink-muted);
-  white-space: nowrap;
   padding-top: 0;
 }
 
@@ -792,15 +849,80 @@ a:hover {
   font-size: var(--step--1);
   color: var(--ink-faint);
   font-variant-numeric: tabular-nums;
+  /* "5 characters" is one fact and reads badly split over two lines. */
+  white-space: nowrap;
 }
 
 .results__next {
   padding-right: 0;
 }
 
+/*
+ * `break-word`, not `anywhere`. The two break the same way once a label really is
+ * wider than its cell, but they report different minimum widths: `anywhere` says a
+ * single character is enough, so the table's automatic layout hands the name column
+ * almost nothing and breaks every label mid-token to pay for the columns beside it.
+ * `break-word` keeps the whole label as the minimum, so the column is only squeezed
+ * when the viewport genuinely cannot afford it.
+ */
 .ens-link {
   font-weight: 650;
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
+}
+
+/*
+ * The narrowest supported viewport, 320px.
+ *
+ * WCAG 1.4.10 asks for content to reflow at 320 CSS pixels without scrolling in
+ * two directions, and three columns of real content plus the page and card gutters
+ * do not fit there at the comfortable spacing. So the gutters give way and the
+ * content does not: the page, the card, and the cells all tighten, and the status
+ * pill is allowed to wrap.
+ *
+ * The pill is `white-space: nowrap` everywhere else, because a pill split over two
+ * lines looks like a rendering fault. But on one line "Grace ending soon" puts a
+ * 130px floor under the middle column, and a page that scrolls sideways is worse
+ * than a pill that wraps.
+ */
+@media (max-width: 23.999rem) {
+  .page {
+    padding-inline: var(--space-3);
+  }
+
+  .card {
+    padding: var(--space-3);
+  }
+
+  .results th,
+  .results td {
+    padding-inline: var(--space-1);
+  }
+
+  /*
+   * A shorter track than the one above, because at 320px the card is 270px wide
+   * and two 8.5rem tracks plus their gap need 284px. `auto-fit` answers three
+   * pixels of shortfall by dropping to a single column, so all seven counts
+   * stack and the summary becomes seven screens' worth of scrolling. Nothing
+   * about the cards needs the extra width: the labels already wrap here.
+   */
+  .counts {
+    grid-template-columns: repeat(auto-fit, minmax(7.5rem, 1fr));
+  }
+}
+
+/*
+ * Below 48rem the status pill is allowed to wrap.
+ *
+ * The pill is `white-space: nowrap` everywhere else, because a pill split over two
+ * lines looks like a rendering fault. But "Grace ending soon" on one line puts a
+ * 150px floor under the middle column, and at phone widths that floor is taken out
+ * of the two columns either side: the name breaks mid-token or the recorded instant
+ * shreds. A wrapped pill is still legible; a shredded date is not.
+ */
+@media (max-width: 47.999rem) {
+  .results .badge {
+    white-space: normal;
+  }
 }
 
 @media (min-width: 48rem) {
@@ -813,11 +935,50 @@ a:hover {
   }
 }
 
+/*
+ * A third of the table is the right share for the name column while the three
+ * columns are still close in width. Past 64rem it is not: a third of 1288px is
+ * 386px holding a 90px name, so the status pill sits 300px away from the name it
+ * describes and the eye has to cross empty space to pair them. A fixed column
+ * keeps the three together and leaves the slack at the right-hand edge, which is
+ * where a reader already expects a table to run out.
+ */
+@media (min-width: 64rem) {
+  .results__name {
+    width: 15rem;
+  }
+}
+
 /* ---- countdown ---- */
 
 .countdown {
   display: grid;
   gap: var(--space-1);
+}
+
+/*
+ * Each half of the recorded instant is one token. Left to wrap freely the instant
+ * breaks after every `-` and every `:`, so a phone-width third column turns
+ * "2026-03-04 12:00:00 UTC" into four lines and every row grows to match. Keeping
+ * the halves whole also gives the column an honest minimum width, so the table's
+ * automatic layout stops handing that width to its neighbours. The break between the
+ * two halves stays available, which is what lets three columns reflow at 320px.
+ */
+.countdown__at .mono > span {
+  white-space: nowrap;
+}
+
+/*
+ * The countdown is one token from 24rem up. Below that it is not: "399d 16:00:00" on
+ * one line puts a 140px floor under the third column, and at 320px the two columns
+ * beside it cannot pay it. The break falls between the days and the clock, which are
+ * two separate readings anyway. Stated as a floor rather than as an override, so it
+ * does not depend on which rule appears later in this file.
+ */
+@media (min-width: 24rem) {
+  .countdown__value {
+    white-space: nowrap;
+  }
 }
 
 /*
