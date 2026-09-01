@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"ens-scrape/internal/ens"
 )
 
 // Both fakes must satisfy the interface that later AWS code will implement, so
@@ -211,6 +213,50 @@ func TestSupersededSnapshotsAreRemovableAfterPublication(t *testing.T) {
 	}
 }
 
+// TestStoresIsolateStoredPointerState proves both fakes enforce the immutability a
+// real backend gives for free: a reader that edits the pointer it was handed must
+// not be able to change what the next reader sees.
+func TestStoresIsolateStoredPointerState(t *testing.T) {
+	ctx := context.Background()
+	snapshot := mustBuild(t, lifecycleResults(t, fixedNow))
+
+	for name, store := range newStores(t) {
+		t.Run(name, func(t *testing.T) {
+			if _, err := Publish(ctx, store, snapshot, fixedNow); err != nil {
+				t.Fatalf("Publish: %v", err)
+			}
+			wantAvailable := snapshot.Metadata.Counts[ens.StatusAvailable]
+			wantNames := snapshot.Metadata.Sources[0].Names
+
+			first, err := store.GetLatest(ctx)
+			if err != nil {
+				t.Fatalf("GetLatest: %v", err)
+			}
+			first.Counts[ens.StatusAvailable] = 0
+			first.Sources[0].Names = 0
+
+			second, err := store.GetLatest(ctx)
+			if err != nil {
+				t.Fatalf("GetLatest after editing the first pointer: %v", err)
+			}
+			if got := second.Counts[ens.StatusAvailable]; got != wantAvailable {
+				t.Errorf("a second read reports %d available names, want %d", got, wantAvailable)
+			}
+			if got := second.Sources[0].Names; got != wantNames {
+				t.Errorf("a second read reports %d source names, want %d", got, wantNames)
+			}
+			if got := snapshot.Metadata.Counts[ens.StatusAvailable]; got != wantAvailable {
+				t.Errorf("editing a read pointer changed the source snapshot count to %d, want %d", got, wantAvailable)
+			}
+
+			// The store still serves the snapshot, so nothing was corrupted.
+			if _, _, err := Read(ctx, store); err != nil {
+				t.Fatalf("Read after editing a returned pointer: %v", err)
+			}
+		})
+	}
+}
+
 func TestMemoryStoreCorruptionFailsClosed(t *testing.T) {
 	ctx := context.Background()
 	store := NewMemoryStore()
@@ -272,19 +318,31 @@ func TestFileStoreDetectsTamperedFiles(t *testing.T) {
 			want: "checksum mismatch",
 		},
 		{
-			name: "pointer file edited",
-			damage: func(t *testing.T, dir, snapshotID string) {
-				path := filepath.Join(dir, fileStoreLatestName)
-				encoded, err := os.ReadFile(path)
-				if err != nil {
-					t.Fatalf("read pointer: %v", err)
-				}
-				edited := strings.Replace(string(encoded), `"format_version":1`, `"format_version":99`, 1)
-				if err := os.WriteFile(path, []byte(edited), 0o644); err != nil {
-					t.Fatalf("write pointer: %v", err)
-				}
-			},
-			want: "unsupported latest pointer format version",
+			name:   "pointer file edited",
+			damage: editLatestFile(`"format_version":1`, `"format_version":99`),
+			want:   "unsupported latest pointer format version",
+		},
+		{
+			// A widened threshold would make a client call a two-day-old snapshot
+			// fresh, and the pointer is the only thing a status read looks at.
+			name:   "pointer staleness threshold widened",
+			damage: editLatestFile(`"stale_after_seconds":21600`, `"stale_after_seconds":8640000`),
+			want:   "scan age thresholds disagree with the source cadences",
+		},
+		{
+			name:   "pointer counts removed",
+			damage: editLatestFile(`"counts":{"available":2,"expiring-soon":1,"grace-ending-soon":1,"grace-period":1,"premium":1,"registered":1,"unknown":1},`, ""),
+			want:   "counts must list every lifecycle status",
+		},
+		{
+			name:   "pointer count edited",
+			damage: editLatestFile(`"available":2`, `"available":99`),
+			want:   `results but the pointer reports 99`,
+		},
+		{
+			name:   "pointer source name total edited",
+			damage: editLatestFile(`"names":8}]`, `"names":99}]`),
+			want:   "disagrees with its pointer",
 		},
 	}
 
@@ -330,6 +388,27 @@ func TestStoresRejectCancelledContext(t *testing.T) {
 				t.Fatalf("Publish returned %v, want context.Canceled", err)
 			}
 		})
+	}
+}
+
+// editLatestFile rewrites part of the committed pointer file, standing in for a
+// pointer item that was edited in place. It fails the test when the target text is
+// absent, so a serialization change cannot quietly turn the case into a no-op.
+func editLatestFile(from, to string) func(t *testing.T, dir, snapshotID string) {
+	return func(t *testing.T, dir, snapshotID string) {
+		t.Helper()
+		path := filepath.Join(dir, fileStoreLatestName)
+		encoded, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read pointer: %v", err)
+		}
+		if !strings.Contains(string(encoded), from) {
+			t.Fatalf("pointer file does not contain %q: %s", from, encoded)
+		}
+		edited := strings.Replace(string(encoded), from, to, 1)
+		if err := os.WriteFile(path, []byte(edited), 0o644); err != nil {
+			t.Fatalf("write pointer: %v", err)
+		}
 	}
 }
 

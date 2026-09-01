@@ -128,7 +128,8 @@ func Decode(chunks []Chunk) (Snapshot, error) {
 	if err != nil {
 		return Snapshot{}, err
 	}
-	return decodeCompressed(compressed)
+	snapshot, _, err := decodeCompressed(compressed)
+	return snapshot, err
 }
 
 // Verify decodes chunks and additionally checks them against a latest pointer,
@@ -152,15 +153,13 @@ func Verify(latest Latest, chunks []Chunk) (Snapshot, error) {
 		return Snapshot{}, fmt.Errorf("snapshot %s compressed checksum mismatch: got %s want %s", latest.SnapshotID, got, latest.CompressedChecksum)
 	}
 
-	snapshot, err := decodeCompressed(compressed)
+	// decodeCompressed returns the canonical JSON it already proved the stored
+	// bytes to be, so the whole payload is serialized once per read.
+	snapshot, raw, err := decodeCompressed(compressed)
 	if err != nil {
 		return Snapshot{}, err
 	}
 
-	raw, err := EncodeJSON(snapshot)
-	if err != nil {
-		return Snapshot{}, err
-	}
 	if len(raw) != latest.RawBytes {
 		return Snapshot{}, fmt.Errorf("snapshot %s expects %d raw bytes but got %d", latest.SnapshotID, latest.RawBytes, len(raw))
 	}
@@ -175,6 +174,33 @@ func Verify(latest Latest, chunks []Chunk) (Snapshot, error) {
 	}
 	if snapshot.Metadata.Names != latest.Names {
 		return Snapshot{}, fmt.Errorf("snapshot %s holds %d names but the pointer reports %d", latest.SnapshotID, snapshot.Metadata.Names, latest.Names)
+	}
+
+	// The pointer also carries the summary a client reads without fetching a
+	// chunk. Comparing it here is what stops an edited pointer from reporting
+	// counts, source lists, or staleness thresholds the snapshot disagrees with.
+	if snapshot.Metadata.ScanAge != latest.ScanAge {
+		return Snapshot{}, fmt.Errorf("snapshot %s scan age thresholds disagree with its pointer", latest.SnapshotID)
+	}
+	if len(snapshot.Metadata.Sources) != len(latest.Sources) {
+		return Snapshot{}, fmt.Errorf("snapshot %s lists %d source lists but the pointer reports %d", latest.SnapshotID, len(snapshot.Metadata.Sources), len(latest.Sources))
+	}
+	for i, source := range snapshot.Metadata.Sources {
+		if source != latest.Sources[i] {
+			return Snapshot{}, fmt.Errorf("snapshot %s source list %q disagrees with its pointer", latest.SnapshotID, source.ID)
+		}
+	}
+	if len(snapshot.Metadata.Counts) != len(latest.Counts) {
+		return Snapshot{}, fmt.Errorf("snapshot %s counts list %d statuses but the pointer lists %d", latest.SnapshotID, len(snapshot.Metadata.Counts), len(latest.Counts))
+	}
+	for status, want := range snapshot.Metadata.Counts {
+		got, ok := latest.Counts[status]
+		if !ok {
+			return Snapshot{}, fmt.Errorf("snapshot %s pointer counts are missing status %q", latest.SnapshotID, status)
+		}
+		if got != want {
+			return Snapshot{}, fmt.Errorf("snapshot %s holds %d %q results but the pointer reports %d", latest.SnapshotID, want, status, got)
+		}
 	}
 	return snapshot, nil
 }
@@ -224,7 +250,9 @@ func Assemble(snapshotID string, chunks []Chunk) ([]byte, error) {
 	return assembled.Bytes(), nil
 }
 
-// Latest builds the pointer that publishes this payload.
+// Latest builds the pointer that publishes this payload. The counts and source
+// lists are copied, so a caller that edits the pointer cannot reach back into the
+// snapshot metadata the payload was built from.
 func (p Payload) Latest(publishedAt time.Time) Latest {
 	return Latest{
 		FormatVersion:      FormatVersion,
@@ -237,41 +265,44 @@ func (p Payload) Latest(publishedAt time.Time) Latest {
 		CompressedBytes:    p.CompressedBytes,
 		ChunkCount:         len(p.Chunks),
 		Names:              p.Metadata.Names,
-		Counts:             p.Metadata.Counts,
-		Sources:            p.Metadata.Sources,
+		Counts:             cloneCounts(p.Metadata.Counts),
+		Sources:            cloneSources(p.Metadata.Sources),
 		ScanAge:            p.Metadata.ScanAge,
 	}
 }
 
-func decodeCompressed(compressed []byte) (Snapshot, error) {
+// decodeCompressed returns the snapshot a compressed stream holds along with the
+// canonical JSON it was stored as, so a caller that needs the raw bytes does not
+// serialize the whole payload a second time.
+func decodeCompressed(compressed []byte) (Snapshot, []byte, error) {
 	raw, err := decompress(compressed)
 	if err != nil {
-		return Snapshot{}, err
+		return Snapshot{}, nil, err
 	}
 
 	var snapshot Snapshot
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&snapshot); err != nil {
-		return Snapshot{}, fmt.Errorf("decode snapshot: %w", err)
+		return Snapshot{}, nil, fmt.Errorf("decode snapshot: %w", err)
 	}
 	if decoder.More() {
-		return Snapshot{}, fmt.Errorf("decode snapshot: unexpected trailing data")
+		return Snapshot{}, nil, fmt.Errorf("decode snapshot: unexpected trailing data")
 	}
 	if err := snapshot.Validate(); err != nil {
-		return Snapshot{}, err
+		return Snapshot{}, nil, err
 	}
 
 	// Re-encoding proves the stored bytes were already canonical, so two
 	// readers of the same snapshot can never disagree about its checksum.
 	canonical, err := json.Marshal(snapshot)
 	if err != nil {
-		return Snapshot{}, err
+		return Snapshot{}, nil, err
 	}
 	if !bytes.Equal(raw, canonical) {
-		return Snapshot{}, fmt.Errorf("snapshot %s payload is not canonically serialized", snapshot.Metadata.SnapshotID)
+		return Snapshot{}, nil, fmt.Errorf("snapshot %s payload is not canonically serialized", snapshot.Metadata.SnapshotID)
 	}
-	return snapshot, nil
+	return snapshot, canonical, nil
 }
 
 func compress(raw []byte) ([]byte, error) {

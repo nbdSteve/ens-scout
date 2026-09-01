@@ -357,11 +357,72 @@ func TestVerifyFailsClosedAgainstPointer(t *testing.T) {
 			mutate: func(l *Latest) { l.Sources = nil },
 			want:   "at least one source list is required",
 		},
+		{
+			name:   "sub-second scan time",
+			mutate: func(l *Latest) { l.ScannedAt = l.ScannedAt.Add(500 * time.Millisecond) },
+			want:   "scan time must be UTC with second precision",
+		},
+		{
+			name:   "sub-second publication time",
+			mutate: func(l *Latest) { l.PublishedAt = l.PublishedAt.Add(500 * time.Millisecond) },
+			want:   "publication time must be UTC with second precision",
+		},
+		{
+			name:   "non-UTC publication time",
+			mutate: func(l *Latest) { l.PublishedAt = l.PublishedAt.In(time.FixedZone("UTC+1", 3600)) },
+			want:   "publication time must be UTC with second precision",
+		},
+		{
+			// A widened threshold would make a client call a stale snapshot fresh.
+			name:   "stale threshold widened",
+			mutate: func(l *Latest) { l.ScanAge.StaleAfterSeconds = 8640000 },
+			want:   "scan age thresholds disagree with the source cadences",
+		},
+		{
+			name:   "expected interval narrowed",
+			mutate: func(l *Latest) { l.ScanAge.ExpectedSeconds /= 2 },
+			want:   "scan age thresholds disagree with the source cadences",
+		},
+		{
+			name:   "missing counts",
+			mutate: func(l *Latest) { l.Counts = nil },
+			want:   "counts must list every lifecycle status",
+		},
+		{
+			name:   "dropped status in counts",
+			mutate: func(l *Latest) { delete(l.Counts, ens.StatusUnknown) },
+			want:   "counts must list every lifecycle status",
+		},
+		{
+			name:   "wrong count",
+			mutate: func(l *Latest) { l.Counts[ens.StatusAvailable] = 99 },
+			want:   `results but the pointer reports 99`,
+		},
+		{
+			name:   "source name total edited",
+			mutate: func(l *Latest) { l.Sources[0].Names = 99 },
+			want:   "disagrees with its pointer",
+		},
+		{
+			name:   "source path edited",
+			mutate: func(l *Latest) { l.Sources[0].Path = "data/words/other.txt" },
+			want:   "disagrees with its pointer",
+		},
+		{
+			name: "unsorted sources",
+			mutate: func(l *Latest) {
+				l.Sources = []SourceList{
+					{ID: "b", Path: "b.txt", Cadence: CadenceThreeHourly, Names: 8},
+					{ID: "a", Path: "a.txt", Cadence: CadenceThreeHourly, Names: 0},
+				}
+			},
+			want: "source lists are not sorted by id",
+		},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			latest := valid
+			latest := valid.Clone()
 			test.mutate(&latest)
 			if _, err := Verify(latest, CloneChunks(payload.Chunks)); err == nil {
 				t.Fatalf("Verify accepted a pointer that disagrees with the chunks")
@@ -442,6 +503,40 @@ func TestDecodeBoundsDecompression(t *testing.T) {
 		t.Fatal("Decode accepted a payload above the decompression bound")
 	} else if !strings.Contains(err.Error(), "exceeds the") {
 		t.Fatalf("error %q does not mention the payload limit", err)
+	}
+}
+
+// TestLatestDoesNotAliasSnapshotMetadata proves a published pointer owns its
+// counts map and source slice. Sharing them would let a client that edits the
+// pointer it was handed change the snapshot metadata the pointer was built from.
+func TestLatestDoesNotAliasSnapshotMetadata(t *testing.T) {
+	snapshot := mustBuild(t, lifecycleResults(t, fixedNow))
+	payload, err := Encode(snapshot)
+	if err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+
+	wantAvailable := snapshot.Metadata.Counts[ens.StatusAvailable]
+	wantNames := snapshot.Metadata.Sources[0].Names
+
+	latest := payload.Latest(fixedNow.Add(time.Minute))
+	latest.Counts[ens.StatusAvailable] = 0
+	latest.Sources[0].Names = 0
+
+	if got := snapshot.Metadata.Counts[ens.StatusAvailable]; got != wantAvailable {
+		t.Errorf("editing the pointer changed the snapshot available count to %d, want %d", got, wantAvailable)
+	}
+	if got := snapshot.Metadata.Sources[0].Names; got != wantNames {
+		t.Errorf("editing the pointer changed the snapshot source name total to %d, want %d", got, wantNames)
+	}
+
+	// A second pointer from the same payload is unaffected too.
+	second := payload.Latest(fixedNow.Add(time.Minute))
+	if got := second.Counts[ens.StatusAvailable]; got != wantAvailable {
+		t.Errorf("a second pointer reports %d available names, want %d", got, wantAvailable)
+	}
+	if got := second.Sources[0].Names; got != wantNames {
+		t.Errorf("a second pointer reports %d source names, want %d", got, wantNames)
 	}
 }
 

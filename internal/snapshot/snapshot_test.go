@@ -336,6 +336,149 @@ func TestBuildRejectsInvalidInput(t *testing.T) {
 	}
 }
 
+// TestBuildRejectsStatusThatContradictsItsTimestamps covers the labels a snapshot
+// must never publish: a status that ens.Classify could not produce from the same
+// timestamps at the same scan time. The soon window is not on the wire, so the two
+// soon statuses are the only slack.
+func TestBuildRejectsStatusThatContradictsItsTimestamps(t *testing.T) {
+	day := 24 * time.Hour
+	at := func(offset time.Duration) *time.Time {
+		value := fixedNow.Add(offset)
+		return &value
+	}
+	// expired builds a result whose timestamps follow the ENS lifecycle rules for
+	// a name that expired offset before the scan, so only the status is in doubt.
+	expired := func(status ens.Status, offset time.Duration) ens.Result {
+		expiry := fixedNow.Add(offset)
+		graceEnds := expiry.Add(ens.GracePeriod)
+		premiumEnds := graceEnds.Add(ens.PremiumPeriod)
+		return ens.Result{Name: "zap", Status: status, Expiry: &expiry, GraceEnds: &graceEnds, PremiumEnds: &premiumEnds}
+	}
+
+	tests := []struct {
+		name   string
+		result ens.Result
+		want   string
+	}{
+		{
+			name:   "available with a future expiry",
+			result: ens.Result{Name: "zap", Status: ens.StatusAvailable, Expiry: at(200 * day)},
+			want:   `is "available" but its timestamps classify as "registered"`,
+		},
+		{
+			name:   "registered without an expiry",
+			result: ens.Result{Name: "zap", Status: ens.StatusRegistered},
+			want:   `is "registered" but carries no expiry`,
+		},
+		{
+			name:   "expiring soon without an expiry",
+			result: ens.Result{Name: "zap", Status: ens.StatusExpiringSoon},
+			want:   `is "expiring-soon" but carries no expiry`,
+		},
+		{
+			name:   "premium without an expiry",
+			result: ens.Result{Name: "zap", Status: ens.StatusPremium},
+			want:   `is "premium" but carries no expiry`,
+		},
+		{
+			name:   "unknown with an expiry",
+			result: ens.Result{Name: "zap", Status: ens.StatusUnknown, Expiry: at(200 * day)},
+			want:   `is "unknown" but its timestamps classify as "registered"`,
+		},
+		{
+			name:   "still in grace but labelled premium",
+			result: expired(ens.StatusPremium, -10*day),
+			want:   `is "premium" but its timestamps classify as "grace-period"`,
+		},
+		{
+			name:   "grace already over but labelled grace-period",
+			result: expired(ens.StatusGracePeriod, -100*day),
+			want:   `is "grace-period" but its timestamps classify as "premium"`,
+		},
+		{
+			name:   "premium already over but labelled premium",
+			result: expired(ens.StatusPremium, -200*day),
+			want:   `is "premium" but its timestamps classify as "available"`,
+		},
+		{
+			name:   "registered but carrying grace timestamps",
+			result: expired(ens.StatusRegistered, 10*day),
+			want:   "lifecycle timestamps disagree with its expiry at the scan time",
+		},
+		{
+			name: "expired without the derived timestamps",
+			result: ens.Result{
+				Name:   "zap",
+				Status: ens.StatusPremium,
+				Expiry: at(-100 * day),
+			},
+			want: "lifecycle timestamps disagree with its expiry at the scan time",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := Build("test-snapshot", fixedNow, testSources(1), []ens.Result{test.result})
+			if err == nil {
+				t.Fatalf("Build accepted invalid input")
+			}
+			if !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("error %q does not contain %q", err, test.want)
+			}
+		})
+	}
+}
+
+// TestBuildAcceptsEverySoonWindowLabel proves the status check does not reject the
+// labels a real scan produces. The soon window is a CLI setting rather than a wire
+// field, so a status and its soon sibling are both valid for the same timestamps,
+// and a name that was never registered stays available with no timestamps at all.
+func TestBuildAcceptsEverySoonWindowLabel(t *testing.T) {
+	day := 24 * time.Hour
+	classified := func(offset time.Duration, soon time.Duration) ens.Result {
+		expiry := fixedNow.Add(offset)
+		return ens.Classify(ens.Lookup{Name: "zap", Found: true, Expiry: &expiry}, fixedNow, soon)
+	}
+
+	tests := []struct {
+		name       string
+		result     ens.Result
+		wantStatus ens.Status
+	}{
+		{name: "registered outside the window", result: classified(200*day, testSoon), wantStatus: ens.StatusRegistered},
+		{name: "registered inside the window", result: classified(3*day, testSoon), wantStatus: ens.StatusExpiringSoon},
+		{name: "grace outside the window", result: classified(-10*day, testSoon), wantStatus: ens.StatusGracePeriod},
+		{name: "grace inside the window", result: classified(-87*day, testSoon), wantStatus: ens.StatusGraceEndingSoon},
+		{name: "premium", result: classified(-100*day, testSoon), wantStatus: ens.StatusPremium},
+		{name: "available after premium", result: classified(-200*day, testSoon), wantStatus: ens.StatusAvailable},
+		{
+			name:       "never registered",
+			result:     ens.Classify(ens.Lookup{Name: "zap"}, fixedNow, testSoon),
+			wantStatus: ens.StatusAvailable,
+		},
+		{
+			name:       "indexed without a usable expiry",
+			result:     ens.Classify(ens.Lookup{Name: "zap", Found: true}, fixedNow, testSoon),
+			wantStatus: ens.StatusUnknown,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if test.result.Status != test.wantStatus {
+				t.Fatalf("test case classifies as %q, want %q", test.result.Status, test.wantStatus)
+			}
+			snapshot, err := Build("test-snapshot", fixedNow, testSources(1), []ens.Result{test.result})
+			if err != nil {
+				t.Fatalf("Build rejected a %q result produced by ens.Classify: %v", test.wantStatus, err)
+			}
+			if snapshot.Results[0].Status != test.wantStatus {
+				t.Fatalf("stored status is %q, want %q", snapshot.Results[0].Status, test.wantStatus)
+			}
+		})
+	}
+}
+
 func TestValidateRejectsNonCanonicalSnapshot(t *testing.T) {
 	base := mustBuild(t, lifecycleResults(t, fixedNow))
 
@@ -399,6 +542,30 @@ func TestValidateRejectsNonCanonicalSnapshot(t *testing.T) {
 				s.Results[0], s.Results[1] = s.Results[1], s.Results[0]
 			},
 			want: "sorted by name without duplicates",
+		},
+		{
+			// Relabelling a name and matching the counts keeps every derived total
+			// consistent, so only the status check can catch it.
+			name: "status contradicts its timestamps",
+			mutate: func(s *Snapshot) {
+				for i := range s.Results {
+					if s.Results[i].Name == "zap" {
+						s.Results[i].Status = ens.StatusAvailable
+					}
+				}
+				s.Metadata.Counts[ens.StatusRegistered]--
+				s.Metadata.Counts[ens.StatusAvailable]++
+			},
+			want: `is "available" but its timestamps classify as "registered"`,
+		},
+		{
+			// The same snapshot read as if it were scanned much later: the grace
+			// period has ended, so the stored grace-period label no longer holds.
+			name: "scan time moved past the lifecycle boundaries",
+			mutate: func(s *Snapshot) {
+				s.Metadata.ScannedAt = s.Metadata.ScannedAt.Add(365 * 24 * time.Hour)
+			},
+			want: "at the scan time",
 		},
 	}
 

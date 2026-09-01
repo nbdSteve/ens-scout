@@ -6,9 +6,10 @@ import (
 	"sync"
 )
 
-// MemoryStore is an in-memory Store for tests and local runs. It copies chunk
-// bytes on the way in and out, and it refuses to overwrite an existing snapshot
-// ID, so it enforces the same immutability rule a real backend must.
+// MemoryStore is an in-memory Store for tests and local runs. It deep copies
+// chunk bytes and pointers on the way in and out, and it refuses to overwrite an
+// existing snapshot ID, so it enforces the same immutability rule a real backend
+// must. FileStore gets that for free because it serializes to JSON.
 type MemoryStore struct {
 	mutex     sync.RWMutex
 	chunks    map[string][]Chunk
@@ -77,7 +78,7 @@ func (s *MemoryStore) PutLatest(ctx context.Context, latest Latest) error {
 	}
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
-	stored := latest
+	stored := latest.Clone()
 	s.latest = &stored
 	s.published = true
 	return nil
@@ -93,7 +94,7 @@ func (s *MemoryStore) GetLatest(ctx context.Context) (Latest, error) {
 	if !s.published {
 		return Latest{}, fmt.Errorf("latest snapshot pointer: %w", ErrNotFound)
 	}
-	return *s.latest, nil
+	return s.latest.Clone(), nil
 }
 
 // SnapshotIDs returns the stored snapshot IDs in no particular order. It exists

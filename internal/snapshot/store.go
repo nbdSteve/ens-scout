@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"ens-scrape/internal/ens"
 )
 
 // Storage key layout.
@@ -71,7 +73,19 @@ func (l Latest) ResolveScanAge(now time.Time) ScanAge {
 	return l.ScanAge.At(l.ScannedAt, now)
 }
 
-// Validate rejects a pointer that cannot describe a real snapshot.
+// Clone returns a deep copy of a pointer, so a caller cannot reach through the
+// counts map or the source slice and change published or stored state.
+func (l Latest) Clone() Latest {
+	clone := l
+	clone.Counts = cloneCounts(l.Counts)
+	clone.Sources = cloneSources(l.Sources)
+	return clone
+}
+
+// Validate rejects a pointer that cannot describe a real snapshot. The summary
+// fields a client reads without fetching any chunk - the counts, the source
+// lists, and the staleness thresholds - must be internally consistent, because a
+// reader that trusts them has nothing else to check them against.
 func (l Latest) Validate() error {
 	if l.FormatVersion != FormatVersion {
 		return fmt.Errorf("unsupported latest pointer format version %d (want %d)", l.FormatVersion, FormatVersion)
@@ -85,6 +99,14 @@ func (l Latest) Validate() error {
 	if l.PublishedAt.IsZero() {
 		return fmt.Errorf("latest pointer needs a publication time")
 	}
+	// Both timestamps are canonical for the same reason the snapshot scan time
+	// is: a hand-written pointer must not be able to move the serialized bytes.
+	if !l.ScannedAt.Equal(canonicalTime(l.ScannedAt)) || l.ScannedAt.Location() != time.UTC {
+		return fmt.Errorf("latest pointer scan time must be UTC with second precision")
+	}
+	if !l.PublishedAt.Equal(canonicalTime(l.PublishedAt)) || l.PublishedAt.Location() != time.UTC {
+		return fmt.Errorf("latest pointer publication time must be UTC with second precision")
+	}
 	if len(l.Checksum) != 64 || len(l.CompressedChecksum) != 64 {
 		return fmt.Errorf("latest pointer needs hex SHA-256 checksums")
 	}
@@ -97,8 +119,39 @@ func (l Latest) Validate() error {
 	if l.Names < 0 {
 		return fmt.Errorf("latest pointer reports a negative name count")
 	}
-	if _, err := DeriveScanAgeInput(l.Sources); err != nil {
+
+	expectedSources, err := normalizeSources(l.Sources)
+	if err != nil {
 		return err
+	}
+	if len(expectedSources) != len(l.Sources) {
+		return fmt.Errorf("latest pointer source lists are not canonical")
+	}
+	for i, source := range l.Sources {
+		if source != expectedSources[i] {
+			return fmt.Errorf("latest pointer source lists are not sorted by id")
+		}
+	}
+
+	scanAge, err := DeriveScanAgeInput(l.Sources)
+	if err != nil {
+		return err
+	}
+	if l.ScanAge != scanAge {
+		return fmt.Errorf("latest pointer scan age thresholds disagree with the source cadences")
+	}
+
+	if len(l.Counts) != len(ens.Statuses) {
+		return fmt.Errorf("latest pointer counts must list every lifecycle status")
+	}
+	for _, status := range ens.Statuses {
+		count, ok := l.Counts[status]
+		if !ok {
+			return fmt.Errorf("latest pointer counts are missing status %q", status)
+		}
+		if count < 0 {
+			return fmt.Errorf("latest pointer reports a negative %q count", status)
+		}
 	}
 	return nil
 }

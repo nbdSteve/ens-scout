@@ -79,6 +79,27 @@ type SourceList struct {
 // branch on a missing key.
 type Counts map[ens.Status]int
 
+// cloneCounts copies a counts map so a caller cannot reach through it and change
+// snapshot metadata or stored pointer state.
+func cloneCounts(counts Counts) Counts {
+	if counts == nil {
+		return nil
+	}
+	clone := make(Counts, len(counts))
+	for status, count := range counts {
+		clone[status] = count
+	}
+	return clone
+}
+
+// cloneSources copies a source list slice for the same reason.
+func cloneSources(sources []SourceList) []SourceList {
+	if sources == nil {
+		return nil
+	}
+	return append([]SourceList(nil), sources...)
+}
+
 // ScanAgeInput carries the cadence-derived thresholds a client needs to judge
 // staleness itself. A snapshot never publishes a stale flag, because such a
 // flag ages out between the response and the render.
@@ -174,9 +195,10 @@ func Build(snapshotID string, scannedAt time.Time, sources []SourceList, results
 		return Snapshot{}, err
 	}
 
+	scanTime := canonicalTime(scannedAt)
 	normalizedResults := make([]ens.Result, 0, len(results))
 	for _, result := range results {
-		normalized, err := normalizeResult(result)
+		normalized, err := normalizeResult(result, scanTime)
 		if err != nil {
 			return Snapshot{}, err
 		}
@@ -188,7 +210,7 @@ func Build(snapshotID string, scannedAt time.Time, sources []SourceList, results
 		Metadata: Metadata{
 			FormatVersion: FormatVersion,
 			SnapshotID:    snapshotID,
-			ScannedAt:     canonicalTime(scannedAt),
+			ScannedAt:     scanTime,
 			Sources:       normalizedSources,
 			ScanAge:       scanAge,
 			Names:         len(normalizedResults),
@@ -280,7 +302,7 @@ func (s Snapshot) Validate() error {
 
 	previous := ""
 	for i, result := range s.Results {
-		normalized, err := normalizeResult(result)
+		normalized, err := normalizeResult(result, s.Metadata.ScannedAt)
 		if err != nil {
 			return err
 		}
@@ -348,8 +370,9 @@ func normalizeSources(sources []SourceList) ([]SourceList, error) {
 }
 
 // normalizeResult puts one lifecycle result into canonical form and rejects
-// results that break the ENS lifecycle rules in internal/ens.
-func normalizeResult(result ens.Result) (ens.Result, error) {
+// results that break the ENS lifecycle rules in internal/ens. scannedAt is the
+// snapshot scan time, which is the instant the published status must describe.
+func normalizeResult(result ens.Result, scannedAt time.Time) (ens.Result, error) {
 	label, err := names.Normalize(result.Name)
 	if err != nil {
 		return ens.Result{}, fmt.Errorf("result name %q: %w", result.Name, err)
@@ -392,7 +415,53 @@ func normalizeResult(result ens.Result) (ens.Result, error) {
 			return ens.Result{}, fmt.Errorf("result %q premium end does not follow the ENS premium period", result.Name)
 		}
 	}
+	if err := checkStatusAgainstScanTime(normalized, scannedAt); err != nil {
+		return ens.Result{}, err
+	}
 	return normalized, nil
+}
+
+// checkStatusAgainstScanTime proves the published status is one ens.Classify
+// could produce from the published timestamps at the scan time, so a snapshot can
+// never publish a lifecycle label that its own timestamps contradict.
+//
+// The soon window is not on the wire, so classification runs with a zero window
+// and each soon status is accepted wherever its steady-state sibling is. That is
+// the only slack: every governing boundary must still fall on the correct side of
+// the scan time.
+func checkStatusAgainstScanTime(result ens.Result, scannedAt time.Time) error {
+	if result.Expiry == nil {
+		// Without an expiry the only honest labels are a name that was never
+		// registered and an indexed registration whose expiry is missing or
+		// malformed. A registered name with no expiry is unknown, not available.
+		if result.Status != ens.StatusAvailable && result.Status != ens.StatusUnknown {
+			return fmt.Errorf("result %q is %q but carries no expiry", result.Name, result.Status)
+		}
+		return nil
+	}
+
+	lookup := ens.Lookup{Name: result.Name, Found: true, Expiry: result.Expiry}
+	expected := ens.Classify(lookup, scannedAt, 0)
+	if !timePointersEqual(result.GraceEnds, expected.GraceEnds) || !timePointersEqual(result.PremiumEnds, expected.PremiumEnds) {
+		return fmt.Errorf("result %q lifecycle timestamps disagree with its expiry at the scan time", result.Name)
+	}
+	if result.Status == expected.Status || result.Status == soonSibling(expected.Status) {
+		return nil
+	}
+	return fmt.Errorf("result %q is %q but its timestamps classify as %q at the scan time", result.Name, result.Status, expected.Status)
+}
+
+// soonSibling maps a steady-state status to the status ens.Classify produces for
+// the same timestamps inside a positive soon window.
+func soonSibling(status ens.Status) ens.Status {
+	switch status {
+	case ens.StatusRegistered:
+		return ens.StatusExpiringSoon
+	case ens.StatusGracePeriod:
+		return ens.StatusGraceEndingSoon
+	default:
+		return status
+	}
 }
 
 // sortResults applies the canonical order: byte-wise ascending name. Labels are
