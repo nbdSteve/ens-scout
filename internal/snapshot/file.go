@@ -3,6 +3,7 @@ package snapshot
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -47,37 +48,37 @@ func NewFileStore(dir string) *FileStore {
 }
 
 // PutChunks writes chunks under a snapshot ID, applying the ChunkStore rule to
-// anything already in the directory. A directory holding only a prefix of a
-// previous interrupted write is replaced, so a retry of that write succeeds.
+// anything already in the directory. It only ever creates chunk files that are
+// missing, so a directory holding a prefix of an interrupted write is completed
+// and no existing chunk file is rewritten or removed.
+//
+// A chunk directory that cannot be read is left alone and the read error is
+// returned, because a cancelled context or an I/O failure says nothing about what
+// is stored and must not be able to destroy a published snapshot.
 func (s *FileStore) PutChunks(ctx context.Context, snapshotID string, chunks []Chunk) error {
 	if err := checkPutChunks(ctx, snapshotID, chunks); err != nil {
 		return err
 	}
-	dir := s.snapshotDir(snapshotID)
-	if _, err := os.Stat(dir); err == nil {
-		existing, readErr := s.GetChunks(ctx, snapshotID)
-		decision, err := decideChunkWrite(snapshotID, existing, readErr, chunks)
-		if err != nil {
-			return err
-		}
-		switch decision {
-		case chunkWriteSkip:
-			return nil
-		case chunkWriteRefuse:
-			return errChunksImmutable(snapshotID)
-		}
-		// Clearing the directory keeps a longer previous set from leaving stray
-		// chunk files behind the shorter one being written.
-		if err := os.RemoveAll(dir); err != nil {
-			return err
-		}
-	} else if !os.IsNotExist(err) {
+	existing, err := s.GetChunks(ctx, snapshotID)
+	if err != nil && !errors.Is(err, ErrNotFound) {
 		return err
 	}
+	decision, missing, err := decideChunkWrite(existing, chunks)
+	if err != nil {
+		return err
+	}
+	switch decision {
+	case chunkWriteSkip:
+		return nil
+	case chunkWriteRefuse:
+		return errChunksImmutable(snapshotID)
+	}
+
+	dir := s.snapshotDir(snapshotID)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	for _, chunk := range chunks {
+	for _, chunk := range missing {
 		encoded, err := json.Marshal(chunk)
 		if err != nil {
 			return err

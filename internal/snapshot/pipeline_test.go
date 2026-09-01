@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"sort"
+	"sync"
 	"testing"
 	"time"
 
@@ -34,7 +35,13 @@ func TestScanToSnapshotThroughTheRealClient(t *testing.T) {
 		"amber.eth": -200 * 24 * time.Hour,
 	}
 
-	var requested []string
+	// Two workers look names up concurrently and httptest serves each request in
+	// its own goroutine, so the recorded names need a lock. Concurrent lookups are
+	// part of what this test exercises, so the worker count stays as it is.
+	var (
+		requestedMutex sync.Mutex
+		requested      []string
+	)
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		var payload struct {
 			Variables struct {
@@ -46,7 +53,9 @@ func TestScanToSnapshotThroughTheRealClient(t *testing.T) {
 			http.Error(writer, "bad request", http.StatusBadRequest)
 			return
 		}
+		requestedMutex.Lock()
 		requested = append(requested, payload.Variables.Names...)
+		requestedMutex.Unlock()
 
 		registrations := make([]string, 0, len(payload.Variables.Names))
 		for _, name := range payload.Variables.Names {
@@ -79,15 +88,20 @@ func TestScanToSnapshotThroughTheRealClient(t *testing.T) {
 		t.Fatalf("checker.Run: %v", err)
 	}
 
-	// The client asks the subgraph for fully-qualified names.
-	sort.Strings(requested)
+	// The client asks the subgraph for fully-qualified names. Batches complete out
+	// of order, so compare the sorted set rather than the arrival order.
+	requestedMutex.Lock()
+	asked := append([]string(nil), requested...)
+	requestedMutex.Unlock()
+	sort.Strings(asked)
+
 	wantRequested := []string{"amber.eth", "dusk.eth", "orb.eth", "zap.eth"}
-	if len(requested) != len(wantRequested) {
-		t.Fatalf("the client asked for %v, want %v", requested, wantRequested)
+	if len(asked) != len(wantRequested) {
+		t.Fatalf("the client asked for %v, want %v", asked, wantRequested)
 	}
 	for i, want := range wantRequested {
-		if requested[i] != want {
-			t.Fatalf("the client asked for %v, want %v", requested, wantRequested)
+		if asked[i] != want {
+			t.Fatalf("the client asked for %v, want %v", asked, wantRequested)
 		}
 	}
 

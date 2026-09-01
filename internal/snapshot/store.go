@@ -177,22 +177,29 @@ func (l Latest) Validate() error {
 
 // ChunkStore stores immutable snapshot chunks.
 //
-// A complete stored chunk set is never revised. An incomplete one is not a
-// snapshot yet, so it carries no immutability claim: a chunk write can fail part
-// way through, and a backend that retries unprocessed batch writes leaves a
-// partial set behind as a matter of course. Refusing that retry would strand the
-// scan under an ID that can never be published. Implementations must apply this
-// rule to a write against an existing snapshot ID:
+// A new scan gets a new snapshot ID, and a stored chunk is never mutated in place
+// and never removed to make a write fit. A chunk write can still fail part way
+// through, and a backend that retries unprocessed batch writes leaves a partial
+// set behind as a matter of course, so a write against an existing snapshot ID
+// resumes that interrupted write rather than replacing it. Implementations
+// compare the stored chunks with the incoming ones index by index and must apply
+// this rule:
 //
-//   - a stored set that assembles and is byte-identical to the incoming chunks
-//     succeeds and writes nothing;
-//   - a stored set that assembles but differs in bytes, count, order, index, or
-//     checksum is rejected, because that would revise a published snapshot;
-//   - a stored set that cannot be read, or that reads but does not assemble into
-//     a complete self-consistent set, is replaced.
+//   - a stored chunk that is byte-identical to the incoming chunk at the same
+//     index is left exactly as it is, so agreeing immutable data is never
+//     rewritten;
+//   - a write whose every incoming chunk is already stored succeeds and stores
+//     nothing;
+//   - only the incoming chunks whose index is not stored yet are written;
+//   - the whole write is refused with the immutable-set error when a stored chunk
+//     conflicts with the incoming chunk at its index, when one index is stored
+//     twice, or when a stored index falls outside the incoming set. An incomplete
+//     stored set earns no exemption from this: the incoming set is always
+//     complete, so any of those means a different payload holds the same ID.
 //
-// The pointer is written last and names only verified chunks, so a replaceable
-// set is one no reader was ever sent to.
+// Chunks that cannot be read are evidence of nothing. A read failure is returned
+// to the caller to retry, and must never select a write, a removal, or a
+// truncation, because a transient error would then destroy a published snapshot.
 type ChunkStore interface {
 	PutChunks(ctx context.Context, snapshotID string, chunks []Chunk) error
 	GetChunks(ctx context.Context, snapshotID string) ([]Chunk, error)
@@ -204,33 +211,62 @@ type ChunkStore interface {
 type chunkWriteDecision int
 
 const (
-	// chunkWriteReplace covers a stored set that is unreadable or incomplete.
-	chunkWriteReplace chunkWriteDecision = iota
-	// chunkWriteSkip is the idempotent no-op for an identical complete set.
+	// chunkWriteRefuse protects stored chunks from being revised. It is the zero
+	// value so a decision that is never set cannot authorize a write.
+	chunkWriteRefuse chunkWriteDecision = iota
+	// chunkWriteSkip is the idempotent no-op for a set that is already stored.
 	chunkWriteSkip
-	// chunkWriteRefuse protects a complete set from being revised.
-	chunkWriteRefuse
+	// chunkWriteResume writes the chunks an interrupted write did not store.
+	chunkWriteResume
 )
 
-// decideChunkWrite applies the ChunkStore rule. storedErr is whatever the store
-// hit reading the existing chunks back, which counts as "cannot be read".
-func decideChunkWrite(snapshotID string, stored []Chunk, storedErr error, incoming []Chunk) (chunkWriteDecision, error) {
-	if storedErr != nil {
-		return chunkWriteReplace, nil
+// decideChunkWrite applies the ChunkStore rule to chunks already stored under the
+// snapshot ID. On chunkWriteResume the second return value is the subset of
+// incoming chunks that are missing and may be written; every other stored chunk
+// stays untouched.
+//
+// A caller that could not read the stored chunks must not call this: an
+// unreadable set is not a statement about what is stored, so it can neither
+// authorize a write nor prove a conflict.
+func decideChunkWrite(stored, incoming []Chunk) (chunkWriteDecision, []Chunk, error) {
+	if len(stored) == 0 {
+		return chunkWriteResume, incoming, nil
 	}
-	// Assemble is the definition of a complete self-consistent set: it proves the
-	// count, the index order, the sizes, and every chunk checksum.
-	if _, err := Assemble(snapshotID, stored); err != nil {
-		return chunkWriteReplace, nil
+
+	storedByIndex := make(map[int]Chunk, len(stored))
+	for _, chunk := range stored {
+		if _, exists := storedByIndex[chunk.Index]; exists {
+			return chunkWriteRefuse, nil, nil
+		}
+		storedByIndex[chunk.Index] = chunk
 	}
-	identical, err := chunksIdentical(stored, incoming)
-	if err != nil {
-		return chunkWriteRefuse, err
+	// checkPutChunks assembles the incoming set first, so its length is the whole
+	// chunk count. A stored index outside it belongs to some other payload.
+	for index := range storedByIndex {
+		if index < 0 || index >= len(incoming) {
+			return chunkWriteRefuse, nil, nil
+		}
 	}
-	if identical {
-		return chunkWriteSkip, nil
+
+	missing := make([]Chunk, 0, len(incoming))
+	for _, want := range incoming {
+		have, exists := storedByIndex[want.Index]
+		if !exists {
+			missing = append(missing, want)
+			continue
+		}
+		identical, err := chunkIdentical(have, want)
+		if err != nil {
+			return chunkWriteRefuse, nil, err
+		}
+		if !identical {
+			return chunkWriteRefuse, nil, nil
+		}
 	}
-	return chunkWriteRefuse, nil
+	if len(missing) == 0 {
+		return chunkWriteSkip, nil, nil
+	}
+	return chunkWriteResume, missing, nil
 }
 
 // errChunksImmutable is the refusal for a complete stored set that differs.
@@ -247,19 +283,30 @@ func chunksIdentical(stored, incoming []Chunk) (bool, error) {
 		return false, nil
 	}
 	for i := range stored {
-		left, err := json.Marshal(stored[i])
+		identical, err := chunkIdentical(stored[i], incoming[i])
 		if err != nil {
 			return false, err
 		}
-		right, err := json.Marshal(incoming[i])
-		if err != nil {
-			return false, err
-		}
-		if !bytes.Equal(left, right) {
+		if !identical {
 			return false, nil
 		}
 	}
 	return true, nil
+}
+
+// chunkIdentical compares one chunk with another by canonical JSON, so the whole
+// envelope counts and not just the payload bytes: a difference in index, count, or
+// checksum is never treated as identical.
+func chunkIdentical(stored, incoming Chunk) (bool, error) {
+	left, err := json.Marshal(stored)
+	if err != nil {
+		return false, err
+	}
+	right, err := json.Marshal(incoming)
+	if err != nil {
+		return false, err
+	}
+	return bytes.Equal(left, right), nil
 }
 
 // LatestStore stores the single pointer to the newest valid snapshot.

@@ -87,9 +87,14 @@ scanner, the read API, the local preview, and the browser all agree.
   byte-identical chunks as a no-op and rejects any real difference, and pointer
   identity excludes `PublishedAt` because that describes the write, not the scan.
   A run whose pointer write fails has already stored and verified every chunk, so
-  refusing the retry would strand a complete scan. Immutability protects only a
-  complete stored set: one that cannot be read, or that does not assemble, is a
-  half-finished write no pointer names, so it is replaced rather than refused.
+  refusing the retry would strand a complete scan.
+- Resume an interrupted chunk write per chunk. `PutChunks` compares index by
+  index, leaves every agreeing stored chunk exactly as it is, writes only the
+  missing indices, and refuses the whole write when any index conflicts. It never
+  rewrites or removes a stored chunk, so an incomplete set is completed rather than
+  replaced. Chunks that cannot be read are evidence of nothing: return the read
+  error, because treating a cancelled context or an I/O failure as "not stored"
+  would let a retry destroy the snapshot the pointer names.
 - Pass `checker.Run`'s `Stats.ClassifiedAt` to `snapshot.Build` as the scan time.
   Every published status is re-checked against that instant, so sampling the
   clock again after a long scan rejects the whole snapshot.

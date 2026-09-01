@@ -3,13 +3,18 @@ package snapshot
 import (
 	"context"
 	"fmt"
+	"sort"
 	"sync"
 )
 
 // MemoryStore is an in-memory Store for tests and local runs. It deep copies
-// chunk bytes and pointers on the way in and out, and it refuses to overwrite an
-// existing snapshot ID, so it enforces the same immutability rule a real backend
-// must. FileStore gets that for free because it serializes to JSON.
+// chunk bytes and pointers on the way in and out, so a caller cannot reach into
+// stored state, and it applies the same ChunkStore and LatestStore rules a real
+// backend must: a new scan gets a new snapshot ID, a stored chunk is never mutated
+// in place, a write whose chunks are all stored already is an idempotent no-op, a
+// conflicting write is refused, and only a chunk index missing from an interrupted
+// write is filled in. FileStore gets the copying for free because it serializes to
+// JSON.
 type MemoryStore struct {
 	mutex     sync.RWMutex
 	chunks    map[string][]Chunk
@@ -23,27 +28,40 @@ func NewMemoryStore() *MemoryStore {
 }
 
 // PutChunks stores chunks under a snapshot ID, applying the ChunkStore rule to
-// anything already stored there.
+// anything already stored there. Only missing indices are added, and the stored
+// chunks keep the exact bytes they already held.
 func (s *MemoryStore) PutChunks(ctx context.Context, snapshotID string, chunks []Chunk) error {
 	if err := checkPutChunks(ctx, snapshotID, chunks); err != nil {
 		return err
 	}
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
-	if existing, exists := s.chunks[snapshotID]; exists {
-		decision, err := decideChunkWrite(snapshotID, existing, nil, chunks)
-		if err != nil {
-			return err
-		}
-		switch decision {
-		case chunkWriteSkip:
-			return nil
-		case chunkWriteRefuse:
-			return errChunksImmutable(snapshotID)
-		}
+	existing := s.chunks[snapshotID]
+	decision, missing, err := decideChunkWrite(existing, chunks)
+	if err != nil {
+		return err
 	}
-	s.chunks[snapshotID] = CloneChunks(chunks)
+	switch decision {
+	case chunkWriteSkip:
+		return nil
+	case chunkWriteRefuse:
+		return errChunksImmutable(snapshotID)
+	}
+	s.chunks[snapshotID] = mergeStoredChunks(existing, missing)
 	return nil
+}
+
+// mergeStoredChunks adds clones of the missing chunks to the stored ones and
+// returns them in index order. The stored entries are carried across by value, so
+// their payload bytes are the same arrays the store already held.
+func mergeStoredChunks(stored, missing []Chunk) []Chunk {
+	merged := make([]Chunk, 0, len(stored)+len(missing))
+	merged = append(merged, stored...)
+	merged = append(merged, CloneChunks(missing)...)
+	sort.Slice(merged, func(i, j int) bool {
+		return merged[i].Index < merged[j].Index
+	})
+	return merged
 }
 
 // GetChunks returns the stored chunks in index order.

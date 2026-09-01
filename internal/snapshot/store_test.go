@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -180,12 +181,11 @@ func TestPutChunksIsIdempotentButNeverRevises(t *testing.T) {
 	}
 }
 
-// TestPutChunksReplacesAnIncompleteStoredSet covers the other half of the
-// ChunkStore rule: immutability protects a complete stored set, but a set left
-// half-written by an interrupted call is not a snapshot and must not lock the
-// snapshot ID. Each case damages the stored chunks, then retries the original
-// write and requires it to succeed and leave the full set behind.
-func TestPutChunksReplacesAnIncompleteStoredSet(t *testing.T) {
+// TestPutChunksResumesAnInterruptedWrite covers the resume half of the ChunkStore
+// rule: a set left half-written by an interrupted call must not lock the snapshot
+// ID, and completing it must only add the missing indices. Each case removes some
+// stored chunks, retries the original write, and requires the full set back.
+func TestPutChunksResumesAnInterruptedWrite(t *testing.T) {
 	ctx := context.Background()
 	snapshot := largeSnapshot(t, chunkTestResults)
 	payload, err := Encode(snapshot)
@@ -198,40 +198,15 @@ func TestPutChunksReplacesAnIncompleteStoredSet(t *testing.T) {
 	snapshotID := snapshot.Metadata.SnapshotID
 
 	tests := []struct {
-		name   string
-		damage func(t *testing.T, dir string, store Store)
+		name string
+		// remove is the half-open index range an interrupted write never stored.
+		from int
+		to   int
 	}{
-		{
-			// The shape an interrupted write leaves behind: a strict prefix.
-			name: "only a prefix of the chunks was written",
-			damage: func(t *testing.T, dir string, store Store) {
-				t.Helper()
-				removeStoredChunks(t, dir, store, snapshotID, 1, len(payload.Chunks))
-			},
-		},
-		{
-			name: "only the final chunk is missing",
-			damage: func(t *testing.T, dir string, store Store) {
-				t.Helper()
-				removeStoredChunks(t, dir, store, snapshotID, len(payload.Chunks)-1, len(payload.Chunks))
-			},
-		},
-		{
-			name: "a middle chunk is missing",
-			damage: func(t *testing.T, dir string, store Store) {
-				t.Helper()
-				removeStoredChunks(t, dir, store, snapshotID, 1, 2)
-			},
-		},
-		{
-			// A set that reads but fails its own checksum cannot be proved to
-			// match, so it is replaceable rather than immutable.
-			name: "a stored chunk no longer matches its checksum",
-			damage: func(t *testing.T, dir string, store Store) {
-				t.Helper()
-				corruptStoredChunk(t, dir, store, snapshotID, 0)
-			},
-		},
+		{name: "only the first chunk was written", from: 1, to: len(payload.Chunks)},
+		{name: "only the final chunk is missing", from: len(payload.Chunks) - 1, to: len(payload.Chunks)},
+		{name: "a middle chunk is missing", from: 1, to: 2},
+		{name: "every chunk is missing", from: 0, to: len(payload.Chunks)},
 	}
 
 	for _, test := range tests {
@@ -246,7 +221,21 @@ func TestPutChunksReplacesAnIncompleteStoredSet(t *testing.T) {
 					if err := store.PutChunks(ctx, snapshotID, payload.Chunks); err != nil {
 						t.Fatalf("PutChunks of the first copy: %v", err)
 					}
-					test.damage(t, dir, store)
+					// Record the identity of a chunk the interrupted write kept, so
+					// the resume can be shown not to have touched it.
+					survivor := -1
+					for index := range payload.Chunks {
+						if index < test.from || index >= test.to {
+							survivor = index
+							break
+						}
+					}
+					var untouched string
+					if survivor >= 0 {
+						untouched = storedChunkFingerprint(t, dir, store, snapshotID, survivor)
+					}
+
+					removeStoredChunks(t, dir, store, snapshotID, test.from, test.to)
 
 					if err := store.PutChunks(ctx, snapshotID, payload.Chunks); err != nil {
 						t.Fatalf("PutChunks refused to complete an interrupted write: %v", err)
@@ -266,10 +255,187 @@ func TestPutChunksReplacesAnIncompleteStoredSet(t *testing.T) {
 					if _, err := Decode(snapshotID, stored); err != nil {
 						t.Fatalf("the completed set does not decode: %v", err)
 					}
+					if survivor >= 0 {
+						if got := storedChunkFingerprint(t, dir, store, snapshotID, survivor); got != untouched {
+							t.Fatalf("the resume rewrote stored chunk %d", survivor)
+						}
+					}
 				})
 			}
 		})
 	}
+}
+
+// TestPutChunksRefusesAConflictingStoredChunk proves the resume never overwrites
+// disagreeing data. A stored chunk that conflicts with the incoming chunk at its
+// index blocks the whole write, even when the stored set is incomplete, and the
+// stored bytes survive the refusal.
+func TestPutChunksRefusesAConflictingStoredChunk(t *testing.T) {
+	ctx := context.Background()
+	snapshot := largeSnapshot(t, chunkTestResults)
+	payload, err := Encode(snapshot)
+	if err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+	if len(payload.Chunks) < 3 {
+		t.Fatalf("this test needs at least 3 chunks, got %d", len(payload.Chunks))
+	}
+	snapshotID := snapshot.Metadata.SnapshotID
+
+	tests := []struct {
+		name     string
+		complete bool
+	}{
+		{name: "in a complete stored set", complete: true},
+		{name: "in an incomplete stored set", complete: false},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			dir := t.TempDir()
+			stores := map[string]Store{
+				"memory": NewMemoryStore(),
+				"file":   NewFileStore(dir),
+			}
+			for name, store := range stores {
+				t.Run(name, func(t *testing.T) {
+					if err := store.PutChunks(ctx, snapshotID, payload.Chunks); err != nil {
+						t.Fatalf("PutChunks of the first copy: %v", err)
+					}
+					// Chunk 0 now disagrees with the incoming chunk 0.
+					corruptStoredChunk(t, dir, store, snapshotID, 0)
+					if !test.complete {
+						removeStoredChunks(t, dir, store, snapshotID, 2, len(payload.Chunks))
+					}
+					conflicting := storedChunkFingerprint(t, dir, store, snapshotID, 0)
+
+					err := store.PutChunks(ctx, snapshotID, payload.Chunks)
+					if err == nil {
+						t.Fatal("PutChunks overwrote a conflicting stored chunk")
+					}
+					if !strings.Contains(err.Error(), "immutable") {
+						t.Fatalf("error %q does not mention immutability", err)
+					}
+					if got := storedChunkFingerprint(t, dir, store, snapshotID, 0); got != conflicting {
+						t.Fatal("the refused write still changed stored chunk 0")
+					}
+				})
+			}
+		})
+	}
+}
+
+// TestFileStorePutChunksKeepsStoredChunksWhenTheyCannotBeRead is the regression
+// for the destructive path: a read failure is not evidence that chunks are
+// missing, so it must surface as an error and leave the published set intact.
+// Before this, the error selected a wholesale replace that deleted the directory.
+func TestFileStorePutChunksKeepsStoredChunksWhenTheyCannotBeRead(t *testing.T) {
+	snapshot := largeSnapshot(t, chunkTestResults)
+	payload, err := Encode(snapshot)
+	if err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+	snapshotID := snapshot.Metadata.SnapshotID
+
+	tests := []struct {
+		name    string
+		prepare func(t *testing.T, dir string) context.Context
+		want    string
+	}{
+		{
+			// A Lambda timeout or a SIGTERM lands here: the directory is complete,
+			// but the read of it never finishes.
+			name: "the context is cancelled before the read",
+			prepare: func(t *testing.T, dir string) context.Context {
+				t.Helper()
+				ctx, cancel := context.WithCancel(context.Background())
+				cancel()
+				return ctx
+			},
+			want: context.Canceled.Error(),
+		},
+		{
+			name: "a stored chunk file is not decodable",
+			prepare: func(t *testing.T, dir string) context.Context {
+				t.Helper()
+				path := chunkPath(dir, snapshotID, 0)
+				if err := os.WriteFile(path, []byte("not a chunk"), 0o644); err != nil {
+					t.Fatalf("damage the chunk file: %v", err)
+				}
+				return context.Background()
+			},
+			want: "chunk file",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			dir := t.TempDir()
+			store := NewFileStore(dir)
+			if err := store.PutChunks(context.Background(), snapshotID, payload.Chunks); err != nil {
+				t.Fatalf("PutChunks: %v", err)
+			}
+
+			before := chunkFileNames(t, dir, snapshotID)
+			ctx := test.prepare(t, dir)
+
+			err := store.PutChunks(ctx, snapshotID, payload.Chunks)
+			if err == nil {
+				t.Fatal("PutChunks proceeded despite being unable to read the stored chunks")
+			}
+			if !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("error %q does not contain %q", err, test.want)
+			}
+
+			after := chunkFileNames(t, dir, snapshotID)
+			if len(after) != len(before) {
+				t.Fatalf("the store holds %d chunk files, want the %d it started with", len(after), len(before))
+			}
+			for i := range before {
+				if after[i] != before[i] {
+					t.Fatalf("chunk files changed from %v to %v", before, after)
+				}
+			}
+		})
+	}
+}
+
+// chunkFileNames lists the chunk file names of one stored snapshot. The layout is
+// FileStore's own documented on-disk contract, so a test may read it directly.
+func chunkFileNames(t *testing.T, dir, snapshotID string) []string {
+	t.Helper()
+	entries, err := os.ReadDir(filepath.Join(dir, fileStoreChunkDir, snapshotID))
+	if err != nil {
+		t.Fatalf("read the chunk directory: %v", err)
+	}
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		names = append(names, entry.Name())
+	}
+	sort.Strings(names)
+	return names
+}
+
+// storedChunkFingerprint returns a stable identity for one stored chunk, so a test
+// can prove a later write left it exactly as it was.
+func storedChunkFingerprint(t *testing.T, dir string, store Store, snapshotID string, index int) string {
+	t.Helper()
+	stored, err := store.GetChunks(context.Background(), snapshotID)
+	if err != nil {
+		t.Fatalf("GetChunks: %v", err)
+	}
+	for _, chunk := range stored {
+		if chunk.Index != index {
+			continue
+		}
+		encoded, err := json.Marshal(chunk)
+		if err != nil {
+			t.Fatalf("marshal chunk: %v", err)
+		}
+		return checksum(encoded)
+	}
+	t.Fatalf("snapshot %s has no stored chunk %d", snapshotID, index)
+	return ""
 }
 
 // TestPublishRecoversFromAnInterruptedChunkWrite is the end-to-end version: a

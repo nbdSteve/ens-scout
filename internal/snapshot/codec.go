@@ -55,8 +55,11 @@ type Payload struct {
 	Chunks             []Chunk
 }
 
-// Chunk is one immutable slice of a compressed snapshot. Chunks are never
-// rewritten: a new scan gets a new snapshot ID and a new set of chunks.
+// Chunk is one immutable slice of a compressed snapshot. A new scan gets a new
+// snapshot ID and a new set of chunks, and a stored chunk is never rewritten:
+// storing an identical chunk again is a no-op, a conflicting one is refused, and
+// only an index an interrupted write never stored is filled in. ChunkStore states
+// the whole rule.
 type Chunk struct {
 	SnapshotID string `json:"snapshot_id"`
 	Index      int    `json:"index"`
