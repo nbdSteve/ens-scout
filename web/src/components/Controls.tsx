@@ -3,7 +3,7 @@ import { STATUSES, type Status } from '../snapshot/contract'
 import { STATUS_LABEL } from '../snapshot/lifecycle'
 import type { Attribution } from '../snapshot/attribution'
 import type { SourceList } from '../snapshot/types'
-import { normalizeSearch, type QueryState } from '../state/query'
+import { isFiltered, normalizeSearch, type QueryState } from '../state/query'
 import { useDraft } from '../state/useDraft'
 import { SORT_IDS, SORT_LABEL, isSortId, viewOrDefault, type SortId } from '../state/views'
 
@@ -112,12 +112,7 @@ export function Controls({
     setQuery({ statuses: next })
   }
 
-  const isFiltered =
-    query.search !== '' ||
-    query.statuses.length > 0 ||
-    query.length.min !== null ||
-    query.length.max !== null ||
-    query.list !== null
+  const filtered = isFiltered(query)
 
   return (
     <section aria-labelledby="controls-heading" className="card controls">
@@ -299,7 +294,7 @@ export function Controls({
         <p className="result-count" role="status">
           {total.toLocaleString('en-GB')} {total === 1 ? 'name matches' : 'names match'}
         </p>
-        {isFiltered && <a href={resetHref}>Clear all filters</a>}
+        {filtered && <a href={resetHref}>Clear all filters</a>}
       </div>
     </section>
   )

@@ -41,9 +41,13 @@ export function SummaryCounts({ metadata }: SummaryCountsProps): ReactNode {
           {shown.map((status) => (
             <div className={`count count--${STATUS_TONE[status]}`} key={status}>
               <dt className="count__label">
-                {STATUS_LABEL[status]}
-                {/* The tone is a colour; the meaning has to be readable too. */}
-                <span className="visually-hidden"> - {STATUS_DESCRIPTION[status]}</span>
+                {STATUS_LABEL[status]}{' '}
+                {/*
+                  The tone is a colour; the meaning has to be readable too. The
+                  separator sits outside the span, because text assembled from
+                  several elements is trimmed per element.
+                */}
+                <span className="visually-hidden">- {STATUS_DESCRIPTION[status]}</span>
               </dt>
               <dd className="count__value">{metadata.counts[status].toLocaleString('en-GB')}</dd>
             </div>

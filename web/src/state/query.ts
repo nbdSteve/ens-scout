@@ -264,6 +264,33 @@ export function serializeQuery(state: QueryState): string {
 }
 
 /**
+ * Whether anything is hiding rows the view would otherwise show.
+ *
+ * The view itself is not a filter by this measure, and neither are the sort, the
+ * page, or the simulated clock: none of them is something a visitor would need to
+ * clear to see the rows they expected. Shared by the reset link and the empty
+ * state, so the two cannot disagree about whether there is anything to clear.
+ */
+export function isFiltered(state: QueryState): boolean {
+  return (
+    state.search !== '' ||
+    state.statuses.length > 0 ||
+    state.length.min !== null ||
+    state.length.max !== null ||
+    state.list !== null
+  )
+}
+
+/** The change that clears every filter `isFiltered` reports on. */
+export const CLEAR_FILTERS: Partial<QueryState> = {
+  search: '',
+  statuses: [],
+  length: { min: null, max: null },
+  list: null,
+  page: 1,
+}
+
+/**
  * Applies a change. Anything that alters which rows are shown resets to page one,
  * because a visitor who narrows a list while on page nine should not be shown an
  * empty page.

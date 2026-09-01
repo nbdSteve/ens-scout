@@ -1,20 +1,26 @@
 import { useMemo, type ReactNode } from 'react'
 import { Controls } from './components/Controls'
+import { EmptyState } from './components/EmptyState'
 import { ErrorState } from './components/ErrorState'
 import { LoadingState } from './components/LoadingState'
 import { Notice } from './components/Notice'
+import { Pagination } from './components/Pagination'
+import { ResultsTable } from './components/ResultsTable'
 import { SimulatedClockNotice } from './components/SimulatedClockNotice'
 import { SnapshotStatus } from './components/SnapshotStatus'
 import { StaleWarning } from './components/StaleWarning'
 import { SummaryCounts } from './components/SummaryCounts'
+import { ViewTabs } from './components/ViewTabs'
 import { appConfig, type AppConfig } from './config/env'
 import { FIXTURE_DESCRIPTION } from './data/fixtures'
 import type { Status } from './snapshot/contract'
 import { deriveAttribution } from './snapshot/attribution'
-import { applyQuery, countByStatus } from './state/filter'
+import { applyQuery, countByStatus, filterResults } from './state/filter'
+import { CLEAR_FILTERS, isFiltered } from './state/query'
 import { useNow } from './state/useNow'
 import { useSnapshot, type SnapshotDeps } from './state/useSnapshot'
 import { useUrlState } from './state/useUrlState'
+import { VIEWS, viewOrDefault } from './state/views'
 
 /**
  * The page.
@@ -57,6 +63,26 @@ export function App({ config = appConfig, deps }: AppProps): ReactNode {
         : countByStatus(snapshot.results, query, context),
     [snapshot, query, context],
   )
+  // How many rows each view would show under the filters currently in force. The
+  // view's own status preset is applied and any hand-picked statuses are dropped,
+  // since those belong to the view they were picked in and do not carry across.
+  const viewCounts = useMemo<ReadonlyMap<string, number>>(() => {
+    const counts = new Map<string, number>()
+    if (snapshot !== null) {
+      for (const candidate of VIEWS) {
+        counts.set(
+          candidate.id,
+          filterResults(snapshot.results, { ...query, view: candidate.id, statuses: [] }, context)
+            .length,
+        )
+      }
+    }
+    return counts
+  }, [snapshot, query, context])
+
+  const view = viewOrDefault(query.view)
+  const filtered = isFiltered(query)
+  const resetHref = hrefFor(CLEAR_FILTERS)
 
   return (
     <>
@@ -135,34 +161,47 @@ export function App({ config = appConfig, deps }: AppProps): ReactNode {
                 snapshot={snapshot}
               />
               <SummaryCounts metadata={snapshot.metadata} />
+              <ViewTabs
+                counts={viewCounts}
+                current={view.id}
+                hrefForView={(id) => hrefFor({ view: id })}
+              />
               <Controls
                 attribution={attribution}
                 query={query}
-                resetHref={hrefFor({
-                  search: '',
-                  statuses: [],
-                  length: { min: null, max: null },
-                  list: null,
-                  page: 1,
-                })}
+                resetHref={resetHref}
                 setQuery={setQuery}
                 sources={snapshot.metadata.sources}
                 statusCounts={statusCounts}
                 total={page.total}
               />
-              {/*
-                The result views land in the next change. Until then this says so
-                rather than showing an empty area that looks like a bug.
-              */}
-              <section aria-labelledby="results-heading" className="card" id="results">
-                <h2 className="card__title" id="results-heading">
-                  Names
-                </h2>
-                <p className="placeholder">
-                  {page.total.toLocaleString('en-GB')} of{' '}
-                  {snapshot.metadata.names.toLocaleString('en-GB')} names match. The table, the
-                  per-view tabs, and the countdowns are not part of this change yet.
-                </p>
+              <section aria-labelledby="results-heading" className="card results-card" id="results">
+                <div>
+                  <h2 className="card__title" id="results-heading">
+                    {view.label}
+                  </h2>
+                  <p className="prose">{view.summary}</p>
+                </div>
+                {page.total === 0 ? (
+                  <EmptyState filtered={filtered} resetHref={resetHref} viewLabel={view.label} />
+                ) : (
+                  <>
+                    <ResultsTable
+                      direction={query.direction}
+                      now={now}
+                      rows={page.rows}
+                      sort={query.sort}
+                    />
+                    <Pagination
+                      firstRow={page.firstRow}
+                      hrefForPage={(n) => hrefFor({ page: n })}
+                      lastRow={page.lastRow}
+                      page={page.page}
+                      pageCount={page.pageCount}
+                      total={page.total}
+                    />
+                  </>
+                )}
               </section>
             </>
           )}

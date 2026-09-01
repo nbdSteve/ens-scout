@@ -522,6 +522,67 @@ a:hover {
   border-color: var(--border-strong);
 }
 
+/* ---- views ---- */
+
+/*
+ * The view links scroll sideways on a narrow screen rather than wrapping into a
+ * ragged block. `scrollbar-gutter` is deliberately not set: the row is short and a
+ * reserved gutter would show an empty channel on every wide screen.
+ */
+.views {
+  overflow-x: auto;
+  margin-inline: calc(var(--space-1) * -1);
+  padding: var(--space-1);
+}
+
+.views__list {
+  display: flex;
+  gap: var(--space-2);
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.views__tab {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  white-space: nowrap;
+  padding: var(--space-2) var(--space-4);
+  min-height: 2.75rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--ink-muted);
+  font-weight: 650;
+  text-decoration: none;
+}
+
+.views__tab:hover {
+  border-color: var(--accent);
+  color: var(--ink);
+}
+
+/*
+ * The current view is marked by fill, border, and weight together, not by colour
+ * alone, and `aria-current` carries it for anyone who cannot see any of the three.
+ */
+.views__tab--current {
+  background: var(--accent-quiet);
+  border-color: var(--accent);
+  color: var(--ink);
+}
+
+.views__count {
+  font-size: var(--step--1);
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-muted);
+}
+
+.views__tab--current .views__count {
+  color: var(--ink);
+}
+
 /* ---- controls ---- */
 
 .controls {
@@ -670,6 +731,196 @@ a:hover {
   color: var(--ink-muted);
 }
 
+/* ---- results ---- */
+
+.results-card {
+  display: grid;
+  gap: var(--space-4);
+}
+
+/*
+ * A real table at every width.
+ *
+ * `display: block` on a table, a row, or a cell is the usual way to make one
+ * "responsive", and it silently removes the table roles that let a screen reader
+ * say which column a value is in. So the table stays a table and the layout is
+ * done with column widths and wrapping instead. Three columns fit 320px without
+ * horizontal scrolling.
+ */
+.results {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+}
+
+.results__caption {
+  caption-side: top;
+  text-align: left;
+  color: var(--ink-muted);
+  font-size: var(--step--1);
+  max-width: var(--measure);
+  padding-bottom: var(--space-3);
+}
+
+.results th,
+.results td {
+  padding: var(--space-3) var(--space-2);
+  border-top: 1px solid var(--border);
+  vertical-align: top;
+}
+
+.results thead th {
+  border-top: 0;
+  border-bottom: 1px solid var(--border-strong);
+  font-size: var(--step--1);
+  color: var(--ink-muted);
+  white-space: nowrap;
+  padding-top: 0;
+}
+
+.results tbody tr:hover {
+  background: var(--surface-raised);
+}
+
+.results__name {
+  font-weight: 400;
+  padding-left: 0;
+}
+
+.results__length {
+  display: block;
+  font-size: var(--step--1);
+  color: var(--ink-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+.results__next {
+  padding-right: 0;
+}
+
+.ens-link {
+  font-weight: 650;
+  overflow-wrap: anywhere;
+}
+
+@media (min-width: 48rem) {
+  .results__name {
+    width: 34%;
+  }
+
+  .results__status {
+    width: 12rem;
+  }
+}
+
+/* ---- countdown ---- */
+
+.countdown {
+  display: grid;
+  gap: var(--space-1);
+}
+
+/*
+ * The boundary labels come from the lifecycle data as lowercase phrases, so the
+ * sentence case is applied here. Capitalising them at the source would put display
+ * decisions into the shared vocabulary.
+ */
+.countdown__what::first-letter {
+  text-transform: uppercase;
+}
+
+.countdown__what {
+  font-size: var(--step--1);
+  color: var(--ink-muted);
+}
+
+.countdown__at {
+  font-size: var(--step--1);
+}
+
+.countdown__left {
+  font-size: var(--step-1);
+  line-height: 1.25;
+}
+
+.countdown__value--passed {
+  color: var(--ink-faint);
+  text-decoration: line-through;
+}
+
+.countdown__note {
+  font-size: var(--step--1);
+  color: var(--ink-muted);
+  max-width: 44ch;
+}
+
+/* ---- pagination ---- */
+
+.pager {
+  display: grid;
+  gap: var(--space-3);
+  border-top: 1px solid var(--border);
+  padding-top: var(--space-3);
+}
+
+.pager__range {
+  font-size: var(--step--1);
+  color: var(--ink-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.pager__list {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.pager__page,
+.pager__step {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 2.75rem;
+  min-height: 2.75rem;
+  padding-inline: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-1);
+  background: var(--surface);
+  font-variant-numeric: tabular-nums;
+  text-decoration: none;
+}
+
+.pager__page:hover,
+.pager__step:hover {
+  border-color: var(--accent);
+}
+
+.pager__page--current {
+  background: var(--accent-quiet);
+  border-color: var(--accent);
+  color: var(--ink);
+  font-weight: 650;
+}
+
+/* At the first or last page there is nowhere to go, so this is not a link. */
+.pager__step--off {
+  color: var(--ink-faint);
+  border-style: dashed;
+}
+
+.pager__step--off:hover {
+  border-color: var(--border);
+}
+
+.pager__gap {
+  color: var(--ink-faint);
+  padding-inline: var(--space-1);
+}
+
 /* ---- states ---- */
 
 .state {
@@ -697,13 +948,6 @@ a:hover {
   to {
     transform: rotate(360deg);
   }
-}
-
-.placeholder {
-  border: 1px dashed var(--border-strong);
-  border-radius: var(--radius-2);
-  padding: var(--space-5);
-  color: var(--ink-muted);
 }
 
 /* ---- footer ---- */
