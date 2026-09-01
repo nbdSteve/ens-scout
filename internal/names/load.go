@@ -75,7 +75,7 @@ func loadReader(reader io.Reader, source string, seen map[string]struct{}) ([]st
 			continue
 		}
 
-		label, err := normalize(line)
+		label, err := Normalize(line)
 		if err != nil {
 			return nil, fmt.Errorf("%s:%d: %w", source, lineNumber, err)
 		}
@@ -91,7 +91,11 @@ func loadReader(reader io.Reader, source string, seen map[string]struct{}) ([]st
 	return labels, nil
 }
 
-func normalize(value string) (string, error) {
+// Normalize lowercases a label, strips an optional ".eth" suffix, and rejects
+// anything that is not a single second-level label. It is the one place that
+// decides what a candidate label looks like, so loaders, snapshots, and later
+// API request handling all agree.
+func Normalize(value string) (string, error) {
 	label := strings.ToLower(strings.TrimSpace(value))
 	label = strings.TrimSuffix(label, ".eth")
 	if label == "" {

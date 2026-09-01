@@ -108,9 +108,32 @@ internal/ens/         typed GraphQL client and lifecycle classification
 internal/checker/     batching and bounded worker pool
 internal/names/       input loading, normalization, and deduplication
 internal/report/      text, JSON Lines, and CSV output
+internal/snapshot/    deterministic snapshot contract, storage fakes, fixtures
 data/words/           current candidate lists
+data/fixtures/        committed fixture snapshots for local development
 data/results/         historical scan output from the original utility
 data/archive/         superseded candidate lists
+```
+
+## Snapshot contract
+
+`internal/snapshot` defines the deterministic, storage-neutral snapshot the
+planned website publishes and reads. The same logical scan always serializes to
+the same bytes and the same checksum, whatever order the input arrives in and
+whatever order the workers finish in. Snapshots are compressed, checksummed, and
+split into immutable chunks, and a reader rejects a snapshot whose chunks are
+missing, duplicated, reordered, or corrupt.
+
+The package depends only on the standard library and on no AWS package.
+`MemoryStore` and `FileStore` implement the same interfaces a cloud backend will,
+so the publisher and reader can be developed and tested locally.
+
+The committed fixtures in `data/fixtures/` cover every lifecycle status and let
+frontend work proceed without credentials and without querying The Graph.
+Regenerate them after an intentional contract change:
+
+```powershell
+go test ./internal/snapshot -update
 ```
 
 ## Development
@@ -121,5 +144,5 @@ go vet ./...
 gofmt -w cmd internal
 ```
 
-The proposed serverless website architecture and delivery phases are documented
-in [docs/website-plan.md](docs/website-plan.md).
+The serverless website architecture and delivery phases are documented in
+[docs/website-plan.md](docs/website-plan.md).
