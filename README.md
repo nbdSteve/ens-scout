@@ -12,6 +12,10 @@ one or two requests for every name.
 
 - Go 1.18 or newer
 
+The CLI and the snapshot contract use only the standard library. The scheduled
+publisher adds the AWS Lambda library and the AWS SDK for Go v2, pinned to the
+newest versions that still build under Go 1.18.
+
 The current ENS mainnet subgraph is documented in the
 [ENS subgraph guide](https://docs.ens.domains/web/subgraph/).
 
@@ -104,11 +108,14 @@ the ENS app before attempting to register it.
 
 ```text
 cmd/ens-scrape/       CLI entry point
+cmd/scan-lambda/      scheduled publisher entry point
 internal/ens/         typed GraphQL client and lifecycle classification
 internal/checker/     batching and bounded worker pool
 internal/names/       input loading, normalization, and deduplication
 internal/report/      text, JSON Lines, and CSV output
 internal/snapshot/    deterministic snapshot contract, storage fakes, fixtures
+internal/scanner/     one scheduled scan, from event to published pointer
+internal/dynamo/      DynamoDB snapshot storage
 data/words/           current candidate lists
 data/fixtures/        committed fixture snapshots for local development
 data/results/         historical scan output from the original utility
@@ -125,8 +132,8 @@ split into immutable chunks, and a reader rejects a snapshot whose chunks are
 missing, duplicated, reordered, or corrupt.
 
 The package depends only on the standard library and on no AWS package.
-`MemoryStore` and `FileStore` implement the same interfaces a cloud backend will,
-so the publisher and reader can be developed and tested locally.
+`MemoryStore` and `FileStore` implement the same interfaces `internal/dynamo`
+does, so the publisher and reader can be developed and tested locally.
 
 The committed fixtures in `data/fixtures/` cover every lifecycle status and let
 frontend work proceed without credentials and without querying The Graph.
@@ -136,6 +143,57 @@ Regenerate them after an intentional contract change:
 go test ./internal/snapshot -update
 ```
 
+## Scheduled publisher
+
+`cmd/scan-lambda` is the AWS Lambda that publishes snapshots on a schedule. One
+invocation scans one group of lists, carries the other group forward from the
+snapshot already published, and writes a new latest pointer only after every
+chunk of the new snapshot is stored, read back, and checksum-verified. A failure
+at any stage leaves the previous snapshot serving.
+
+Two schedules drive it, each sending only a group name:
+
+```json
+{ "group": "three-four-letter" }
+{ "group": "five-letter" }
+```
+
+The three- and four-letter lists are scanned every three hours and the
+five-letter list daily, so the shorter and more valuable labels are fresher
+without rescanning everything eight times a day.
+
+Configuration is environment only:
+
+```text
+ENS_SNAPSHOT_TABLE                 DynamoDB table name (required)
+THEGRAPH_API_KEY                   with ENS_SUBGRAPH_ID, selects the Graph gateway
+ENS_SUBGRAPH_URL                   explicit endpoint, takes precedence
+ENS_WORD_LIST_DIR                  word lists in the deployment bundle
+ENS_SCAN_WORKERS                   concurrent requests
+ENS_SCAN_BATCH_SIZE                names per GraphQL query
+ENS_SCAN_HTTP_RETRIES              retries per request
+ENS_SCAN_REQUEST_TIMEOUT_SECONDS   timeout per request
+ENS_SCAN_BUDGET_SECONDS            limit on the Graph phase
+ENS_SCAN_SOON_DAYS                 threshold for expiry warnings
+ENS_SCAN_PREVIOUS_READ_ATTEMPTS    reads of the snapshot being merged forward
+```
+
+Unlike the CLI there is no fallback to the shared public endpoint: a scheduled
+scan of this size must fail at startup on a missing credential rather than fail
+slowly against a rate-limited endpoint.
+
+Logs are JSON lines on stdout. They carry counts, identifiers, and durations, and
+never a candidate name, an endpoint, or a credential.
+
+Build it for the Lambda runtime:
+
+```powershell
+$env:GOOS = "linux"; $env:GOARCH = "arm64"; $env:CGO_ENABLED = "0"
+go build -o bootstrap ./cmd/scan-lambda
+```
+
+No infrastructure is defined in this repository yet.
+
 ## Development
 
 ```powershell
@@ -143,6 +201,9 @@ go test ./...
 go vet ./...
 gofmt -w cmd internal
 ```
+
+No test contacts The Graph or AWS. The DynamoDB API and the storage interfaces
+are injected, so every path is exercised against local fakes.
 
 The serverless website architecture and delivery phases are documented in
 [docs/website-plan.md](docs/website-plan.md).
