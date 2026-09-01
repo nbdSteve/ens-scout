@@ -88,15 +88,9 @@ Store immutable, compressed snapshot chunks instead of one item per result.
 Every chunk is 192 KiB except the final one, which keeps an item well below
 DynamoDB's 400 KB limit even if a backend stores chunk bytes base64 encoded.
 
-```text
-PK                       SK          Attributes
-SNAPSHOT#<snapshot-id>   CHUNK#00000 bytes, checksum, count, expireAt
-SNAPSHOT#<snapshot-id>   CHUNK#00001 bytes, checksum, count, expireAt
-META                     LATEST      the latest pointer
-```
-
-Chunk sort keys are zero padded, so lexical order matches numeric order and one
-ranged query returns chunks already in index order.
+The storage key layout is owned by `internal/snapshot`, which documents the
+single-table partition and sort keys and exports the builders every backend must
+use, so the DynamoDB backend inherits them rather than choosing its own.
 
 Determinism is a contract requirement rather than a convenience.
 
