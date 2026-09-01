@@ -1,0 +1,722 @@
+/*
+ * Design tokens and layout.
+ *
+ * Dark and light both come from `prefers-color-scheme`, so the page matches the
+ * rest of the visitor's system rather than asserting a preference. Every
+ * foreground and background pair below is chosen to clear WCAG AA at its text
+ * size; the status tones in particular are never the only signal for a status,
+ * because colour alone excludes anyone who cannot distinguish them. Each status
+ * always carries its own words too.
+ */
+
+:root {
+  color-scheme: dark light;
+
+  --font-sans:
+    ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --font-mono:
+    ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
+
+  --step--1: clamp(0.78rem, 0.76rem + 0.1vw, 0.83rem);
+  --step-0: clamp(0.94rem, 0.91rem + 0.14vw, 1rem);
+  --step-1: clamp(1.1rem, 1.03rem + 0.32vw, 1.25rem);
+  --step-2: clamp(1.32rem, 1.18rem + 0.63vw, 1.65rem);
+  --step-3: clamp(1.6rem, 1.34rem + 1.15vw, 2.25rem);
+
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.5rem;
+  --space-6: 2rem;
+  --space-7: 3rem;
+
+  --radius-1: 0.375rem;
+  --radius-2: 0.625rem;
+  --radius-3: 1rem;
+
+  --measure: 68ch;
+  --page-max: 78rem;
+
+  --canvas: #0b0f16;
+  --surface: #141a25;
+  --surface-raised: #1b2331;
+  --border: #2a3444;
+  --border-strong: #3b4859;
+  --ink: #eef2f7;
+  --ink-muted: #a8b4c4;
+  --ink-faint: #7d8b9d;
+
+  --accent: #5eead4;
+  --accent-ink: #062b26;
+  --accent-quiet: #1d3c3a;
+
+  --good: #6ee7a8;
+  --good-quiet: #133227;
+  --warn: #fbbf6b;
+  --warn-quiet: #3a2a12;
+  --busy: #93b4f5;
+  --busy-quiet: #17253f;
+  --muted-tone: #a8b4c4;
+  --muted-quiet: #232c39;
+  --danger: #fca5a5;
+  --danger-quiet: #3a1c1c;
+
+  --shadow-1: 0 1px 2px rgb(0 0 0 / 40%);
+  --shadow-2: 0 8px 24px rgb(0 0 0 / 35%);
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    --canvas: #f6f8fb;
+    --surface: #ffffff;
+    --surface-raised: #eef2f8;
+    --border: #d3dbe6;
+    --border-strong: #b3bfcf;
+    --ink: #131a25;
+    --ink-muted: #4a5769;
+    --ink-faint: #64748b;
+
+    --accent: #0f766e;
+    --accent-ink: #ffffff;
+    --accent-quiet: #d6f2ee;
+
+    --good: #10693f;
+    --good-quiet: #daf3e5;
+    --warn: #8a5200;
+    --warn-quiet: #fdefd6;
+    --busy: #1f4fa8;
+    --busy-quiet: #dfe9fb;
+    --muted-tone: #4a5769;
+    --muted-quiet: #e6ebf2;
+    --danger: #a4262c;
+    --danger-quiet: #fbe1e1;
+
+    --shadow-1: 0 1px 2px rgb(15 23 42 / 8%);
+    --shadow-2: 0 8px 24px rgb(15 23 42 / 10%);
+  }
+}
+
+/*
+ * More contrast when the visitor asks for it: borders become solid rather than
+ * suggested, and muted text stops being muted.
+ */
+@media (prefers-contrast: more) {
+  :root {
+    --border: var(--border-strong);
+    --ink-muted: var(--ink);
+    --ink-faint: var(--ink-muted);
+  }
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--canvas);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  font-size: var(--step-0);
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+}
+
+h1,
+h2,
+h3 {
+  line-height: 1.2;
+  margin: 0;
+  text-wrap: balance;
+}
+
+p {
+  margin: 0;
+  text-wrap: pretty;
+}
+
+a {
+  color: var(--accent);
+  text-decoration-thickness: from-font;
+  text-underline-offset: 0.16em;
+}
+
+a:hover {
+  text-decoration-thickness: 2px;
+}
+
+/*
+ * One focus treatment everywhere, always visible, and never removed. Keyboard
+ * visitors are the only ones who see it and they need it on every control.
+ */
+:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: var(--radius-1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* Available to a screen reader, and to a keyboard visitor who tabs to it. */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+.skip-link {
+  position: absolute;
+  top: var(--space-2);
+  left: var(--space-2);
+  z-index: 10;
+  padding: var(--space-2) var(--space-4);
+  background: var(--accent);
+  color: var(--accent-ink);
+  border-radius: var(--radius-1);
+  font-weight: 650;
+  transform: translateY(-200%);
+}
+
+.skip-link:focus-visible {
+  transform: translateY(0);
+}
+
+.page {
+  max-width: var(--page-max);
+  margin-inline: auto;
+  padding: var(--space-5) var(--space-4) var(--space-7);
+  display: grid;
+  gap: var(--space-5);
+}
+
+@media (min-width: 48rem) {
+  .page {
+    padding-inline: var(--space-6);
+  }
+}
+
+/* A single column with one consistent gap, for sections that just follow each other. */
+.stack {
+  display: grid;
+  gap: var(--space-5);
+  align-content: start;
+}
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-3);
+  padding: var(--space-4);
+  box-shadow: var(--shadow-1);
+}
+
+@media (min-width: 48rem) {
+  .card {
+    padding: var(--space-5);
+  }
+}
+
+.card__title {
+  font-size: var(--step-1);
+  margin-bottom: var(--space-1);
+}
+
+.prose {
+  max-width: var(--measure);
+  color: var(--ink-muted);
+}
+
+.mono {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- header ---- */
+
+.masthead {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.masthead__title {
+  font-size: var(--step-3);
+  letter-spacing: -0.02em;
+}
+
+.masthead__lede {
+  max-width: var(--measure);
+  color: var(--ink-muted);
+}
+
+/* ---- notices ---- */
+
+.notice {
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-4);
+  border-radius: var(--radius-2);
+  border: 1px solid var(--border-strong);
+  border-left-width: 5px;
+  background: var(--surface-raised);
+}
+
+.notice__title {
+  font-size: var(--step-0);
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.notice__body {
+  color: var(--ink-muted);
+  max-width: var(--measure);
+}
+
+.notice--warn {
+  border-color: var(--warn);
+  background: var(--warn-quiet);
+}
+
+.notice--warn .notice__body {
+  color: var(--ink);
+}
+
+.notice--danger {
+  border-color: var(--danger);
+  background: var(--danger-quiet);
+}
+
+.notice--danger .notice__body {
+  color: var(--ink);
+}
+
+.notice--info {
+  border-color: var(--busy);
+  background: var(--busy-quiet);
+}
+
+.notice--info .notice__body {
+  color: var(--ink);
+}
+
+.notice__list {
+  margin: 0;
+  padding-left: var(--space-5);
+  display: grid;
+  gap: var(--space-1);
+}
+
+/* ---- summary ---- */
+
+.summary {
+  display: grid;
+  gap: var(--space-4);
+}
+
+.summary__total {
+  font-size: var(--step-2);
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.counts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(9.5rem, 1fr));
+  gap: var(--space-3);
+  margin: 0;
+}
+
+.count {
+  display: grid;
+  gap: var(--space-1);
+  padding: var(--space-3);
+  border-radius: var(--radius-2);
+  border: 1px solid var(--border);
+  background: var(--surface-raised);
+}
+
+/*
+ * The number reads first and the label under it, while the markup keeps the
+ * `dt` before its `dd`. Reordering in CSS rather than in the DOM keeps the
+ * description list valid and leaves a screen reader hearing the label first.
+ */
+.count__value {
+  order: -1;
+  font-size: var(--step-2);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+  margin: 0;
+}
+
+.count__label {
+  font-size: var(--step--1);
+  color: var(--ink-muted);
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.count--good {
+  border-left: 4px solid var(--good);
+}
+
+.count--warn {
+  border-left: 4px solid var(--warn);
+}
+
+.count--busy {
+  border-left: 4px solid var(--busy);
+}
+
+.count--muted {
+  border-left: 4px solid var(--muted-tone);
+}
+
+/* ---- scan status ---- */
+
+.scan {
+  display: grid;
+  gap: var(--space-4);
+}
+
+.facts {
+  display: grid;
+  gap: var(--space-3) var(--space-5);
+  margin: 0;
+  grid-template-columns: 1fr;
+}
+
+@media (min-width: 34rem) {
+  .facts {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (min-width: 62rem) {
+  .facts {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+.fact {
+  display: grid;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.fact__label {
+  font-size: var(--step--1);
+  color: var(--ink-muted);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.fact__value {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.groups {
+  display: grid;
+  gap: var(--space-3);
+  grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.group {
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-2);
+  background: var(--surface-raised);
+}
+
+.group--stale {
+  border-color: var(--warn);
+  background: var(--warn-quiet);
+}
+
+.group__name {
+  font-weight: 650;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.group__meta {
+  font-size: var(--step--1);
+  color: var(--ink-muted);
+  display: grid;
+  gap: var(--space-1);
+}
+
+.group--stale .group__meta {
+  color: var(--ink);
+}
+
+/* ---- badges ---- */
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 0.1rem var(--space-2);
+  border-radius: 999px;
+  font-size: var(--step--1);
+  font-weight: 650;
+  white-space: nowrap;
+  border: 1px solid transparent;
+}
+
+.badge--good {
+  background: var(--good-quiet);
+  color: var(--good);
+  border-color: var(--good);
+}
+
+.badge--warn {
+  background: var(--warn-quiet);
+  color: var(--warn);
+  border-color: var(--warn);
+}
+
+.badge--busy {
+  background: var(--busy-quiet);
+  color: var(--busy);
+  border-color: var(--busy);
+}
+
+.badge--muted {
+  background: var(--muted-quiet);
+  color: var(--muted-tone);
+  border-color: var(--border-strong);
+}
+
+/* ---- controls ---- */
+
+.controls {
+  display: grid;
+  gap: var(--space-4);
+}
+
+.controls__grid {
+  display: grid;
+  gap: var(--space-4);
+  grid-template-columns: 1fr;
+}
+
+@media (min-width: 42rem) {
+  .controls__grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (min-width: 70rem) {
+  .controls__grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+.field {
+  display: grid;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.field__label {
+  font-weight: 650;
+  font-size: var(--step--1);
+}
+
+.field__hint {
+  font-size: var(--step--1);
+  color: var(--ink-muted);
+}
+
+.input,
+.select {
+  font: inherit;
+  color: var(--ink);
+  background: var(--canvas);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-1);
+  padding: var(--space-2) var(--space-3);
+  min-height: 2.75rem;
+  width: 100%;
+}
+
+.input::placeholder {
+  color: var(--ink-faint);
+}
+
+.range {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.range .input {
+  width: 5.5rem;
+}
+
+.range__to {
+  color: var(--ink-muted);
+  font-size: var(--step--1);
+}
+
+.fieldset {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-2);
+  padding: var(--space-3);
+  margin: 0;
+  min-width: 0;
+}
+
+.fieldset__legend {
+  font-weight: 650;
+  font-size: var(--step--1);
+  padding-inline: var(--space-2);
+}
+
+.checkbox-list {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.checkbox {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  font-size: var(--step--1);
+  line-height: 1.4;
+  min-height: 1.75rem;
+}
+
+.checkbox input {
+  width: 1.15rem;
+  height: 1.15rem;
+  margin: 0.1rem 0 0;
+  accent-color: var(--accent);
+  flex: none;
+}
+
+.checkbox__count {
+  color: var(--ink-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.controls__footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  border-top: 1px solid var(--border);
+  padding-top: var(--space-3);
+}
+
+.button {
+  font: inherit;
+  font-weight: 650;
+  color: var(--ink);
+  background: var(--surface-raised);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-1);
+  padding: var(--space-2) var(--space-4);
+  min-height: 2.75rem;
+  cursor: pointer;
+}
+
+.button:hover {
+  border-color: var(--accent);
+}
+
+.button--quiet {
+  background: transparent;
+}
+
+.result-count {
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-muted);
+}
+
+/* ---- states ---- */
+
+.state {
+  display: grid;
+  gap: var(--space-3);
+  justify-items: start;
+  padding: var(--space-6) var(--space-4);
+  text-align: left;
+}
+
+.state__title {
+  font-size: var(--step-2);
+}
+
+.spinner {
+  width: 1.5rem;
+  height: 1.5rem;
+  border-radius: 50%;
+  border: 3px solid var(--border-strong);
+  border-top-color: var(--accent);
+  animation: spin 900ms linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.placeholder {
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-2);
+  padding: var(--space-5);
+  color: var(--ink-muted);
+}
+
+/* ---- footer ---- */
+
+.footer {
+  border-top: 1px solid var(--border);
+  padding-top: var(--space-4);
+  display: grid;
+  gap: var(--space-3);
+  color: var(--ink-muted);
+  font-size: var(--step--1);
+}
+
+.footer strong {
+  color: var(--ink);
+}

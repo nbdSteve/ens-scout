@@ -1,18 +1,26 @@
 import js from '@eslint/js'
+import { defineConfig, globalIgnores } from 'eslint/config'
 import jsxA11y from 'eslint-plugin-jsx-a11y'
 import reactHooks from 'eslint-plugin-react-hooks'
 import globals from 'globals'
 import tseslint from 'typescript-eslint'
 
-export default tseslint.config(
-  { ignores: ['dist', 'coverage', 'playwright-report', 'test-results', 'node_modules'] },
+export default defineConfig(
+  globalIgnores(['dist', 'coverage', 'playwright-report', 'test-results', 'node_modules']),
   js.configs.recommended,
   tseslint.configs.strictTypeChecked,
   tseslint.configs.stylisticTypeChecked,
   {
     languageOptions: {
       parserOptions: {
-        projectService: true,
+        projectService: {
+          // The project service resolves each file through the nearest
+          // `tsconfig.json`, which covers `src` and `tests` only. The build and
+          // lint configuration files are type-checked by `tsconfig.node.json`,
+          // which that walk never reaches, so they are linted against the
+          // default project instead of being reported as outside every project.
+          allowDefaultProject: ['*.config.ts', '*.config.js'],
+        },
         tsconfigRootDir: import.meta.dirname,
       },
     },
@@ -53,5 +61,18 @@ export default tseslint.config(
   {
     files: ['*.config.{ts,js}', 'tests/**/*.ts'],
     languageOptions: { globals: globals.node },
+  },
+  {
+    files: ['eslint.config.js'],
+    rules: {
+      // `eslint-plugin-jsx-a11y` ships no type declarations, and the default
+      // project this file is linted against cannot read the `exports` map that
+      // points at the ones `eslint-plugin-react-hooks` does ship. Both therefore
+      // resolve to `any` here. The alternative is hand-written ambient
+      // declarations for two plugins, which would be more to keep current than
+      // the checking is worth in a file the build never compiles.
+      '@typescript-eslint/no-unsafe-assignment': 'off',
+      '@typescript-eslint/no-unsafe-member-access': 'off',
+    },
   },
 )
