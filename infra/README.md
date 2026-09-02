@@ -4,7 +4,7 @@ TypeScript AWS CDK application that defines the scheduled ENS snapshot publisher
 
 One stack, `EnsScout-prod`, holds the DynamoDB snapshot table, the Go scanner
 Lambda, the two offset EventBridge schedules, the undelivered-event queue, the log
-group, the alarms, and the scanner's IAM role.
+group, the alarms and the topic they raise into, and the scanner's IAM role.
 Nothing else.
 The public read API, the frontend distribution, and the deployment pipeline are
 later phases of [docs/website-plan.md](../docs/website-plan.md) and are
@@ -57,6 +57,12 @@ This repository does not deploy.
    JSON document with the field named by `ens-scout:graphApiKeySecretField`.
    Create it out of band.
    This stack references the secret and never creates, rotates, or overwrites it.
+
+The stack creates the alarm topic and deliberately adds no subscription to it, so
+subscribing is a deployment step rather than something the template does.
+Subscribe out of band to the `AlarmTopicArn` output after the first deploy; until
+someone does, every alarm here raises into a topic with no subscribers and notifies
+nobody.
 
 Confirm `ens-scout:subgraphId` against the current ENS subgraph before the first
 deploy.

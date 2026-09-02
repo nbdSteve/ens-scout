@@ -31,7 +31,7 @@ long-term history store in the first release.
 preloads in the background without blocking the first render.
 
 ```text
-EventBridge Scheduler
+EventBridge rules
         |
         v
 Scanner Lambda -----> ENS subgraph
@@ -52,13 +52,13 @@ An optional lookup endpoint will recheck a small set of names on demand.
 
 `README.md` records what the repository holds today, including the
 `cmd/scan-lambda/`, `internal/scanner/`, and `internal/dynamo/` packages the
-publisher work added, and the `internal/api/` package the read API work added.
+publisher work added, the `internal/api/` package the read API work added, and
+the `infra/` CDK application that defines the stack they run in.
 The directories still to be created are:
 
 ```text
 cmd/api-lambda/       the entrypoint that wires internal/api and live checks
 web/                  React, TypeScript, and Vite frontend application
-infra/                TypeScript AWS CDK application
 ```
 
 The Lambda binaries will target Linux on the AWS `provided.al2023` runtime.
@@ -302,5 +302,7 @@ and secrets. Done.
 - Confirm the public product and repository name; `ens-scout` is the current
   recommendation while the existing CLI remains `ens-scrape`.
 - Choose the visual direction within the React, TypeScript, and Vite stack.
-- Choose a deployment region and public domain.
+- Choose the public domain.
+  The deployment account and region are settled and recorded as CDK context in
+  `infra/cdk.json`.
 - Choose the WebLLM model and its download budget.
