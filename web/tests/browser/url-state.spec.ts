@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { searchOf, since, visit } from './support'
+import { openMore, searchOf, since, visit } from './support'
 
 /**
  * The address bar as the state, exercised through real navigation.
@@ -21,23 +21,28 @@ function namesOn(page: import('@playwright/test').Page): Promise<string[]> {
 
 test('a view link writes the view and the back button returns', async ({ page }) => {
   await visit(page)
-  const everything = await namesOn(page)
+  const landed = await namesOn(page)
 
   await page
     .getByRole('navigation', { name: 'Views' })
     .getByRole('link', { name: /^Premium/ })
     .click()
-  await expect(page.getByRole('heading', { level: 2, name: 'Premium', exact: true })).toBeVisible()
+  await expect(
+    page.getByRole('heading', { level: 1, name: 'Premium .eth names', exact: true }),
+  ).toBeVisible()
   expect(searchOf(page)).toContain('view=premium')
   await expect(page.getByRole('table').getByRole('rowheader')).toHaveCount(2)
 
   await page.goBack()
+  // Back to the default view, which is written as the absence of the parameter.
   expect(searchOf(page)).not.toContain('view=')
-  expect(await namesOn(page)).toEqual(everything)
+  expect(await namesOn(page)).toEqual(landed)
 })
 
 test('the search reaches the address bar and survives a reload', async ({ page }) => {
-  await visit(page)
+  // `view=all`, because the two names the fixture has available hold no `x` and a
+  // search that found nothing would prove nothing about the round trip.
+  await visit(page, { view: 'all' })
 
   // A substring, not a prefix: `x` is in the middle of `flux` and the end of `vex`,
   // so a search that only matched the start of a label would return nothing here.
@@ -56,7 +61,7 @@ test('a link naming every control reproduces itself on a cold load', async ({ pa
   const search = `?view=grace&q=k&status=grace-period&min=3&max=5&dir=desc&now=${encodeURIComponent(since(0))}`
   await page.goto(`/${search}`)
   await expect(
-    page.getByRole('heading', { level: 2, name: 'Grace period', exact: true }),
+    page.getByRole('heading', { level: 1, name: 'Grace period .eth names', exact: true }),
   ).toBeVisible()
 
   // Nothing is rewritten on arrival: the link a visitor was given is the link they
@@ -68,10 +73,11 @@ test('clearing the filters keeps the view and drops only the filters', async ({ 
   await visit(page, { view: 'grace', q: 'nosuchname', min: '3' })
   await expect(page.getByRole('heading', { name: 'No names to show' })).toBeVisible()
 
-  // The same link is offered in the filter card and in the empty table, so the one
-  // a visitor who has just been told there is nothing to show would reach for.
+  // The toolbar offers "Clear filters" and the empty table offers "Clear all
+  // filters", so this is the one a visitor who has just been told there is nothing
+  // to show would reach for.
   await page
-    .getByRole('region', { name: 'Grace period', exact: true })
+    .getByRole('region', { name: 'Grace period .eth names', exact: true })
     .getByRole('link', { name: 'Clear all filters' })
     .click()
 
@@ -82,7 +88,10 @@ test('clearing the filters keeps the view and drops only the filters', async ({ 
 })
 
 test('a sort choice reorders the rows and is written down', async ({ page }) => {
-  await visit(page)
+  // Ten names rather than two, so a reorder is visible, and the sort control opened
+  // because it lives behind the extra-filters disclosure.
+  await visit(page, { view: 'all' })
+  await openMore(page)
   const byName = await namesOn(page)
 
   await page.getByRole('combobox', { name: 'Sort by' }).selectOption({ label: 'Expiry' })

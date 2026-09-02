@@ -66,6 +66,11 @@ was looking at.
 | `page`       | 1-based page number                                   |
 | `now`        | Simulated clock, as above                             |
 
+A default is written as the absence of its parameter, so the shortest link is the
+canonical one and the app rewrites any longer spelling of the same state to it.
+`view` defaults to `available`, which is the question a visitor arrives with; a URL
+with no `view` opens the available names.
+
 ## Development
 
 ```bash

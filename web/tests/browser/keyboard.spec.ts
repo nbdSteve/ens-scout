@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test'
-import { searchOf, visit } from './support'
+import { openMore, searchOf, visit } from './support'
 
 /**
  * The page driven by the keyboard alone.
@@ -46,7 +46,10 @@ test('the first tab stop is the skip link, and it leads to the names', async ({ 
 })
 
 test('every keyboard stop draws a focus indicator', async ({ page }) => {
-  await visit(page)
+  await visit(page, { view: 'all' })
+  // Opened, because a closed disclosure is one stop rather than eleven and the
+  // controls inside it are the ones most likely to be styled by hand.
+  await openMore(page)
 
   const seen: string[] = []
   for (let step = 0; step < 200; step += 1) {
@@ -62,26 +65,46 @@ test('every keyboard stop draws a focus indicator', async ({ page }) => {
     expect(current.ringed, `${current.label} has no focus indicator`).toBe(true)
   }
 
-  // Guards against the loop ending early and passing vacuously. The filter card
-  // alone offers more than twenty stops.
+  // Guards against the loop ending early and passing vacuously. The skip link, the
+  // five views, the three visible filters, the two disclosures, and the ten controls
+  // inside the opened one already come to more than twenty, before any row.
   expect(seen.length).toBeGreaterThan(20)
 })
 
 test('the filter controls are reached in the order they are shown', async ({ page }) => {
-  await visit(page)
+  // `view=all` for the seven-status list, and so `Registered (2)` exists to be the
+  // first checkbox. The order under test is the same in every view.
+  await visit(page, { view: 'all' })
 
   const search = page.getByRole('searchbox', { name: 'Search names' })
   await search.focus()
 
-  const expected = [
+  // The two lengths, then the one control that stands for everything else. Nothing
+  // inside the disclosure is reachable while it is closed, which is the point of
+  // putting it there: the visible row costs four stops rather than fourteen.
+  const visible = [
     page.getByRole('spinbutton', { name: 'Shortest label length' }),
     page.getByRole('spinbutton', { name: 'Longest label length' }),
+    // The element, not a role: browsers disagree on what a `<summary>` is called in
+    // the accessibility tree, and what is under test here is the tab order.
+    page.locator('summary').filter({ hasText: 'More filters' }),
+  ]
+  for (const control of visible) {
+    await page.keyboard.press('Tab')
+    await expect(control).toBeFocused()
+  }
+
+  // Opened from the keyboard, on the summary that already has focus, because that
+  // is how a visitor who got here by tabbing would open it.
+  await page.keyboard.press('Enter')
+
+  const hidden = [
     page.getByRole('combobox', { name: 'Source list' }),
     page.getByRole('combobox', { name: 'Sort by' }),
     page.getByRole('button', { name: /A to Z/ }),
     page.getByRole('checkbox', { name: 'Registered (2)' }),
   ]
-  for (const control of expected) {
+  for (const control of hidden) {
     await page.keyboard.press('Tab')
     await expect(control).toBeFocused()
   }
@@ -89,6 +112,7 @@ test('the filter controls are reached in the order they are shown', async ({ pag
 
 test('the sort direction is a real button, toggled from the keyboard', async ({ page }) => {
   await visit(page)
+  await openMore(page)
 
   const direction = page.getByRole('button', { name: /A to Z/ })
   await direction.focus()
@@ -99,7 +123,15 @@ test('the sort direction is a real button, toggled from the keyboard', async ({ 
 })
 
 test('a status is ticked with the space bar and written to the address bar', async ({ page }) => {
-  await visit(page)
+  /*
+   * `view=all`, because a status filter that covers the whole view is the same as no
+   * filter and `parseQuery` normalizes it away. Ticking `Available` inside the
+   * available view would therefore write `status=available`, have it read back as
+   * nothing, and untick itself - correctly. The behaviour under test is the space
+   * bar reaching the address bar, so it is checked where the tick survives.
+   */
+  await visit(page, { view: 'all' })
+  await openMore(page)
 
   const available = page.getByRole('checkbox', { name: 'Available (2)' })
   await available.focus()

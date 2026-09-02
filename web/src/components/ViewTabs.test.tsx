@@ -63,7 +63,8 @@ describe('ViewTabs', () => {
   it('leaves the default view out of the link', () => {
     mount('?view=premium')
 
-    expect(tab('All names')).toHaveAttribute('href', './')
+    expect(tab('Available')).toHaveAttribute('href', './')
+    expect(tab('All names')).toHaveAttribute('href', '?view=all')
     expect(tab('Expiring')).toHaveAttribute('href', '?view=expiring')
   })
 

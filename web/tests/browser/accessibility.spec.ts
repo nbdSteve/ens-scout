@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { DAY, expectAccessible, since, visit } from './support'
+import { DAY, expectAccessible, openDetails, openMore, since, visit } from './support'
 
 /**
  * Automated accessibility checks, run at every configured viewport.
@@ -26,11 +26,25 @@ for (const colorScheme of ['light', 'dark'] as const) {
 
     for (const view of VIEWS) {
       test(`the ${view} view has no automated accessibility violations`, async ({ page }) => {
-        await visit(page, view === 'all' ? {} : { view })
+        await visit(page, { view })
         await expect(page.getByRole('table')).toBeVisible()
         await expectAccessible(page)
       })
     }
+
+    test('and neither has anything behind a disclosure', async ({ page }) => {
+      /*
+       * axe examines what is rendered, and a closed `<details>` renders nothing, so
+       * the two disclosures would otherwise never be checked in either palette.
+       * Between them they hold every select, every checkbox, the source-list
+       * schedules, the counts, and the lifecycle rules - which is most of the
+       * page's text and most of its controls.
+       */
+      await visit(page, { view: 'all' })
+      await openMore(page)
+      await openDetails(page)
+      await expectAccessible(page)
+    })
   })
 }
 
@@ -42,7 +56,7 @@ test('a filtered view has none either', async ({ page }) => {
 
 test('the empty state has none, including the way out of it', async ({ page }) => {
   await visit(page, { q: 'nosuchname' })
-  const empty = page.getByRole('region', { name: 'All names', exact: true })
+  const empty = page.getByRole('region', { name: 'Available .eth names', exact: true })
   await expect(empty.getByRole('heading', { name: 'No names to show' })).toBeVisible()
   await expect(empty.getByRole('link', { name: 'Clear all filters' })).toBeVisible()
   await expectAccessible(page)

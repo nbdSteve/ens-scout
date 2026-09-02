@@ -30,11 +30,15 @@ describe('query round trips', () => {
 
   it('leaves out everything at its default, so one state is one link', () => {
     expect(serializeQuery(DEFAULT_QUERY)).toBe('')
-    expect(roundTrip('?view=all&sort=name&dir=asc&page=1')).toBe('')
+    expect(roundTrip('?view=available&sort=name&dir=asc&page=1')).toBe('')
   })
 
   it('writes the statuses in the published order, not the order they were clicked', () => {
-    expect(roundTrip('?status=available,premium')).toBe('?status=premium%2Cavailable')
+    // In `all`, because the default view admits one status and a single-status
+    // selection there covers the whole view, which canonicalizes to no selection.
+    expect(roundTrip('?view=all&status=available,premium')).toBe(
+      '?view=all&status=premium%2Cavailable',
+    )
   })
 
   it('keeps a sort only when it is not the view default', () => {
@@ -53,9 +57,9 @@ describe('query round trips', () => {
 })
 
 describe('query parsing of links that cannot be honoured', () => {
-  it('falls back to all names and says so when the view is unknown', () => {
+  it('falls back to the default view and says so when the view is unknown', () => {
     const { state, warnings } = parseQuery('?view=nope')
-    expect(state.view).toBe('all')
+    expect(state.view).toBe('available')
     expect(warnings).toEqual([expect.stringContaining('unknown view')])
   })
 

@@ -1,5 +1,5 @@
 import { expect, test, type Locator } from '@playwright/test'
-import { scrollsSideways, visit } from './support'
+import { openDetails, openMore, scrollsSideways, visit } from './support'
 
 /**
  * Responsive layout, checked at each configured viewport.
@@ -23,13 +23,17 @@ async function fitsHorizontally(locator: Locator): Promise<boolean> {
 
 test('the page never scrolls sideways, on any view', async ({ page }) => {
   for (const view of ['all', 'available', 'premium', 'expiring', 'grace']) {
-    await visit(page, view === 'all' ? {} : { view })
+    await visit(page, { view })
     expect(await scrollsSideways(page), `the ${view} view scrolls sideways`).toBe(false)
   }
 })
 
 test('nothing is laid out wider than the box that holds it', async ({ page }) => {
-  await visit(page)
+  await visit(page, { view: 'all' })
+  // Both disclosures, because a closed one has no layout at all: every box inside
+  // it measures zero, so an overflowing control in there would go unreported.
+  await openMore(page)
+  await openDetails(page)
 
   /*
    * The check the scroll test cannot make on a phone. A mobile context honours the
@@ -68,8 +72,10 @@ test('nothing is laid out wider than the box that holds it', async ({ page }) =>
 
 test('the page does not scroll sideways with the longest strings on it', async ({ page }) => {
   // The widest cell content in the fixture is a four-hundred-day countdown beside
-  // the "Grace ending soon" pill, and the widest heading is the source-list path.
-  await visit(page, { sort: 'expiry', dir: 'desc' })
+  // the "Grace ending soon" pill, and the widest string anywhere on the page is a
+  // source-list path, which is inside the scan details.
+  await visit(page, { view: 'all', sort: 'expiry', dir: 'desc' })
+  await openDetails(page)
   expect(await scrollsSideways(page)).toBe(false)
 })
 
@@ -89,7 +95,7 @@ test('every view is visible without a swipe', async ({ page }) => {
 })
 
 test('the table keeps its roles rather than becoming a list of blocks', async ({ page }) => {
-  await visit(page)
+  await visit(page, { view: 'all' })
 
   const table = page.getByRole('table')
   await expect(table).toBeVisible()
@@ -99,7 +105,7 @@ test('the table keeps its roles rather than becoming a list of blocks', async ({
 })
 
 test('a name is never broken across two lines to make room for the columns', async ({ page }) => {
-  await visit(page)
+  await visit(page, { view: 'all' })
 
   // The visible label, not the whole link: the link also carries a visually hidden
   // announcement, which is out of flow and would count as a second line on its own.
@@ -114,7 +120,7 @@ test('a name is never broken across two lines to make room for the columns', asy
 })
 
 test('a recorded instant breaks only between its date and its clock time', async ({ page }) => {
-  await visit(page)
+  await visit(page, { view: 'all' })
 
   /*
    * One string left to itself breaks after every `-` and every `:`, so at phone
@@ -140,6 +146,7 @@ test('a recorded instant breaks only between its date and its clock time', async
 
 test('the summary counts share their rows rather than stacking one per row', async ({ page }) => {
   await visit(page)
+  await openDetails(page)
 
   /*
    * `auto-fit` answers a track it cannot fit by dropping to a single column, and
@@ -161,8 +168,52 @@ test('the summary counts share their rows rather than stacking one per row', asy
   expect(rows).toBeLessThanOrEqual(4)
 })
 
+test('the first screen is the answer, not an introduction', async ({ page }, testInfo) => {
+  /*
+   * A density requirement, so it is stated at one width. 1440x900 is the desktop
+   * project's viewport, and it is where the fault this test exists for was found:
+   * every element below was present and correct, and the names were still below the
+   * fold behind a page of preamble. Nothing here is about the narrower projects,
+   * where a shorter screen legitimately shows fewer rows.
+   */
+  test.skip(testInfo.project.name !== 'desktop', 'a 1440x900 density requirement')
+
+  // `view=all` for the row count alone: the fixture holds two available names, and
+  // the requirement is about how much vertical space the page spends before the
+  // list, not about which list it is.
+  await visit(page, { view: 'all' })
+
+  for (const [what, locator] of [
+    ['the header', page.getByRole('banner')],
+    ['the title', page.getByRole('heading', { level: 1 })],
+    ['the count', page.getByRole('status')],
+    ['the trust line', page.getByText(/Recorded statuses, not a live check/)],
+    ['the views', page.getByRole('navigation', { name: 'Views' })],
+    ['the search box', page.getByRole('searchbox', { name: 'Search names' })],
+    ['the shortest length', page.getByRole('spinbutton', { name: 'Shortest label length' })],
+    ['the longest length', page.getByRole('spinbutton', { name: 'Longest label length' })],
+  ] as const) {
+    await expect(locator, `${what} is not on the first screen`).toBeInViewport({ ratio: 1 })
+  }
+
+  const rows = page.getByRole('table').getByRole('rowheader')
+  for (const index of [0, 1, 2]) {
+    await expect(
+      rows.nth(index),
+      `name row ${String(index + 1)} is not on the first screen`,
+    ).toBeInViewport({ ratio: 1 })
+  }
+
+  // And nothing was scrolled to get there.
+  expect(await page.evaluate(() => window.scrollY)).toBe(0)
+})
+
 test('the filter controls stay inside the page', async ({ page }) => {
-  await visit(page)
+  await visit(page, { view: 'all' })
+  // Including the ones behind the disclosure: the source list, the sort, and seven
+  // status checkboxes are where the width goes, and none of them has a box until
+  // it is open.
+  await openMore(page)
 
   const region = page.getByRole('region', { name: 'Narrow the list' })
   for (const control of await region.locator('input, select, button').all()) {

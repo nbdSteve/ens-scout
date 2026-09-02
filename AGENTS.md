@@ -592,10 +592,20 @@ never the ENS availability authority.
   permanently stale against a real clock, so the simulated clock is how the page
   is demonstrated. A page that quietly used a different time than it displayed
   would be worse than a stale one.
+- The list is the page. Nothing explanatory goes above it: the first screen is a
+  header, the view's title with its count, one trust line, the view tabs, search
+  with the length pair, and then names. Provenance, per-list schedules, lifecycle
+  wording, and method all live in the one disclosure below the results. That budget
+  is measured at 1440x900 by `the first screen is the answer, not an introduction`,
+  so anything new above the list is charged against a name row. The `preview`
+  fixture holds two available names, which is why that test asks for `view=all`.
 - Keep the 320px Playwright project a desktop context. A phone context honours
   the viewport meta tag, so Chrome answers content that is too wide by zooming
   out rather than scrolling, and a reflow check passes on a layout that really
   does overflow.
+- Separate inline metadata with space, not with a separator element. The trust line
+  and the clock notice wrap at ordinary widths, and an interpunct or bullet of its
+  own becomes the last glyph of a wrapped line, pointing at nothing.
 - Never set `display: block` on a table part. It silently removes the table
   roles a screen reader navigates by. Do responsive work with column widths and
   wrapping instead.

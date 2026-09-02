@@ -23,8 +23,10 @@ function toSeconds(text: string): number {
 
 test('the value counts down in real time without touching the status', async ({ page }) => {
   await page.clock.install({ time: new Date(SCANNED_AT) })
-  // No `?now`: the page uses the live clock, which is now the one under control.
-  await page.goto('/')
+  // No `?now`, so the page reads the live clock, which is now the one under control.
+  // `view=all`, because the name under test is registered and the page opens on the
+  // available view.
+  await page.goto('/?view=all')
 
   const row = page.getByRole('row').filter({ hasText: 'quill.eth' })
   const value = row.locator('.countdown__value')
@@ -41,7 +43,7 @@ test('the value counts down in real time without touching the status', async ({ 
 test('the ticking value is hidden from a screen reader, which gets words instead', async ({
   page,
 }) => {
-  await visit(page)
+  await visit(page, { view: 'all' })
 
   const row = page.getByRole('row').filter({ hasText: 'quill.eth' })
   // A value that changes every second, announced fifty times a second on one
@@ -52,7 +54,9 @@ test('the ticking value is hidden from a screen reader, which gets words instead
 
 test('a boundary already behind the scan says so instead of showing zeroes', async ({ page }) => {
   await page.clock.install({ time: new Date(SCANNED_AT) })
-  await page.goto('/')
+  // `view=all`, because the name under test is in its grace period, and no `?now`,
+  // so the page reads the clock installed above.
+  await page.goto('/?view=all')
 
   const row = page.getByRole('row').filter({ hasText: 'flux.eth' })
   await expect(row).toContainText('grace period ends')

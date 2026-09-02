@@ -1,5 +1,4 @@
 import { useMemo, type ReactNode } from 'react'
-import { Controls } from './components/Controls'
 import { EmptyState } from './components/EmptyState'
 import { ErrorState } from './components/ErrorState'
 import { LoadingState } from './components/LoadingState'
@@ -7,12 +6,12 @@ import { Notice } from './components/Notice'
 import { Pagination } from './components/Pagination'
 import { ResultsTable } from './components/ResultsTable'
 import { SimulatedClockNotice } from './components/SimulatedClockNotice'
-import { SnapshotStatus } from './components/SnapshotStatus'
+import { SnapshotDetails } from './components/SnapshotDetails'
 import { StaleWarning } from './components/StaleWarning'
-import { SummaryCounts } from './components/SummaryCounts'
+import { Toolbar } from './components/Toolbar'
+import { TrustLine } from './components/TrustLine'
 import { ViewTabs } from './components/ViewTabs'
 import { appConfig, type AppConfig } from './config/env'
-import { FIXTURE_DESCRIPTION } from './data/fixtures'
 import type { Status } from './snapshot/contract'
 import { deriveAttribution } from './snapshot/attribution'
 import { applyQuery, countByStatus, filterResults } from './state/filter'
@@ -25,16 +24,25 @@ import { VIEWS, viewOrDefault } from './state/views'
 /**
  * The page.
  *
- * The reading order is deliberate and is the same order a visitor needs the
- * information in: what this page is and what it is not, whether the clock is real,
- * whether the data is overdue, when it was scanned, what it found, how to narrow
- * it, and only then the names. Putting the caveats after the results would make
- * them decoration.
+ * The names come first. A visitor arrives with one question - which names are open -
+ * so the first screen is the answer to it: the view they are in, how many names it
+ * holds, one line saying when the scan was taken and that these are recorded
+ * statuses, the views, the two controls most likely to be used, and then rows.
+ * Everything else is below them.
  *
- * Every one of those caveats is a banner, and they are collected into one block
- * above the data rather than scattered through it. The reader meets them once, in a
- * single place, and can then read the rest without being interrupted - which is
- * what makes them likely to be read at all.
+ * That ordering is not a demotion of the caveats. The two that a reader must not be
+ * able to miss are still above the list and still unmissable: the trust line always
+ * states the scan time and that nothing here is a live check, and an overdue source
+ * list raises a real alert. What moved below is the long form - the full provenance,
+ * the per-list schedules, the published counts, the lifecycle rules, the method - and
+ * it moved because at full length it filled the first screen and pushed the names
+ * out of sight. A caveat nobody scrolls past the names to read is not a caveat.
+ *
+ * Anything that is both conditional and about trust stays in the advisories block
+ * above the list: a simulated clock, a link that could not be applied in full, a
+ * stored copy shown because the API could not be reached, an out-of-date list. Each
+ * is rare, each changes how the rows below should be read, and none of them is
+ * something to find later.
  */
 export interface AppProps {
   /** Overridden in tests. Defaults to the build-time configuration. */
@@ -114,26 +122,28 @@ export function App({ config = appConfig, deps }: AppProps): ReactNode {
         </div>
       </header>
 
-      <div className="page">
-        <main id="main">
-          <div className="hero">
-            <p className="hero__eyebrow">Published snapshot</p>
-            <h1 className="hero__title">Every name, exactly as one scan found it.</h1>
-            <p className="hero__lede">
-              Every status and countdown below is what the ENS subgraph reported at one recorded
-              instant. Nothing is checked again when you open this page.
-            </p>
+      <main id="main">
+        <div className="page">
+          <div className="lede">
+            {/*
+             * The view names the page. It is also what the results region is
+             * labelled by, so a screen reader that jumps straight to the table is
+             * told which list it has landed in.
+             */}
+            <h1 className="lede__title" id="page-title">
+              {view.title}
+            </h1>
+            {page !== null && (
+              <p className="lede__count" role="status">
+                {page.total.toLocaleString('en-GB')}{' '}
+                {page.total === 1 ? 'name matches' : 'names match'}
+              </p>
+            )}
           </div>
 
-          <div className="advisories">
-            <Notice tone="info" title="This page is not the ENS registry">
-              <p>
-                The subgraph is an index, not the registration authority, and nothing here is
-                checked again when you open the page. Confirm availability and price with{' '}
-                <a href="https://app.ens.domains/">the ENS app</a> before registering anything.
-              </p>
-            </Notice>
+          {snapshot !== null && <TrustLine now={now} snapshot={snapshot} />}
 
+          <div className="advisories">
             {query.now !== null && (
               <SimulatedClockNotice now={now} realHref={hrefFor({ now: null })} />
             )}
@@ -145,15 +155,6 @@ export function App({ config = appConfig, deps }: AppProps): ReactNode {
                     <li key={warning}>{warning}</li>
                   ))}
                 </ul>
-              </Notice>
-            )}
-
-            {config.apiBaseUrl === null && (
-              <Notice tone="info" title="Local preview">
-                <p>
-                  No read API is configured, so this page is showing the committed{' '}
-                  <code>{config.fixtureId}</code> fixture: {FIXTURE_DESCRIPTION[config.fixtureId]}
-                </p>
               </Notice>
             )}
 
@@ -174,95 +175,90 @@ export function App({ config = appConfig, deps }: AppProps): ReactNode {
 
             {snapshot !== null && <StaleWarning metadata={snapshot.metadata} now={now} />}
           </div>
+        </div>
 
-          <div className="stack">
-            {store.phase === 'loading' && <LoadingState />}
-
-            {store.phase === 'failed' && store.failure !== null && (
-              <ErrorState failure={store.failure} onRetry={store.retry} />
-            )}
-
-            {snapshot !== null &&
-              store.origin !== null &&
-              attribution !== null &&
-              page !== null && (
-                <>
-                  <SnapshotStatus
-                    cachedAt={store.cachedAt}
-                    confirmedCurrent={store.confirmedCurrent}
-                    now={now}
-                    origin={store.origin}
-                    snapshot={snapshot}
-                  />
-                  <SummaryCounts metadata={snapshot.metadata} />
-                  <ViewTabs
-                    counts={viewCounts}
-                    current={view.id}
-                    hrefForView={(id) => hrefFor({ view: id })}
-                  />
-                  <Controls
-                    attribution={attribution}
-                    query={query}
-                    resetHref={resetHref}
-                    setQuery={setQuery}
-                    sources={snapshot.metadata.sources}
-                    statusCounts={statusCounts}
-                    total={page.total}
-                  />
-                  <section
-                    aria-labelledby="results-heading"
-                    className="card results-card"
-                    id="results"
-                  >
-                    <div className="section-head">
-                      <h2 className="card__title" id="results-heading">
-                        {view.label}
-                      </h2>
-                      <p className="prose">{view.summary}</p>
-                    </div>
-                    {page.total === 0 ? (
-                      <EmptyState
-                        filtered={filtered}
-                        resetHref={resetHref}
-                        viewLabel={view.label}
-                      />
-                    ) : (
-                      <>
-                        <ResultsTable
-                          direction={query.direction}
-                          now={now}
-                          rows={page.rows}
-                          sort={query.sort}
-                        />
-                        <Pagination
-                          firstRow={page.firstRow}
-                          hrefForPage={(n) => hrefFor({ page: n })}
-                          lastRow={page.lastRow}
-                          page={page.page}
-                          pageCount={page.pageCount}
-                          total={page.total}
-                        />
-                      </>
-                    )}
-                  </section>
-                </>
+        {(store.phase === 'loading' || store.phase === 'failed') && (
+          <div className="page">
+            <div className="stack">
+              {store.phase === 'loading' && <LoadingState />}
+              {store.phase === 'failed' && store.failure !== null && (
+                <ErrorState failure={store.failure} onRetry={store.retry} />
               )}
+            </div>
           </div>
-        </main>
+        )}
 
-        <footer className="footer">
+        {snapshot !== null && store.origin !== null && attribution !== null && page !== null && (
+          <>
+            {/*
+             * The stage is full-bleed and carries its own dark palette, so the names
+             * are read against nothing else. `.page` is repeated inside it rather
+             * than the stage being stretched out of the column: a `100vw` block
+             * includes the scrollbar and would make the document scroll sideways.
+             */}
+            <div className="stage">
+              <div className="page">
+                <ViewTabs
+                  counts={viewCounts}
+                  current={view.id}
+                  hrefForView={(id) => hrefFor({ view: id })}
+                />
+                <Toolbar
+                  attribution={attribution}
+                  query={query}
+                  resetHref={resetHref}
+                  setQuery={setQuery}
+                  sources={snapshot.metadata.sources}
+                  statusCounts={statusCounts}
+                />
+                <section aria-labelledby="page-title" className="results-panel" id="results">
+                  {page.total === 0 ? (
+                    <EmptyState filtered={filtered} resetHref={resetHref} viewLabel={view.label} />
+                  ) : (
+                    <>
+                      <ResultsTable
+                        direction={query.direction}
+                        now={now}
+                        rows={page.rows}
+                        sort={query.sort}
+                      />
+                      <Pagination
+                        firstRow={page.firstRow}
+                        hrefForPage={(n) => hrefFor({ page: n })}
+                        lastRow={page.lastRow}
+                        page={page.page}
+                        pageCount={page.pageCount}
+                        total={page.total}
+                      />
+                    </>
+                  )}
+                </section>
+              </div>
+            </div>
+
+            <div className="page">
+              <SnapshotDetails
+                cachedAt={store.cachedAt}
+                config={config}
+                confirmedCurrent={store.confirmedCurrent}
+                now={now}
+                origin={store.origin}
+                snapshot={snapshot}
+              />
+            </div>
+          </>
+        )}
+      </main>
+
+      <footer className="footer">
+        <div className="page">
           <p>
-            <strong>ENS decides, not this page.</strong> A name shown as available was available at
-            the scan time recorded above, which is not the same as available now. Check{' '}
+            <strong>ENS decides, not this page.</strong> Every status here is what one scan
+            recorded, not a live check. Confirm availability and price at{' '}
             <a href="https://app.ens.domains/">app.ens.domains</a> before you register.
           </p>
-          <p>
-            Grace and premium periods follow ENSv1 <code>.eth</code> rules: 90 days of grace after
-            expiry, then 21 days of declining temporary premium. The scanner computes them; this
-            page only displays what it published.
-          </p>
-        </footer>
-      </div>
+        </div>
+      </footer>
     </>
   )
 }

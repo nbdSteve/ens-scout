@@ -47,9 +47,11 @@ export function SnapshotStatus({
   return (
     <section className="card scan" aria-labelledby="scan-heading">
       <div>
-        <h2 className="card__title" id="scan-heading">
+        {/* An `h3`, because this card lives inside the disclosure below the
+            results rather than at the top level of the page. */}
+        <h3 className="card__title" id="scan-heading">
           Scan
-        </h2>
+        </h3>
         <p className="prose">
           Every status and countdown on this page describes the instant below. Nothing here is
           re-checked in your browser.
@@ -119,9 +121,9 @@ export function SnapshotStatus({
       </dl>
 
       <div>
-        <h3 className="fact__label" id="groups-heading">
+        <h4 className="fact__label" id="groups-heading">
           Source lists
-        </h3>
+        </h4>
         <ul className="groups" aria-labelledby="groups-heading">
           {groups.map((group) => (
             <li

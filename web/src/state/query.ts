@@ -1,5 +1,6 @@
 import { NAME_SUFFIX, STATUSES, isStatus, type Status } from '../snapshot/contract'
 import {
+  DEFAULT_VIEW,
   DEFAULT_VIEW_ID,
   findView,
   isSortDirection,
@@ -134,7 +135,7 @@ export function parseQuery(search: string): ParsedQuery {
 
   const requestedView = params.get(PARAM.view)
   if (requestedView !== null && findView(requestedView) === null) {
-    warnings.push(`The link asked for an unknown view, so all names are shown.`)
+    warnings.push(`The link asked for an unknown view, so ${DEFAULT_VIEW.title} is shown instead.`)
   }
   const view = viewOrDefault(requestedView ?? DEFAULT_VIEW_ID)
 

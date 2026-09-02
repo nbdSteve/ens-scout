@@ -11,7 +11,7 @@ import { ResultRow } from './ResultRow'
  * reader should be able to navigate by column. A grid of `<div>`s would look the
  * same and navigate far worse.
  *
- * The sort control lives in `Controls` rather than in these headers. There is one
+ * The sort control lives in `Toolbar` rather than in these headers. There is one
  * sort, it is part of the shareable link, and putting a second way to set it in the
  * headers would mean two mechanisms to keep agreed with the URL. What the headers
  * do carry is `aria-sort`, which reports the order the rows are actually in - and
@@ -35,10 +35,18 @@ function ariaSort(active: boolean, direction: SortDirection): 'ascending' | 'des
 export function ResultsTable({ rows, now, sort, direction }: ResultsTableProps): ReactNode {
   return (
     <table className="results">
+      {/*
+        Present for a screen reader, not drawn. This is the table's accessible name, so
+        a reader who arrives at the table out of context learns what it is and where the
+        authority is. It is hidden visually because the trust line on the first screen
+        already says the same thing at greater length, and a second copy of it directly
+        above the column headers cost two lines to say nothing new. See
+        `.results__caption`, which hides it by clipping rather than by `display: none`
+        so the name survives.
+      */}
       <caption className="results__caption">
-        Every status and date below is what the scan recorded at the instant given above, not a
-        fresh check. Each name links to the ENS app, which is the only authority on whether it can
-        be registered.
+        A record of one scan, not a fresh check. Each name links to the ENS app, the only authority
+        on whether it can be registered.
       </caption>
       <thead>
         <tr>

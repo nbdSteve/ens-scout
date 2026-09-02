@@ -1,5 +1,5 @@
 import AxeBuilder from '@axe-core/playwright'
-import { expect, type Page } from '@playwright/test'
+import { expect, type Locator, type Page } from '@playwright/test'
 
 /**
  * Shared helpers for the browser suite.
@@ -18,6 +18,11 @@ import { expect, type Page } from '@playwright/test'
  * And the fixture is chosen at build time, so a browser test cannot switch to the
  * `stale` fixture. It does not need to: moving the clock forward past a source
  * list's window makes the same snapshot stale, which is the code path that matters.
+ *
+ * The page opens on the available view, which the fixture answers with two of its
+ * ten names. So a test about the table itself - every status, every countdown, the
+ * longest strings, ten rows - asks for `view=all` rather than reading whatever the
+ * landing view happens to hold.
  */
 
 /** The instant the committed `preview` fixture records as its scan time. */
@@ -42,7 +47,45 @@ export function since(offsetMs: number): string {
 export async function visit(page: Page, params: Record<string, string> = {}): Promise<void> {
   const query = new URLSearchParams({ now: since(0), ...params })
   await page.goto(`/?${query.toString()}`)
-  await expect(page.getByRole('heading', { name: 'Scan', level: 2, exact: true })).toBeVisible()
+  await expect(results(page)).toBeVisible()
+}
+
+/**
+ * The results region, whichever view is on show.
+ *
+ * It is named by the page's `<h1>`, and every view titles itself `<something> .eth
+ * names`, so this is also what tells a test that the snapshot has arrived: the
+ * region is not rendered until there is one.
+ */
+export function results(page: Page): Locator {
+  return page.getByRole('region', { name: /\.eth names$/ })
+}
+
+/**
+ * Opens a `<details>` by its summary, and waits until it is open.
+ *
+ * Two things on the page are disclosures - the extra filters and the scan details -
+ * and their content is display:none until asked for. A `boundingBox()` inside a
+ * closed one is `null` and a `getBoundingClientRect()` is all zeroes, so a layout
+ * or contrast assertion made against a closed disclosure passes without checking
+ * anything. Every test that measures or inspects that content opens it first.
+ */
+async function open(page: Page, name: string): Promise<void> {
+  const summary = page.locator('summary').filter({ hasText: name })
+  await summary.click()
+  // The element the browser owns, not a class name: `open` is what actually
+  // decides whether the content below has any layout.
+  await expect(page.locator('details', { has: summary })).toHaveJSProperty('open', true)
+}
+
+/** Opens the source-list, sort, and status controls. */
+export function openMore(page: Page): Promise<void> {
+  return open(page, 'More filters')
+}
+
+/** Opens the provenance, per-list schedules, counts, lifecycle rules, and method. */
+export function openDetails(page: Page): Promise<void> {
+  return open(page, 'Scan details, source lists, and method')
 }
 
 const WCAG_TAGS = ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa']

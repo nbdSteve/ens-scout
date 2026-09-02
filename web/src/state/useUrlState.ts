@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useSyncExternalStore } from 'react'
+import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react'
 import { parseQuery, serializeQuery, updateQuery, type QueryState } from './query'
 
 /**
@@ -62,6 +62,18 @@ function navigate(search: string, replace: boolean): void {
   notify()
 }
 
+/**
+ * The link the visitor followed, as parsed before it was canonicalized. `canonical`
+ * is `null` once the arrival is over, which is a state no link can be equal to.
+ */
+interface Arrival {
+  readonly canonical: string | null
+  readonly warnings: readonly string[]
+}
+
+/** One shared value, so a repeated discard is `Object.is`-equal and re-renders nothing. */
+const OVER: Arrival = { canonical: null, warnings: [] }
+
 export interface UrlState {
   readonly query: QueryState
   /** Parts of the incoming link that could not be applied. */
@@ -85,7 +97,28 @@ export function useUrlState(): UrlState {
     navigate(canonical, true)
   }, [canonical])
 
+  // The warnings describe the link that was followed, and the rewrite above erases
+  // the evidence for them: re-parsing the canonical link produces none, because
+  // whatever could not be applied is no longer in it. Read straight from the current
+  // location, the notice would therefore appear for one render of the arrival and
+  // then vanish, which is the same as never showing it. So the arrival is captured
+  // once, before anything has been rewritten, and its warnings are shown for as long
+  // as the screen they describe is the screen on display.
+  const [arrival, setArrival] = useState<Arrival>(() => {
+    const onArrival = parseQuery(window.location.search)
+    return { canonical: serializeQuery(onArrival.state), warnings: onArrival.warnings }
+  })
+  const warnings = arrival.canonical === canonical ? arrival.warnings : []
+
   const setQuery = useCallback((change: Partial<QueryState>, options?: { replace?: boolean }) => {
+    // And dropped for good the moment the visitor changes something, which the
+    // comparison above cannot do on its own: clearing a filter can land back on the
+    // arrival's own link, and a notice about the link someone followed must not
+    // return once they have been somewhere else. `OVER` is the discarded state,
+    // because `null` matches no link. This is the only in-page navigation - every
+    // other control is a real `<a href="?...">`, which loads the document again and
+    // captures the new arrival on the way - so it is the only place the drop belongs.
+    setArrival(OVER)
     const next = serializeQuery(updateQuery(parseQuery(window.location.search).state, change))
     navigate(next, options?.replace === true)
   }, [])
@@ -98,5 +131,5 @@ export function useUrlState(): UrlState {
     [parsed.state],
   )
 
-  return { query: parsed.state, warnings: parsed.warnings, setQuery, hrefFor }
+  return { query: parsed.state, warnings, setQuery, hrefFor }
 }

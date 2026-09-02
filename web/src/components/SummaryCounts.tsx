@@ -27,9 +27,11 @@ export function SummaryCounts({ metadata }: SummaryCountsProps): ReactNode {
   return (
     <section className="card summary" aria-labelledby="summary-heading">
       <div>
-        <h2 className="card__title" id="summary-heading">
+        {/* An `h3`, for the same reason as the scan card: this sits inside the
+            disclosure below the results, not at the top level of the page. */}
+        <h3 className="card__title" id="summary-heading">
           What this scan found
-        </h2>
+        </h3>
         <p className="summary__total">
           {metadata.names.toLocaleString('en-GB')} {metadata.names === 1 ? 'name' : 'names'} checked
         </p>

@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { DAY, HOUR, since, visit } from './support'
+import { DAY, HOUR, openDetails, since, visit } from './support'
 
 /**
  * Staleness, resolved per source list.
@@ -10,6 +10,10 @@ import { DAY, HOUR, since, visit } from './support'
  * publishes each list's own window and lets the client resolve it against its own
  * clock. Eight hours after the scan is the case that separates the two: the
  * three-hourly lists have missed more than one scan and the daily one has not.
+ *
+ * The per-list verdict is a badge in the scan details, which is a disclosure, so
+ * every test that counts badges opens it first. The banner is not: a snapshot a
+ * visitor should not trust says so where they cannot miss it.
  */
 
 const DAILY = 'data/words/5-letters.txt'
@@ -17,8 +21,13 @@ const THREE_HOURLY = ['data/words/4-letters.txt', 'data/words/3-letters.txt']
 
 test('nothing warns while every list is inside its own window', async ({ page }) => {
   await visit(page)
+  await openDetails(page)
 
-  await expect(page.getByText('On schedule', { exact: true })).toHaveCount(3)
+  const fresh = page.getByText('On schedule', { exact: true })
+  await expect(fresh).toHaveCount(3)
+  // Rendered and on screen, not merely present: a count alone would pass on badges
+  // the disclosure was still hiding.
+  await expect(fresh.first()).toBeVisible()
   await expect(page.getByText('Out of date', { exact: true })).toHaveCount(0)
   // No banner at all, rather than a banner saying everything is fine. A warning
   // that is always there is a warning nobody reads.
@@ -36,6 +45,7 @@ test('only the lists that missed a scan are called out', async ({ page }) => {
   // The daily list is five hours into a twenty-four hour window.
   await expect(alert).not.toContainText(DAILY)
 
+  await openDetails(page)
   await expect(page.getByText('Out of date', { exact: true })).toHaveCount(2)
   await expect(page.getByText('On schedule', { exact: true })).toHaveCount(1)
 })
@@ -46,6 +56,8 @@ test('the daily list joins them once it has missed a scan too', async ({ page })
   const alert = page.getByRole('alert')
   await expect(alert).toContainText('3 source lists are out of date')
   await expect(alert).toContainText(DAILY)
+
+  await openDetails(page)
   await expect(page.getByText('On schedule', { exact: true })).toHaveCount(0)
 })
 
@@ -61,7 +73,8 @@ test('the warning is coarse, so a live region does not re-announce every second'
 })
 
 test('the rows are still shown, because history is not nothing', async ({ page }) => {
-  await visit(page, { now: since(3 * DAY) })
+  // Every name, so the count says the stale snapshot was withheld from none of them.
+  await visit(page, { now: since(3 * DAY), view: 'all' })
 
   await expect(page.getByRole('table').getByRole('rowheader')).toHaveCount(10)
   await expect(page.getByRole('alert')).toContainText('Treat every status below as history')

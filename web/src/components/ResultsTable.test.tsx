@@ -37,7 +37,9 @@ describe('ResultsTable structure', () => {
   it('is a real table with a caption, three column headers, and a row header per name', () => {
     mount()
 
-    const table = screen.getByRole('table', { name: /what the scan recorded/ })
+    // The caption is the table's accessible name, which is what a screen reader
+    // arriving at it out of context is told first.
+    const table = screen.getByRole('table', { name: /A record of one scan/ })
     expect(
       within(table)
         .getAllByRole('columnheader')
