@@ -21,6 +21,7 @@ import (
 //	latest.json
 //	snapshots/<snapshot-id>/chunk-00000.json
 //	snapshots/<snapshot-id>/chunk-00001.json
+//	staging/<snapshot-id>.json
 //
 // Each chunk file is one JSON-encoded Chunk, including its checksum, so a
 // hand-edited file fails verification exactly as a corrupt stored item would.
@@ -28,9 +29,14 @@ type FileStore struct {
 	root string
 }
 
+// FileStore records staged snapshots as well as published ones, so both local
+// fakes offer the same surface the real backend does.
+var _ StagingStore = (*FileStore)(nil)
+
 const (
 	fileStoreLatestName = "latest.json"
 	fileStoreChunkDir   = "snapshots"
+	fileStoreStagingDir = "staging"
 	fileStoreChunkGlob  = "chunk-"
 	fileStoreChunkExt   = ".json"
 	// fileStoreQuarantinePrefix names a pointer file kept for diagnosis rather
@@ -56,21 +62,21 @@ func NewFileStore(dir string) *FileStore {
 // returned, because a cancelled context or an I/O failure says nothing about what
 // is stored and must not be able to destroy a published snapshot.
 func (s *FileStore) PutChunks(ctx context.Context, snapshotID string, chunks []Chunk) error {
-	if err := checkPutChunks(ctx, snapshotID, chunks); err != nil {
+	if err := ValidatePutChunks(ctx, snapshotID, chunks); err != nil {
 		return err
 	}
 	existing, err := s.GetChunks(ctx, snapshotID)
 	if err != nil && !errors.Is(err, ErrNotFound) {
 		return err
 	}
-	decision, missing, err := decideChunkWrite(existing, chunks)
+	decision, missing, err := PlanChunkWrite(existing, chunks)
 	if err != nil {
 		return err
 	}
 	switch decision {
-	case chunkWriteSkip:
+	case ChunkWriteSkip:
 		return nil
-	case chunkWriteRefuse:
+	case ChunkWriteRefuse:
 		return errChunksImmutable(snapshotID)
 	}
 
@@ -148,46 +154,52 @@ func (s *FileStore) DeleteChunks(ctx context.Context, snapshotID string) error {
 	return os.RemoveAll(s.snapshotDir(snapshotID))
 }
 
-// PutLatest replaces the pointer file, applying the LatestStore ordering rule.
+// PutLatest replaces the pointer file, applying the LatestStore ordering rule, and
+// reports the pointer it replaced so a caller can expire what it superseded.
 // The write is atomic, so a reader never observes a half-written pointer.
 //
 // An unreadable stored pointer is quarantined rather than overwritten, because it
 // is the only evidence of why publication was blocked. Quarantining happens
 // before the new pointer is installed and is not best effort: if the old file
-// cannot be preserved, the publication fails instead of destroying it.
-func (s *FileStore) PutLatest(ctx context.Context, latest Latest) error {
+// cannot be preserved, the publication fails instead of destroying it. Replacing one
+// is reported as an unusable replacement rather than as replacing nothing, because
+// the chunk set it named is real and is now unreferenced.
+func (s *FileStore) PutLatest(ctx context.Context, latest Latest) (PointerReplacement, error) {
 	if err := ctx.Err(); err != nil {
-		return err
+		return PointerReplacement{}, err
 	}
 	if err := latest.Validate(); err != nil {
-		return err
+		return PointerReplacement{}, err
 	}
 
 	stored, quarantine, err := s.orderingPointer()
 	if err != nil {
-		return err
+		return PointerReplacement{}, err
 	}
-	write, err := checkPutLatest(stored, latest)
+	write, err := PlanLatestWrite(stored, latest)
 	if err != nil {
-		return err
+		return PointerReplacement{}, err
 	}
 	if !write {
-		return nil
+		return PointerReplacement{}, nil
 	}
 
 	if err := os.MkdirAll(s.root, 0o755); err != nil {
-		return err
+		return PointerReplacement{}, err
 	}
 	encoded, err := json.Marshal(latest)
 	if err != nil {
-		return err
+		return PointerReplacement{}, err
 	}
 	if quarantine {
 		if err := s.quarantineLatest(latest.PublishedAt); err != nil {
-			return err
+			return PointerReplacement{}, err
 		}
 	}
-	return writeFileAtomically(filepath.Join(s.root, fileStoreLatestName), encoded)
+	if err := writeFileAtomically(filepath.Join(s.root, fileStoreLatestName), encoded); err != nil {
+		return PointerReplacement{}, err
+	}
+	return PointerReplacement{Previous: stored, Unusable: quarantine}, nil
 }
 
 // orderingPointer returns the stored pointer the ordering rule is applied
@@ -268,8 +280,117 @@ func (s *FileStore) GetLatest(ctx context.Context) (Latest, error) {
 	return latest, nil
 }
 
+// stagedSnapshot is one staging marker on disk. The expiry is recorded rather than
+// acted on: a directory has no TTL, and a real backend expires the item itself.
+type stagedSnapshot struct {
+	SnapshotID string    `json:"snapshot_id"`
+	StagedAt   time.Time `json:"staged_at"`
+	ExpiresAt  time.Time `json:"expires_at"`
+}
+
+// StageSnapshot writes a snapshot's staging marker, replacing any earlier one so a
+// repeated claim refreshes the staging time.
+func (s *FileStore) StageSnapshot(ctx context.Context, snapshotID string, stagedAt, expiresAt time.Time) error {
+	if err := ValidateStaging(ctx, snapshotID, stagedAt, expiresAt); err != nil {
+		return err
+	}
+	encoded, err := json.Marshal(stagedSnapshot{
+		SnapshotID: snapshotID,
+		StagedAt:   stagedAt.UTC(),
+		ExpiresAt:  expiresAt.UTC(),
+	})
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Join(s.root, fileStoreStagingDir), 0o755); err != nil {
+		return err
+	}
+	return writeFileAtomically(s.stagingPath(snapshotID), encoded)
+}
+
+// UnstageSnapshot removes a staging marker. Removing one that is not there
+// succeeds, so a publisher may unstage without first checking.
+func (s *FileStore) UnstageSnapshot(ctx context.Context, snapshotID string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := ValidateSnapshotID(snapshotID); err != nil {
+		return err
+	}
+	if err := os.Remove(s.stagingPath(snapshotID)); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
+}
+
+// StagedSnapshots reads every staging marker, in snapshot ID order.
+//
+// A marker file it cannot interpret is skipped and reported through
+// StagingUnreadableError, never returned and so never acted on. An I/O failure is a
+// failure: it says nothing about the marker's contents.
+func (s *FileStore) StagedSnapshots(ctx context.Context) ([]StagedSnapshot, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	entries, err := os.ReadDir(filepath.Join(s.root, fileStoreStagingDir))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || !strings.HasSuffix(name, fileStoreChunkExt) {
+			continue
+		}
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	staged := make([]StagedSnapshot, 0, len(names))
+	skipped := 0
+	var firstSkip error
+	skip := func(err error) {
+		skipped++
+		if firstSkip == nil {
+			firstSkip = err
+		}
+	}
+	for _, name := range names {
+		encoded, err := os.ReadFile(filepath.Join(s.root, fileStoreStagingDir, name))
+		if err != nil {
+			return nil, err
+		}
+		var marker stagedSnapshot
+		if err := json.Unmarshal(encoded, &marker); err != nil {
+			skip(fmt.Errorf("read staging marker %s: %w", name, err))
+			continue
+		}
+		if err := ValidateSnapshotID(marker.SnapshotID); err != nil {
+			skip(err)
+			continue
+		}
+		if want := marker.SnapshotID + fileStoreChunkExt; name != want {
+			skip(fmt.Errorf("staging marker %s names snapshot %q, want file %s", name, marker.SnapshotID, want))
+			continue
+		}
+		staged = append(staged, StagedSnapshot{SnapshotID: marker.SnapshotID, StagedAt: marker.StagedAt.UTC()})
+	}
+	if skipped > 0 {
+		return staged, &StagingUnreadableError{Skipped: skipped, Cause: firstSkip}
+	}
+	return staged, nil
+}
+
 func (s *FileStore) snapshotDir(snapshotID string) string {
 	return filepath.Join(s.root, fileStoreChunkDir, snapshotID)
+}
+
+func (s *FileStore) stagingPath(snapshotID string) string {
+	return filepath.Join(s.root, fileStoreStagingDir, snapshotID+fileStoreChunkExt)
 }
 
 func writeFileAtomically(path string, payload []byte) error {

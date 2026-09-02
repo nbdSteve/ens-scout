@@ -50,19 +50,20 @@ An optional lookup endpoint will recheck a small set of names on demand.
 
 ## Repository layout
 
+`README.md` records what the repository holds today, including the
+`cmd/scan-lambda/`, `internal/scanner/`, and `internal/dynamo/` packages the
+publisher work added.
+The directories still to be created are:
+
 ```text
-cmd/ens-scrape/       existing CLI
-cmd/scan-lambda/      scheduled snapshot publisher
 cmd/api-lambda/       snapshot reads and live verification
-internal/snapshot/    snapshot contract, chunking, publication, and fakes
-data/fixtures/        committed fixture snapshots for local frontend work
 web/                  React, TypeScript, and Vite frontend application
 infra/                TypeScript AWS CDK application
 ```
 
 The Lambda binaries will target Linux on the AWS `provided.al2023` runtime.
-Adding them will deliberately introduce the official AWS Lambda Go library and
-AWS SDK for Go v2; dependency versions and `go.sum` must be committed.
+The publisher introduced the official AWS Lambda Go library and AWS SDK for Go
+v2, pinned and with `go.sum` committed.
 `internal/snapshot` itself stays on the Go standard library and depends on no
 AWS package, so the contract can be exercised without any cloud dependency.
 
@@ -70,8 +71,8 @@ AWS package, so the contract can be exercised without any cloud dependency.
 
 The snapshot contract is storage neutral, so each layer has a local path.
 
-- `internal/snapshot` defines `ChunkStore`, `LatestStore`, and `Store`, and the
-AWS DynamoDB backend will implement the same interfaces the fakes do.
+- `internal/snapshot` defines the storage interfaces, and `internal/dynamo`
+implements the same ones the local fakes do.
 - `MemoryStore` supports fast tests, and `FileStore` supports a real
 publish-and-read cycle against a directory on disk.
 - `data/fixtures/preview` and `data/fixtures/stale` hold committed fixture
@@ -109,12 +110,16 @@ than guessing at an unknown layout.
 
 Publication is atomic from a reader's perspective:
 
-1. Generate a unique snapshot ID and scan all configured lists.
+1. Generate a unique snapshot ID, scan the lists of the group the schedule event
+names, and carry every other list forward from the snapshot already published.
 2. Serialize, compress, and checksum the complete result set.
-3. Write chunks under the new snapshot ID, retrying unprocessed batch writes.
-4. Read the chunks back and verify them against the pointer being published.
-5. Update `META/LATEST` only after verification succeeds.
-6. Assign old snapshot chunks a TTL so DynamoDB removes them later.
+3. Record the snapshot ID in the staging registry, before any chunk is written.
+4. Write chunks under the new snapshot ID, retrying unprocessed batch writes.
+5. Read the chunks back and verify them against the pointer being published.
+6. Update `META/LATEST` only after verification succeeds, then remove the
+staging record.
+7. Assign the chunks of the snapshot that pointer write replaced a TTL, so
+DynamoDB removes them once the recovery window has passed.
 
 If scanning or publication fails, `META/LATEST` remains unchanged and the
 website continues serving the previous valid snapshot.
@@ -193,8 +198,19 @@ and require 66 GraphQL requests with a batch size of 100. The approved
 three-hour cadence is approximately 15,840 requests per 30-day month before
 live checks.
 
-The five-letter list runs daily on its own schedule. Exhaustively scanning all
-letter combinations is outside the first release:
+The five-letter list runs daily on its own schedule.
+
+The infrastructure that defines these schedules must offset the daily one from the
+three-hourly one, so the two can never fire in the same second.
+Both runs publish into a single latest pointer, which only ever moves forward.
+When they collide, the short run finishes first and publishes, and the daily run is
+then refused because its scan time is the older of the two.
+That throws away a whole daily Graph budget on which run happened to sample its
+clock first.
+Refusing the older scan is correct, and an offset of a few minutes avoids paying for
+it.
+
+Exhaustively scanning all letter combinations is outside the first release:
 
 - 26^3 = 17,576 three-letter combinations, or 176 batched requests;
 - 26^4 = 456,976 four-letter combinations, or 4,570 batched requests.
@@ -216,6 +232,10 @@ DynamoDB costs, and actual visitor demand.
   old snapshot chunks.
 - Retain superseded snapshots only for the TTL recovery window, which is long
   enough to roll back to the previous snapshot and no longer.
+- Reclaim the chunk sets of publications that never moved the pointer. The
+  publisher records each snapshot it begins writing, so a later run can find and
+  expire what a killed or refused run left behind; without that, a repeatedly
+  failing publication grows the table with sets nothing references.
 - Keep the previous valid snapshot available during upstream outages.
 
 ## Delivery phases
@@ -224,11 +244,13 @@ DynamoDB costs, and actual visitor demand.
 
 - Add shared snapshot types and deterministic serialization tests. Done.
 - Add storage interfaces, local fakes, and committed fixtures. Done.
-- Add the scheduled Lambda and DynamoDB publisher.
+- Add the scheduled Lambda and DynamoDB publisher. Done.
+- Verify atomic publication and failure recovery with local fakes. Done.
 - Add TypeScript AWS CDK infrastructure for DynamoDB, IAM, Lambda, Scheduler,
 and secrets.
+  The two schedules must be offset from each other, for the reason recorded under
+  "Scheduling and query budget".
 - Add GitHub Actions workflows that deploy through a GitHub OIDC role.
-- Verify atomic publication and failure recovery with local fakes.
 
 ### Phase 2: read API and frontend
 
