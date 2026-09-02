@@ -1390,6 +1390,84 @@ func TestReclaimNeverReportsTheSnapshotItSupersededAsAbandoned(t *testing.T) {
 	}
 }
 
+// TestSupersededMarkerSurvivesAFailedTTLWrite is the other half of the exclusion. The
+// reclaim pass may only skip the snapshot this run superseded once that snapshot's
+// retention has actually settled: the expiry is best effort, and a chunk set whose
+// expiry failed has its staging marker as the last thing in the store that can find
+// it. Removing that marker anyway leaves the set with no TTL, no pointer, and no
+// record, which is the permanent leak the exclusion was added to close.
+func TestSupersededMarkerSurvivesAFailedTTLWrite(t *testing.T) {
+	store := newFakeStore()
+	dir := defaultLists(t)
+
+	// The first run's own unstage fails, and so does the retry its reclaim pass makes,
+	// so the snapshot it published keeps its marker past the end of the run.
+	store.unstageErr = errInjected
+	first := newTestRun(t, dir, newFakeGraph(nil), store)
+	previous, err := Run(context.Background(), first.deps, Event{Group: GroupShort})
+	if err != nil {
+		t.Fatalf("first Run: %v", err)
+	}
+	store.unstageErr = nil
+	if !isStaged(t, store, previous.Latest.SnapshotID) {
+		t.Fatalf("the published snapshot kept no marker, so there is nothing to lose")
+	}
+
+	// The next run supersedes it, and every retention write it attempts is refused.
+	store.expireErr = errInjected
+	second := newTestRun(t, dir, newFakeGraph(nil), store).at(fixedNow.Add(3 * time.Hour))
+	current, err := Run(context.Background(), second.deps, Event{Group: GroupShort})
+	if err != nil {
+		t.Fatalf("a retention failure failed the whole run: %v", err)
+	}
+	if current.Previous != previous.Latest.SnapshotID {
+		t.Fatalf("the run reports superseding %q, want the pointer it replaced, %q",
+			current.Previous, previous.Latest.SnapshotID)
+	}
+	requireRecordAt(t, second, "superseded_chunks_expire_failed", LevelWarn)
+
+	if _, found := store.expiry(previous.Latest.SnapshotID); found {
+		t.Fatalf("the refused expiry was recorded anyway, so this proves nothing")
+	}
+	if !isStaged(t, store, previous.Latest.SnapshotID) {
+		t.Errorf("the marker of a superseded snapshot with no TTL was removed, so nothing can find its chunks: %s",
+			second.logs.String())
+	}
+	if !containsString(store.SnapshotIDs(), previous.Latest.SnapshotID) {
+		t.Errorf("the superseded snapshot's chunks are already gone")
+	}
+
+	// Because the marker survived, a later pass still bounds the set, under the cruder
+	// abandoned window. That report is accurate here: the retention it was owed never
+	// landed, so what it should have been is genuinely unknown.
+	store.expireErr = nil
+	reclaimAt := fixedNow.Add(6 * time.Hour)
+	third := newTestRun(t, dir, newFakeGraph(nil), store).at(reclaimAt)
+	latestRun, err := Run(context.Background(), third.deps, Event{Group: GroupShort})
+	if err != nil {
+		t.Fatalf("third Run: %v", err)
+	}
+	expiry, found := store.expiry(previous.Latest.SnapshotID)
+	if !found {
+		t.Fatalf("a later pass could not bound the set the failed expiry left behind: %s", third.logs.String())
+	}
+	if want := reclaimAt.Add(abandonedRetention); !expiry.Equal(want) {
+		t.Errorf("TTL %s, want the abandoned window %s", expiry, want)
+	}
+	if record := requireRecordAt(t, third, "abandoned_chunks_expired", LevelWarn); record.SnapshotID != previous.Latest.SnapshotID {
+		t.Errorf("the reclaim record names %q, want %q", record.SnapshotID, previous.Latest.SnapshotID)
+	}
+	if isStaged(t, store, previous.Latest.SnapshotID) {
+		t.Errorf("the marker of a bounded set was kept: %v", stagedIDs(t, store))
+	}
+	if _, found := store.expiry(latestRun.Latest.SnapshotID); found {
+		t.Errorf("the published snapshot was given a TTL")
+	}
+	if _, latest, err := snapshot.Read(context.Background(), store); err != nil || latest.SnapshotID != latestRun.Latest.SnapshotID {
+		t.Errorf("readers do not see %q: %v", latestRun.Latest.SnapshotID, err)
+	}
+}
+
 func TestRunCarriesTheSnapshotPublishedDuringItsScan(t *testing.T) {
 	store := newFakeStore()
 	dir := defaultLists(t)

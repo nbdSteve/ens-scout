@@ -564,9 +564,11 @@ func Run(ctx context.Context, deps Dependencies, event Event) (Result, error) {
 	latest, replaced, publishErr := snapshot.Publish(ctx, deps.Store, built, deps.now().Truncate(time.Second))
 
 	result := Result{Group: group, Scanned: len(results), Carried: len(carried)}
-	// superseded is the snapshot the pointer write replaced, once it has been given the
-	// retention window it is owed. The reclaim pass is told about it so it can drop a
-	// leftover marker for it without aiming a second expiry at the same chunks.
+	// superseded is the snapshot the pointer write replaced, and is set only once that
+	// snapshot's retention is settled. The reclaim pass is told about it so it can drop a
+	// leftover marker for it without aiming a second expiry at the same chunks. It stays
+	// empty when the expiry did not land, because then the marker is the only thing left
+	// that can find those chunks and the pass has to reclaim them like any other set.
 	superseded := ""
 	if publishErr == nil {
 		result.Latest = latest
@@ -604,8 +606,9 @@ func Run(ctx context.Context, deps Dependencies, event Event) (Result, error) {
 		switch {
 		case replaced.Previous != nil:
 			result.Previous = replaced.Previous.SnapshotID
-			superseded = replaced.Previous.SnapshotID
-			expireSuperseded(ctx, deps, logger, *replaced.Previous, latest)
+			if expireSuperseded(ctx, deps, logger, *replaced.Previous, latest) {
+				superseded = replaced.Previous.SnapshotID
+			}
 		case replaced.Unusable:
 			// The replaced pointer did not read, so which snapshot it named is unknown and
 			// no expiry can be aimed at it. Naming a snapshot on the word of a pointer that
@@ -866,14 +869,17 @@ func readPrevious(ctx context.Context, deps Dependencies, logger *Logger) (*snap
 //     is neither live nor its own and report a served snapshot as abandoned. Nothing
 //     here can place an expiry on the live snapshot either way: this branch only
 //     unstages, and ExpireChunks refuses the live ID as well.
-//   - superseded is the snapshot this run's own pointer write replaced, and is
-//     treated exactly like the live one: its marker is removed and its chunks are left
-//     alone. They already carry the retention window expireSuperseded gave them, which
-//     is that snapshot's own stale-after threshold, and a reclaim here would overwrite
-//     it with the far cruder abandonedRetention. Just as importantly, a snapshot that
-//     was published and has since been superseded is not an abandoned chunk set, and
-//     reporting it as one is the same false alarm as reporting the live one, a run
-//     later.
+//   - superseded is the snapshot this run's own pointer write replaced, and only when
+//     its retention is settled. It is then treated exactly like the live one: its marker
+//     is removed and its chunks are left alone, because they already carry the window
+//     expireSuperseded aimed at them - that snapshot's own stale-after threshold - and a
+//     reclaim here would overwrite it with the far cruder abandonedRetention. Just as
+//     importantly, a snapshot that was published and has since been superseded is not an
+//     abandoned chunk set, and reporting it as one is the same false alarm as reporting
+//     the live one, a run later. When the expiry did not land the caller passes nothing,
+//     so the set falls through to the ordinary rules: its marker is the only thing left
+//     that can find those chunks, and the abandoned window is the accurate report,
+//     because the retention it was owed is genuinely unknown.
 //   - keep is this run's own snapshot ID, which is otherwise never touched. A set
 //     this run goes on to publish must not be carrying an expiry, and a set it just
 //     abandoned is left for a later pass rather than expired by the run that lost it.
@@ -936,9 +942,9 @@ func reclaimAbandoned(ctx context.Context, deps Dependencies, logger *Logger, gr
 		if ctx.Err() != nil {
 			return
 		}
-		// The live snapshot and the one this run superseded are both accounted for:
-		// their chunks already carry the retention they should have, so all that is
-		// left of either is a stale marker.
+		// The live snapshot, and one this run superseded whose retention settled, are
+		// both accounted for: their chunks already carry the retention they should
+		// have, so all that is left of either is a stale marker.
 		retained := entry.SnapshotID == live || (superseded != "" && entry.SnapshotID == superseded)
 		if !retained {
 			if entry.SnapshotID == keep {
@@ -1010,14 +1016,24 @@ func unstage(ctx context.Context, deps Dependencies, logger *Logger, group Group
 // verified; leaving a superseded chunk set in place costs storage, and failing the
 // run would report a successful publication as a failure and invite a retry that
 // has nothing left to do.
-func expireSuperseded(ctx context.Context, deps Dependencies, logger *Logger, previous, current snapshot.Latest) {
+//
+// It reports whether the replaced set's retention is settled, which is what decides
+// whether the reclaim pass may drop a leftover marker for it. A settled set either
+// carries its window or has no chunks left to carry one, so the marker is only a
+// stale record. An unsettled one has nothing bounding it, and its marker is the last
+// thing in the store that can find it, so the pass has to leave that marker alone and
+// reclaim the set on a later schedule under the abandoned window instead. That window
+// is cruder than the one aimed here, and bounded beats unreachable.
+func expireSuperseded(ctx context.Context, deps Dependencies, logger *Logger, previous, current snapshot.Latest) bool {
 	if previous.SnapshotID == current.SnapshotID {
-		return
+		// The pointer replaced a pointer naming the snapshot this run published, so
+		// these chunks are live and must keep no expiry at all.
+		return true
 	}
 	window := time.Duration(previous.ScanAge.StaleAfterSeconds) * time.Second
 	if window <= 0 {
 		logger.Log(LevelWarn, "superseded_chunks_kept", Fields{PreviousID: previous.SnapshotID})
-		return
+		return false
 	}
 	expiresAt := current.PublishedAt.Add(window).UTC().Truncate(time.Second)
 	fields := Fields{
@@ -1028,13 +1044,16 @@ func expireSuperseded(ctx context.Context, deps Dependencies, logger *Logger, pr
 	switch err := deps.Store.ExpireChunks(ctx, previous.SnapshotID, expiresAt); {
 	case err == nil:
 		logger.Log(LevelInfo, "superseded_chunks_expired", fields)
+		return true
 	case errors.Is(err, snapshot.ErrNotFound):
 		// There is nothing left to expire. The superseded snapshot's chunks are
 		// already gone, which is the state readPrevious reports as a snapshot that
 		// vanished, so a retention window is neither possible nor needed.
 		logger.Log(LevelInfo, "superseded_chunks_absent", fields)
+		return true
 	default:
 		logger.LogError(LevelWarn, "superseded_chunks_expire_failed", fields, err)
+		return false
 	}
 }
 

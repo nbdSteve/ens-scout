@@ -1519,6 +1519,42 @@ func TestRetryDelayIsBoundedAndGrows(t *testing.T) {
 	}
 }
 
+// TestAttributeTypeCodeNamesTheDynamoDescriptors pins the operand pointerGuard binds
+// into attribute_type against the descriptors the service actually accepts. Nothing
+// else can: a fake that resolved the condition through this same mapping would compare
+// it against itself, and a descriptor the service rejects would answer every real
+// attempt with a ValidationException, putting publication back in the wedged state the
+// guard exists to escape from.
+func TestAttributeTypeCodeNamesTheDynamoDescriptors(t *testing.T) {
+	tests := []struct {
+		name  string
+		value types.AttributeValue
+		want  string
+	}{
+		{"string", &types.AttributeValueMemberS{Value: "zap"}, "S"},
+		{"number", &types.AttributeValueMemberN{Value: "7"}, "N"},
+		{"binary", &types.AttributeValueMemberB{Value: []byte{1, 2}}, "B"},
+		{"string set", &types.AttributeValueMemberSS{Value: []string{"zap"}}, "SS"},
+		{"number set", &types.AttributeValueMemberNS{Value: []string{"7"}}, "NS"},
+		{"binary set", &types.AttributeValueMemberBS{Value: [][]byte{{1}}}, "BS"},
+		{"boolean", &types.AttributeValueMemberBOOL{Value: true}, "BOOL"},
+		{"null", &types.AttributeValueMemberNULL{Value: true}, "NULL"},
+		{"list", &types.AttributeValueMemberL{Value: []types.AttributeValue{stringValue("zap")}}, "L"},
+		{"map", &types.AttributeValueMemberM{Value: map[string]types.AttributeValue{"a": stringValue("zap")}}, "M"},
+		// A union member this SDK version does not model has no descriptor to name, and
+		// pointerGuard falls back to asserting the attribute's presence instead.
+		{"unmodelled", &types.UnknownUnionMember{Tag: "XX"}, ""},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			if got := attributeTypeCode(test.value); got != test.want {
+				t.Errorf("attributeTypeCode(%T) = %q, want %q", test.value, got, test.want)
+			}
+		})
+	}
+}
+
 func TestItemBytesCountsBinaryAsItTravels(t *testing.T) {
 	item := map[string]types.AttributeValue{
 		attrPayload: &types.AttributeValueMemberB{Value: make([]byte, 300)},

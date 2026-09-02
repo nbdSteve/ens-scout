@@ -473,11 +473,15 @@ func evaluateCondition(expression string, names map[string]string, values map[st
 		if err != nil {
 			return false, err
 		}
-		got, exists := item[name]
+		stored, exists := item[name]
 		if !exists {
 			return false, nil
 		}
-		return attributeTypeCode(got) == want, nil
+		got, err := fakeAttributeType(stored)
+		if err != nil {
+			return false, err
+		}
+		return got == want, nil
 	case strings.HasPrefix(expression, "attribute_not_exists(") && strings.HasSuffix(expression, ")"):
 		name, err := resolveName(strings.TrimSuffix(strings.TrimPrefix(expression, "attribute_not_exists("), ")"), names)
 		if err != nil {
@@ -563,6 +567,42 @@ func resolveName(token string, names map[string]string) (string, error) {
 		return "", fmt.Errorf("fake: no binding for attribute name %q", token)
 	}
 	return name, nil
+}
+
+// fakeAttributeType names the DynamoDB type of a stored value for the fake's
+// attribute_type evaluator.
+//
+// It deliberately does not call the production attributeTypeCode. Deciding the
+// condition with the same mapping that bound its operand would compare that mapping
+// against itself, so a descriptor the real service rejects - "NUMBER" where it wants
+// "N" - would satisfy every test while wedging every real write. A descriptor the fake
+// does not recognise is an error rather than a mismatch, because the real service
+// answers a bad type argument with a ValidationException and not with false.
+func fakeAttributeType(value types.AttributeValue) (string, error) {
+	switch value.(type) {
+	case *types.AttributeValueMemberS:
+		return "S", nil
+	case *types.AttributeValueMemberN:
+		return "N", nil
+	case *types.AttributeValueMemberB:
+		return "B", nil
+	case *types.AttributeValueMemberSS:
+		return "SS", nil
+	case *types.AttributeValueMemberNS:
+		return "NS", nil
+	case *types.AttributeValueMemberBS:
+		return "BS", nil
+	case *types.AttributeValueMemberBOOL:
+		return "BOOL", nil
+	case *types.AttributeValueMemberNULL:
+		return "NULL", nil
+	case *types.AttributeValueMemberL:
+		return "L", nil
+	case *types.AttributeValueMemberM:
+		return "M", nil
+	default:
+		return "", fmt.Errorf("fake: stored value %T has no DynamoDB type descriptor", value)
+	}
 }
 
 func attributeString(values map[string]types.AttributeValue, token string) (string, error) {

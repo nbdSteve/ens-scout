@@ -277,9 +277,15 @@ implement the snapshot contract above rather than restating it.
   table growth rather than only bounding it for snapshots that were published. The
   rules are what keep a pass from destroying live data: it removes the marker and
   leaves the chunks alone when the marker names the published snapshot, and treats the
-  snapshot this run's own pointer write replaced exactly the same way, because those
-  chunks already carry the retention the rule above aimed at them and a reclaim would
-  overwrite that with the far cruder abandoned window; it otherwise
+  snapshot this run's own pointer write replaced the same way but only once that
+  snapshot's retention settled - the expiry landed, or its chunks were already gone -
+  because only then do those chunks carry the retention the rule above aimed at them
+  and a reclaim would overwrite it with the far cruder abandoned window; when the expiry
+  failed the exclusion is not applied at all, because the marker is then the last thing
+  in the store that can find that chunk set and dropping it would leave the set with no
+  TTL, no pointer, and no record, so the set is reclaimed on a later schedule under the
+  abandoned window and reported as abandoned, which is accurate because the retention it
+  was owed is genuinely unknown; it otherwise
   skips its own run's snapshot ID, because a set the run publishes must not carry an
   expiry that would outlive the pointer naming it; it defers the whole pass when the
   pointer cannot be read, because then nothing proves which snapshot is live; and it
