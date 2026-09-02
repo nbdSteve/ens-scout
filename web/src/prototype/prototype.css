@@ -18,16 +18,19 @@
   --mono: ui-monospace, 'SF Mono', 'Cascadia Mono', Menlo, monospace;
 
   --ink: #f4f5fb;
-  --ink-dim: #a8adc6;
-  --ink-faint: #6d7392;
+  --ink-dim: #c3c7dc;
+  --ink-faint: #9ea4c2;
   --field: #05060c;
-  --edge: rgb(255 255 255 / 9%);
-  --edge-lit: rgb(255 255 255 / 22%);
-  --glass: rgb(255 255 255 / 4%);
+  --edge-lit: rgb(255 255 255 / 26%);
+  /* The one visible line on the page: the underside of a text field. Solid and
+     light enough to clear 3:1 against every part of the lit field, because it is
+     the only thing that says the field is a field. An alpha hairline measured
+     2.2:1 over the dark end and failed. */
+  --rule: #8b8fa8;
 
-  --violet: #7c5cff;
+  /* The palette is two hues. Violet appears only inside the gradients, which need
+     it at several alphas, so it is written there literally. */
   --cyan: #22d3ee;
-  --lime: #a3e635;
 
   --radius: 1.25rem;
   --bar: 4.25rem;
@@ -78,10 +81,11 @@ body {
 
 /*
  * The light. Four wide radial gradients, pushed mostly off-canvas so what reaches
- * the page is the falloff rather than the source, over a faint grid that only
- * shows where the light lands. It is one fixed layer behind everything, so no
- * name needs a gradient of its own, and the two colours are the only two in the
- * palette: mixing in a third turned the middle of the field muddy.
+ * the page is the falloff rather than the source. It is one fixed layer behind
+ * everything, so no name needs a gradient of its own, and the two colours are the
+ * only two in the palette: mixing in a third turned the middle of the field muddy.
+ * There is deliberately no grid, no panel and no rule: a ruled grid is the single
+ * strongest thing that makes a page read as a dashboard.
  */
 .proto__aurora {
   position: fixed;
@@ -93,17 +97,6 @@ body {
     radial-gradient(56rem 42rem at 86% 98%, rgb(124 92 255 / 34%), rgb(124 92 255 / 0%) 68%),
     radial-gradient(48rem 36rem at 2% 106%, rgb(34 211 238 / 22%), rgb(34 211 238 / 0%) 66%),
     var(--field);
-}
-
-.proto__aurora::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  background-image:
-    linear-gradient(to right, rgb(255 255 255 / 4%) 1px, transparent 1px),
-    linear-gradient(to bottom, rgb(255 255 255 / 4%) 1px, transparent 1px);
-  background-size: 4.5rem 4.5rem;
-  mask-image: radial-gradient(72rem 52rem at 26% 2%, #000, transparent 80%);
 }
 
 /* Bar ------------------------------------------------------------------ */
@@ -119,44 +112,40 @@ body {
 .proto__mark {
   margin: 0;
   margin-inline-end: auto;
-  font-size: 1.0625rem;
-  font-variation-settings: 'wght' 620;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  background: linear-gradient(96deg, var(--ink), var(--cyan) 55%, var(--violet));
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
+  font-size: 1.125rem;
+  font-variation-settings: 'wght' 600;
+  letter-spacing: -0.02em;
+  color: var(--ink);
 }
 
 .proto__chip {
   margin: 0;
-  padding: 0.3rem 0.7rem;
-  border: 1px solid var(--edge);
-  border-radius: 999px;
-  background: var(--glass);
   color: var(--ink-dim);
-  font-size: 0.8125rem;
-  font-variation-settings: 'wght' 480;
+  font-size: 0.875rem;
   white-space: nowrap;
 }
 
+/* A link, set as a link: underlined text. A pill here read as a toolbar button. */
 .proto__verify {
-  padding: 0.3rem 0.85rem;
-  border: 1px solid var(--edge-lit);
-  border-radius: 999px;
-  color: var(--ink);
-  font-size: 0.8125rem;
-  font-variation-settings: 'wght' 520;
-  text-decoration: none;
+  color: var(--ink-dim);
+  font-size: 0.875rem;
+  text-decoration-line: underline;
+  text-decoration-color: var(--edge-lit);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.25em;
   white-space: nowrap;
 }
 
 .proto__verify:hover,
 .proto__verify:focus-visible {
-  border-color: transparent;
-  background: linear-gradient(96deg, var(--violet), var(--cyan));
-  color: #05060c;
+  color: var(--ink);
+  text-decoration-color: var(--cyan);
+}
+
+.proto__verify:focus-visible {
+  outline: 2px solid var(--cyan);
+  outline-offset: 0.25em;
+  border-radius: 0.2rem;
 }
 
 /* Main ----------------------------------------------------------------- */
@@ -178,11 +167,13 @@ body {
   line-height: 0.95;
 }
 
+/*
+ * Solid, not a gradient fill. Fading the foot of a 76px word costs real contrast
+ * against the lit field and cannot be measured by an audit tool, which reads
+ * `background-clip: text` as a transparent colour. The names carry the colour.
+ */
 .proto__heroWord {
-  background: linear-gradient(180deg, var(--ink), rgb(244 245 251 / 62%));
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
+  color: var(--ink);
 }
 
 .proto__heroCount {
@@ -194,65 +185,74 @@ body {
 
 /* Controls ------------------------------------------------------------- */
 
+/*
+ * The controls are set, not chromed: a label and a ruled line each, on the same
+ * baseline as the names below. The row reads as part of the page rather than as a
+ * filter bar bolted above a result set. Pills, glass, blur and uppercase
+ * micro-labels were the last of the dashboard vocabulary here.
+ */
 .proto__controls {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.6rem;
-  margin-block: clamp(1rem, 2.4vw, 1.75rem) clamp(1rem, 2.4vw, 1.75rem);
+  align-items: baseline;
+  column-gap: clamp(1.25rem, 3vw, 2.5rem);
+  row-gap: 0.85rem;
+  margin-block: clamp(1.25rem, 3vw, 2.25rem) clamp(1.75rem, 4vw, 3rem);
 }
 
 .proto__field {
   display: flex;
-  align-items: center;
-  gap: 0.55rem;
+  align-items: baseline;
+  gap: 0.6rem;
   margin: 0;
-  padding: 0.35rem 0.4rem 0.35rem 0.9rem;
-  border: 1px solid var(--edge);
-  border-radius: 999px;
-  background: var(--glass);
-  backdrop-filter: blur(0.75rem);
 }
 
 .proto__field--wide {
-  /* Wide enough to type a label into, and no wider: a search box spanning the page
-     would be the widest thing above the names. */
-  flex: 1 1 14rem;
-  max-width: 24rem;
-}
-
-.proto__field:focus-within {
-  border-color: var(--edge-lit);
+  /* Wide enough to type a label into, and no wider: a search field spanning the
+     page would be the widest thing above the names. */
+  flex: 1 1 12rem;
+  max-width: 22rem;
 }
 
 .proto__label {
   color: var(--ink-faint);
-  font-size: 0.75rem;
-  font-variation-settings: 'wght' 520;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
+  font-size: 0.9375rem;
+  font-variation-settings: 'wght' 450;
+  letter-spacing: -0.01em;
 }
 
 .proto__input {
   flex: 1 1 auto;
   width: 100%;
   min-width: 0;
-  padding: 0.3rem 0.55rem;
+  padding: 0.15rem 0 0.3rem;
   border: 0;
-  border-radius: 999px;
+  border-bottom: 1px solid var(--rule);
   background: transparent;
   color: var(--ink);
   font: inherit;
-  font-size: 0.9375rem;
+  font-size: 1.0625rem;
+}
+
+.proto__input:focus {
+  outline: none;
+  border-bottom-color: var(--cyan);
 }
 
 .proto__input:focus-visible {
   outline: 2px solid var(--cyan);
-  outline-offset: 1px;
+  outline-offset: 0.3em;
+  border-radius: 0.15rem;
 }
 
 .proto__input--num {
-  width: 4.5rem;
+  width: 3.25rem;
   flex: 0 0 auto;
+}
+
+/* The native clear affordance is a grey widget in the middle of set type. */
+.proto__input::-webkit-search-cancel-button {
+  display: none;
 }
 
 /* Names ---------------------------------------------------------------- */
@@ -267,7 +267,9 @@ body {
   flex-wrap: wrap;
   align-items: baseline;
   column-gap: clamp(1.25rem, 3vw, 2.75rem);
-  row-gap: clamp(0.5rem, 1.6vw, 1rem);
+  /* Enough air that a descender never reaches the ascender on the line below. The
+     names are set tight, not crowded. */
+  row-gap: clamp(0.75rem, 2vw, 1.6rem);
   margin: 0;
   padding: 0;
   list-style: none;
@@ -357,21 +359,18 @@ body {
 /* Data ----------------------------------------------------------------- */
 
 .proto__data {
-  margin-top: clamp(1.5rem, 4vw, 2.5rem);
-  border-top: 1px solid var(--edge);
-  padding-top: 1rem;
+  margin-top: clamp(2.5rem, 7vw, 5rem);
 }
 
 .proto__dataSummary {
   display: inline-block;
-  padding: 0.25rem 0.75rem;
-  border: 1px solid var(--edge);
-  border-radius: 999px;
   color: var(--ink-dim);
   cursor: pointer;
-  font-size: 0.8125rem;
-  font-variation-settings: 'wght' 520;
-  letter-spacing: 0.04em;
+  font-size: 0.9375rem;
+  text-decoration-line: underline;
+  text-decoration-color: var(--edge-lit);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.25em;
   list-style: none;
 }
 
@@ -381,8 +380,8 @@ body {
 
 .proto__dataSummary:hover,
 .proto__data[open] .proto__dataSummary {
-  border-color: var(--edge-lit);
   color: var(--ink);
+  text-decoration-color: var(--cyan);
 }
 
 .proto__dataSummary:focus-visible {
@@ -496,7 +495,7 @@ body {
   .proto__zone {
     transition:
       border-color 180ms ease,
-      background-color 180ms ease,
+      text-decoration-color 180ms ease,
       color 180ms ease,
       opacity 220ms ease,
       transform 220ms cubic-bezier(0.22, 1, 0.36, 1),
