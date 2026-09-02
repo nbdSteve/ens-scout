@@ -94,6 +94,32 @@ export function goStringConstants(source: string): Map<string, string> {
 }
 
 /**
+ * goInterfaceMethods extracts the method names a named Go interface declares.
+ *
+ * `internal/dynamo.API` declares one method per DynamoDB API action it calls, so it
+ * is the definition of what the scanner's role has to allow. Deriving the action set
+ * from it is what makes a method added there fail a test here, rather than deploying
+ * cleanly and then failing the first scheduled scan with AccessDenied after it has
+ * already spent the whole Graph budget.
+ *
+ * It throws on an interface it cannot find or one that yields no method, because an
+ * empty result would make the assertion pass for any policy.
+ */
+export function goInterfaceMethods(source: string, name: string): string[] {
+  const block = new RegExp(`type\\s+${name}\\s+interface\\s*\\{([\\s\\S]*?)\\n\\}`).exec(source);
+  if (!block) {
+    throw new Error(`Go interface ${name} was not found; the assertion below is stale`);
+  }
+  const methods = [...block[1].matchAll(/^\s*([A-Z][A-Za-z0-9_]*)\s*\(/gm)].map(
+    (match) => match[1],
+  );
+  if (methods.length === 0) {
+    throw new Error(`Go interface ${name} declares no method; the assertion below is vacuous`);
+  }
+  return methods;
+}
+
+/**
  * requireConstant fails loudly when a Go constant a test depends on has been
  * renamed, rather than letting the test pass against undefined.
  */

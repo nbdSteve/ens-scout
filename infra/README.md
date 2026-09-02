@@ -130,10 +130,19 @@ Several names in the stack are not the stack's to choose, so the tests read the 
 definition instead of copying it:
 
 - the table's key and TTL attribute names, from `internal/dynamo/item.go`;
+- the DynamoDB action set the scanner's role allows, derived from the method names on
+  `internal/dynamo`'s `API` interface, one per action;
 - the scanner's environment variable names, from `internal/scanner/scanner.go`;
 - the two scan group strings, from the same file;
+- the word lists the bundle must ship, from that file's `Lists`;
 - the Lambda timeout, which has to stay under that package's `abandonedAfter`
   window so a reclaim pass can never expire chunks a live invocation is writing.
+
+`ens-scout:snapshotTtlAttribute` is checked the same way, but against the context
+committed in `cdk.json` rather than against the test configuration.
+It is the only Go-owned name that lives in context, so it is the only one that can be
+wrong in the deployed value alone, and a mismatch is silent: every call still
+succeeds, no alarm fires, and DynamoDB simply expires nothing.
 
 A rename in Go therefore fails a test here, rather than producing a deployment that
 starts and then cannot read or write anything.
@@ -186,9 +195,26 @@ this queue, so an ordinary Graph outage would leave `ApproximateNumberOfMessages
 above zero - and its alarm latched - for the queue's whole retention, and a real
 delivery failure arriving in that window would notify nobody, because an alarm only
 notifies on a state change.
-Nothing consuming the queue is the point for the failure it does keep: an
-undelivered scan is not self-healing, so the message and the alarm both stay until
-an operator deals with them.
+The record is bounded, not durable.
+Nothing consumes the queue, so the message stays visible until an operator removes it
+or until SQS expires it after `ens-scout:dlqRetentionDays`, whichever comes first -
+and expiry happens whether or not anyone acted.
+The alarm clears either way and sends an OK notification when it does, so that
+notification is not evidence the event was handled.
+The queue is the only record of an undelivered scan, because no invocation happened,
+so the `Errors` metric never saw it and nothing reached the log group.
+
+**The missing-scan alarm needs two empty windows, not one.** It raises when two
+consecutive six-hour windows carry no invocation at all - twelve hours - and it treats
+a missing datapoint as breaching, because a schedule that stopped firing publishes no
+datapoint to alarm on.
+One window is deliberately not enough: a deploy that lands part way through an aligned
+window leaves that window empty through no fault of the schedule, and a spurious page
+on the deployment an operator is watching most closely is what trains them past the
+records that matter.
+The other three alarms stay on a single datapoint, because they treat missing data as
+not breaching and one error, one throttle, or one undelivered event is already the
+whole signal.
 
 **A declared log group, not `logRetention`.** The deprecated property provisions a
 helper Lambda holding `logs:PutRetentionPolicy` on every log group in the account.

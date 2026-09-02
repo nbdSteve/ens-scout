@@ -1,6 +1,6 @@
 import { Match, Template } from 'aws-cdk-lib/assertions';
 
-import { asList, eachPolicyStatement, synth } from './helpers';
+import { asList, eachPolicyStatement, goInterfaceMethods, goSource, synth } from './helpers';
 
 describe('the scanner role', () => {
   let template: Template;
@@ -58,38 +58,35 @@ describe('the scanner role', () => {
     expect(granted).not.toContain('logs:DeleteLogGroup');
   });
 
-  test('holds exactly the five DynamoDB calls internal/dynamo makes', () => {
-    // grantReadWriteData would also add DeleteItem, Scan, the stream actions, and an
-    // index wildcard for a table that has no index. The publisher never deletes an
+  test('holds exactly the DynamoDB calls internal/dynamo declares, and no more', () => {
+    // The action set is not this stack's to choose: internal/dynamo's API interface
+    // declares one method per DynamoDB action the publisher calls, so the expectation
+    // is derived from it rather than copied. A copied set stays green when Go gains a
+    // call - rewriting UnstageSnapshot's one-item BatchWriteItem as DeleteItem is the
+    // natural simplification - and then the first scheduled scan fails with
+    // AccessDenied after it has already spent the whole Graph budget.
+    //
+    // grantReadWriteData would instead add DeleteItem, Scan, the stream actions, and
+    // an index wildcard for a table that has no index. The publisher never deletes an
     // item: a superseded snapshot is expired with a TTL, which is an UpdateItem.
-    template.hasResourceProperties('AWS::IAM::Policy', {
-      PolicyDocument: {
-        Statement: Match.arrayWith([
-          {
-            Sid: 'PublishSnapshots',
-            Effect: 'Allow',
-            Action: [
-              'dynamodb:BatchWriteItem',
-              'dynamodb:GetItem',
-              'dynamodb:PutItem',
-              'dynamodb:Query',
-              'dynamodb:UpdateItem',
-            ],
-            Resource: { 'Fn::GetAtt': [Match.stringLikeRegexp('^SnapshotTable'), 'Arn'] },
-          },
-        ]),
-      },
+    const expected = goInterfaceMethods(goSource('internal/dynamo/store.go'), 'API')
+      .map((method) => `dynamodb:${method}`)
+      .sort();
+
+    const publish = allowStatements(template).find(
+      (statement) => statement.Sid === 'PublishSnapshots',
+    );
+    expect(publish).toBeDefined();
+    expect(asList(publish!.Action).sort()).toEqual(expected);
+    expect(publish!.Resource).toEqual({
+      'Fn::GetAtt': [expect.stringMatching(/^SnapshotTable/), 'Arn'],
     });
+
+    // And nothing outside that statement grants a DynamoDB action either.
     const dynamoActions = grantedActions(template).filter((action) =>
       action.startsWith('dynamodb:'),
     );
-    expect(dynamoActions.sort()).toEqual([
-      'dynamodb:BatchWriteItem',
-      'dynamodb:GetItem',
-      'dynamodb:PutItem',
-      'dynamodb:Query',
-      'dynamodb:UpdateItem',
-    ]);
+    expect(dynamoActions.sort()).toEqual(expected);
   });
 
   test('cannot write to the undelivered-event queue, because EventBridge does', () => {

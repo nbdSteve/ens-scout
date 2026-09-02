@@ -69,6 +69,25 @@ describe('the alarms', () => {
     });
   });
 
+  test('leave the other three on a single datapoint, because one occurrence matters', () => {
+    // Only the missing-scan alarm needs a wider window. The other three treat missing
+    // data as not breaching, so an empty period cannot raise them at all, and one
+    // error, one throttle, or one undelivered event is already the whole signal - a
+    // second period would only delay it.
+    for (const alarm of Object.values(template.findResources('AWS::CloudWatch::Alarm'))) {
+      const properties = alarm.Properties as {
+        MetricName: string;
+        EvaluationPeriods: number;
+        TreatMissingData: string;
+      };
+      if (properties.MetricName === 'Invocations') {
+        continue;
+      }
+      expect(properties.EvaluationPeriods).toBe(1);
+      expect(properties.TreatMissingData).toBe('notBreaching');
+    }
+  });
+
   test('report a schedule event EventBridge could not deliver', () => {
     // The only writer to this queue is the EventBridge target's dead-letter queue, so
     // a message here means no invocation ever happened and the Errors metric saw
@@ -85,13 +104,15 @@ describe('the alarms', () => {
   });
 
   test('give the missing-scan alarm a window wider than the three-hourly cadence', () => {
-    // Six hours is two consecutive missed three-hourly scans. A window at or below
-    // the cadence would raise on the ordinary gap between two scans.
+    // One six-hour period is already two consecutive missed three-hourly scans, and
+    // the alarm needs two of them. A window at or below the cadence would raise on the
+    // ordinary gap between two scans.
     const missing = Object.values(template.findResources('AWS::CloudWatch::Alarm')).find(
       (alarm) => (alarm.Properties as { MetricName?: string }).MetricName === 'Invocations',
     );
     expect(missing).toBeDefined();
     const properties = missing!.Properties as { Period: number; EvaluationPeriods: number };
+    expect(properties.Period).toBeGreaterThan(3 * 60 * 60);
     expect(properties.Period * properties.EvaluationPeriods).toBeGreaterThan(3 * 60 * 60);
   });
 
@@ -123,6 +144,49 @@ describe('the alarms', () => {
     template.resourceCountIs('AWS::CloudWatch::Dashboard', 0);
     template.resourceCountIs('AWS::CloudWatch::CompositeAlarm', 0);
     template.resourceCountIs('AWS::CloudWatch::AnomalyDetector', 0);
+  });
+});
+
+describe('the missing-scan alarm', () => {
+  let model: AlarmModel;
+
+  beforeAll(() => {
+    model = alarmModel(synth().template, 'Invocations');
+  });
+
+  test('needs two windows, with both knobs spelled out rather than defaulted', () => {
+    // datapointsToAlarm defaults to evaluationPeriods, so a reader cannot tell an
+    // intended 2-of-2 from an accident. Both are set, and both are pinned here.
+    expect(model.evaluationPeriods).toBe(2);
+    expect(model.datapointsToAlarm).toBe(2);
+    expect(model.treatMissingData).toBe('breaching');
+  });
+
+  test('does not raise on the first window after a deploy', () => {
+    // Only one window has elapsed, so the alarm's evaluation range holds one
+    // datapoint. A deploy that lands part way through a window leaves it empty
+    // through no fault of the schedule, and that is not evidence a schedule stopped.
+    expect(evaluate(model, ['missing'])).toBe('OK');
+  });
+
+  test('does not raise on one missing window', () => {
+    expect(evaluate(model, [16, 'missing'])).toBe('OK');
+  });
+
+  test('raises on two consecutive missing windows', () => {
+    // Two empty six-hour windows is twelve hours with no invocation at all, which is
+    // a schedule that stopped firing rather than a gap between scans.
+    expect(evaluate(model, [16, 'missing', 'missing'])).toBe('ALARM');
+  });
+
+  test('recovers once a scan lands again', () => {
+    expect(evaluate(model, [16, 'missing', 'missing', 16])).toBe('OK');
+  });
+
+  test('raises on a window that ran but published fewer invocations than one', () => {
+    // The condition is Sum < 1, not just missing data, so a window whose datapoint is
+    // a real zero breaches the same way an absent one does.
+    expect(evaluate(model, [0, 0])).toBe('ALARM');
   });
 });
 
@@ -165,3 +229,79 @@ describe('retention', () => {
     }
   });
 });
+
+/**
+ * A window's contribution to an alarm evaluation: the metric value CloudWatch
+ * collected for that period, or the absence of one.
+ */
+type Datapoint = number | 'missing';
+
+/**
+ * AlarmModel is the synthesized alarm reduced to the fields that decide its state.
+ *
+ * The values come from the CloudFormation template, which is the stack's generated
+ * output, so a change to the alarm changes what these cases run against.
+ */
+interface AlarmModel {
+  readonly threshold: number;
+  readonly comparisonOperator: string;
+  readonly evaluationPeriods: number;
+  readonly datapointsToAlarm: number;
+  readonly treatMissingData: string;
+}
+
+function alarmModel(template: Template, metricName: string): AlarmModel {
+  const alarm = Object.values(template.findResources('AWS::CloudWatch::Alarm')).find(
+    (resource) => (resource.Properties as { MetricName?: string }).MetricName === metricName,
+  );
+  if (!alarm) {
+    throw new Error(`no alarm watches ${metricName}; the cases below are stale`);
+  }
+  const properties = alarm.Properties as Record<string, unknown>;
+  const evaluationPeriods = properties.EvaluationPeriods as number;
+  return {
+    threshold: properties.Threshold as number,
+    comparisonOperator: properties.ComparisonOperator as string,
+    evaluationPeriods,
+    // CloudWatch defaults datapointsToAlarm to evaluationPeriods when it is absent.
+    datapointsToAlarm: (properties.DatapointsToAlarm as number | undefined) ?? evaluationPeriods,
+    treatMissingData: properties.TreatMissingData as string,
+  };
+}
+
+/**
+ * evaluate applies CloudWatch's M-of-N rule to a sequence of windows, oldest first,
+ * and returns the state the alarm would hold.
+ *
+ * The evaluation range is the most recent `evaluationPeriods` windows; the alarm
+ * raises when at least `datapointsToAlarm` of them breach, and a missing window
+ * breaches according to `treatMissingData`. A sequence shorter than
+ * `evaluationPeriods` models the windows that had not elapsed yet, which is the
+ * state a freshly deployed alarm is in.
+ */
+function evaluate(model: AlarmModel, windows: readonly Datapoint[]): 'ALARM' | 'OK' {
+  const range = windows.slice(-model.evaluationPeriods);
+  const breaching = range.filter((window) => isBreaching(model, window)).length;
+  return breaching >= model.datapointsToAlarm ? 'ALARM' : 'OK';
+}
+
+function isBreaching(model: AlarmModel, window: Datapoint): boolean {
+  if (window === 'missing') {
+    switch (model.treatMissingData) {
+      case 'breaching':
+        return true;
+      case 'notBreaching':
+        return false;
+      default:
+        throw new Error(`unmodelled missing-data treatment ${model.treatMissingData}`);
+    }
+  }
+  switch (model.comparisonOperator) {
+    case 'LessThanThreshold':
+      return window < model.threshold;
+    case 'GreaterThanOrEqualToThreshold':
+      return window >= model.threshold;
+    default:
+      throw new Error(`unmodelled comparison operator ${model.comparisonOperator}`);
+  }
+}

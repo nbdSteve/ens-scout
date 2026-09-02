@@ -490,9 +490,21 @@ section holds only the rules that a change here could quietly break.
   fixture in `test/fixtures/scan-lambda/`. A freshly built binary hashes differently
   per machine, so a test that packaged the real bundle would assert on whoever ran it.
 - Assertions that involve a name Go owns must read the Go source, not copy the
-  string: the table's key and TTL attributes from `internal/dynamo/item.go`, and the
-  `Env*` variables and the two group strings from `internal/scanner/scanner.go`. A
-  copied name deploys cleanly and then fails on the first read or write.
+  string: the table's key and TTL attributes from `internal/dynamo/item.go`, the
+  scanner role's DynamoDB action set from the method names on `internal/dynamo`'s
+  `API` interface, and the `Env*` variables and the two group strings from
+  `internal/scanner/scanner.go`. A copied name deploys cleanly and then fails on the
+  first read or write. Derive the assertion, never the grant: the stack must not read
+  Go source at synth time, and an added `API` method is a decision to widen the policy
+  deliberately, not to make a test pass.
+- `ens-scout:snapshotTtlAttribute` is checked against `attrExpiresAt` at the committed
+  context, not at the test configuration. It is the only Go-owned name that lives in
+  context, so it is the only one a wrong value in `cdk.json` alone can break, and
+  comparing a test literal against the Go constant passes while `cdk.json` says
+  something else. The mismatch is silent in every direction - every call succeeds, no
+  alarm fires, and the superseded chunk sets that carry an `expires_at` DynamoDB never
+  looks at are unreachable, because their publisher unstaged them on success and
+  nothing scans chunk partitions.
 - Keep the Lambda timeout above `ScanTuning.scanBudget` and below
   `internal/scanner.abandonedAfter`. Below the budget it kills a scan that has
   already been paid for; above the reclaim window a later run could expire the chunk
@@ -531,10 +543,26 @@ section holds only the rules that a change here could quietly break.
   queue's whole retention, and a real delivery failure arriving in that window would
   notify nobody, because an alarm notifies only on a state change. A scan that ran and
   failed is surfaced by the `Errors` alarm and the log group; that is the accepted
-  trade. Nothing consuming the queue is deliberate for the failure it does keep, so
-  the level alarm is the right shape there: an undelivered scan is not self-healing.
+  trade. Nothing consuming the queue is deliberate for the failure it does keep, so a
+  level alarm is the right shape there. The record it keeps is bounded, not durable:
+  SQS expires the message after `ens-scout:dlqRetentionDays` whether or not anyone
+  acted, the alarm then clears and sends an OK, and that OK is not evidence the event
+  was handled. Do not write it up as persisting until an operator acts, and do not
+  raise the retention to make such a claim true - bounded retention is the deliberate
+  choice here.
   The role's `sqs:SendMessage` was an implicit grant CDK added for that Function prop,
   so removing the prop must remove the grant, and a test asserts both.
+- `ScanMissingAlarm` requires two consecutive empty six-hour windows, with
+  `evaluationPeriods` and `datapointsToAlarm` both written out rather than left to the
+  default that makes them equal. One window is not evidence a schedule stopped: a
+  deploy landing part way through an aligned window empties it through no fault of the
+  schedule, and `treatMissingData: BREACHING` - which has to stay, because a schedule
+  that stopped firing publishes nothing to alarm on - would turn that into a page on
+  the deployment an operator is watching most closely. The other three alarms stay on
+  one datapoint deliberately: they treat missing data as not breaching, so an empty
+  period cannot raise them, and one error, throttle, or undelivered event is the whole
+  signal. Assert the window by evaluating CloudWatch's M-of-N rule over a modelled
+  datapoint sequence, so reverting either knob fails a test.
 - The chunk recovery window is not configurable from here. `internal/dynamo` derives
   it from the superseded snapshot's own stale-after threshold, so the only TTL knob in
   context is the attribute name, which has to match `attrExpiresAt`.

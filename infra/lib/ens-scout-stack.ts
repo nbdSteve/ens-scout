@@ -103,9 +103,11 @@ export class EnsScoutStack extends Stack {
     // DeadLetterConfig, so an execution failure is reported by the Errors alarm and
     // the log group instead.
     //
-    // It is a record for an operator, not a work queue: nothing consumes it, so a
-    // message stays visible until someone acts on it, and the alarm below is what
-    // surfaces it.
+    // It is a record for an operator, not a work queue: nothing consumes it, and the
+    // alarm below is what surfaces it. The record is bounded, not durable - SQS
+    // deletes the message once `ens-scout:dlqRetentionDays` has elapsed, whether or
+    // not anyone acted on it, and that is the only record there is, because no
+    // invocation happened and nothing reached the log group.
     this.undeliveredEventQueue = new sqs.Queue(this, 'UndeliveredEventQueue', {
       retentionPeriod: Duration.days(config.dlqRetentionDays),
       encryption: sqs.QueueEncryption.SQS_MANAGED,
@@ -315,17 +317,25 @@ export class EnsScoutStack extends Stack {
         treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
       }),
       // A schedule that stopped firing. The three-hourly rule fires eight times a
-      // day, so six hours with no invocation at all means two consecutive scans
-      // were missed, which is past the point the site's own staleness warning
+      // day, so a six-hour window with no invocation at all means two consecutive
+      // scans were missed, which is past the point the site's own staleness warning
       // appears.
+      //
+      // Two such windows are required rather than one. A single aligned window with
+      // no datapoint is not evidence a schedule stopped: a deploy that lands part way
+      // through a window leaves that window empty through no fault of the schedule,
+      // and a spurious page on the deployment an operator is watching most closely is
+      // exactly what trains them past the records that matter. Both knobs are spelled
+      // out so neither can drift back to a single period through a default.
       new cloudwatch.Alarm(this, 'ScanMissingAlarm', {
-        alarmDescription: 'No ENS scan has run for six hours',
+        alarmDescription: 'No ENS scan has run for two consecutive six-hour windows',
         metric: this.scannerFunction.metricInvocations({
           period: Duration.hours(6),
           statistic: 'Sum',
         }),
         threshold: 1,
-        evaluationPeriods: 1,
+        evaluationPeriods: 2,
+        datapointsToAlarm: 2,
         comparisonOperator: cloudwatch.ComparisonOperator.LESS_THAN_THRESHOLD,
         // A rule that stopped firing produces no datapoint at all, which is exactly
         // the condition this alarm exists for, so missing data has to breach.
@@ -333,9 +343,9 @@ export class EnsScoutStack extends Stack {
       }),
       // A schedule event EventBridge could not deliver to the function at all, which
       // the Errors metric never sees because no invocation ever happened. Nothing
-      // drains the queue, so this level alarm stays raised until an operator has
-      // dealt with the event, which is the intent: an undelivered scan is not
-      // self-healing.
+      // drains the queue, so the alarm clears only when an operator removes the
+      // message or when SQS expires it after `ens-scout:dlqRetentionDays`. The OK
+      // notification is therefore not evidence that the event was handled.
       new cloudwatch.Alarm(this, 'UndeliveredEventAlarm', {
         alarmDescription: 'EventBridge could not deliver a scan schedule event to the scanner',
         metric: this.undeliveredEventQueue.metricApproximateNumberOfMessagesVisible({

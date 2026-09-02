@@ -4,6 +4,7 @@ import * as path from 'path';
 import * as cdk from 'aws-cdk-lib';
 
 import { contextKeys, resolveConfig } from '../lib/config';
+import { goSource, goStringConstants, requireConstant } from './helpers';
 
 /** The context committed in cdk.json, which is what an unqualified `cdk` command uses. */
 const committedContext: Record<string, unknown> = JSON.parse(
@@ -44,6 +45,24 @@ describe('the committed context', () => {
     const declared = new Set<string>(Object.values(contextKeys));
     const ours = Object.keys(committedContext).filter((key) => key.startsWith('ens-scout:'));
     expect(ours.sort()).toEqual([...declared].sort());
+  });
+
+  test('names the TTL attribute internal/dynamo actually writes', () => {
+    // This is the one Go-owned name that lives in context, so it is the one that can
+    // be wrong in the committed value alone. A mismatch is silent in every direction:
+    // the table gets a TimeToLiveSpecification on an attribute nothing writes, every
+    // call still succeeds, no alarm fires, and a superseded chunk set carries an
+    // `expires_at` DynamoDB never looks at - unreachable, because its publisher
+    // unstaged it on success and nothing scans chunk partitions. The table just grows.
+    //
+    // The assertion is against the committed context rather than testConfig, whose
+    // value is a literal: comparing a copy with the Go constant would pass while
+    // cdk.json said something else entirely.
+    const expiresAt = requireConstant(
+      goStringConstants(goSource('internal/dynamo/item.go')),
+      'attrExpiresAt',
+    );
+    expect(resolveConfig(scopeWith()).snapshotTtlAttribute).toBe(expiresAt);
   });
 
   test('names the credential rather than carrying it', () => {
