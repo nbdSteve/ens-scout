@@ -475,6 +475,17 @@ section holds only the rules that a change here could quietly break.
   commit built in the two places produced two asset hashes. Any new flag added here
   has to be judged the same way - does the output depend on the source, or on the
   machine and checkout that built it.
+  `bundle-scanner.js` exports the argv and the environment it builds so the suite can
+  run them and assert on the values. Matching the script's text instead is worthless
+  here: its own header comment names every flag, so a grep for `-buildvcs=false`
+  passes with the flag deleted from the argv, which is the exact state the flag was
+  added to prevent. `npm test` must never compile the binary, for the fixture reason
+  below.
+- Fail the bundle when a list `internal/scanner.Lists` names is absent from
+  `data/words`, reading the required names out of the Go definition. A glob that only
+  refuses an empty directory packages a bundle missing one list, deploys cleanly, and
+  then fails every invocation in `loadLists`. The parse has to reject a `Lists` block
+  it cannot read rather than yield nothing, or the check passes for any bundle.
 - Inject the Lambda code as a stack prop and let the tests supply the committed
   fixture in `test/fixtures/scan-lambda/`. A freshly built binary hashes differently
   per machine, so a test that packaged the real bundle would assert on whoever ran it.
@@ -506,6 +517,24 @@ section holds only the rules that a change here could quietly break.
 - Bound retention wherever the stack creates something that accumulates, and refuse
   an unsupported log-retention day count instead of rounding it. Rounding up keeps
   records longer than the deployment asked for and rounding down discards them early.
+  Refuse `RetentionDays.INFINITE` too, and refuse it by meaning rather than by the
+  number: CloudWatch Logs accepts 9999, so neither the positive-integer check nor the
+  enum-membership check catches it, and log volume grows with every invocation, so a
+  group that never expires is the unbounded case this rule exists to prevent. The
+  error names the context key, because that is what an operator has to change.
+- The undelivered-event queue holds events EventBridge could not deliver to the
+  function, and nothing else. The scanner Function must declare no `deadLetterQueue`
+  of its own: Lambda's async `DeadLetterConfig` receives the event for any failed
+  asynchronous invocation, including a scan that ran and returned an error, and
+  nothing consumes this queue, so an ordinary Graph outage would hold
+  `ApproximateNumberOfMessagesVisible` above zero - and latch its alarm - for the
+  queue's whole retention, and a real delivery failure arriving in that window would
+  notify nobody, because an alarm notifies only on a state change. A scan that ran and
+  failed is surfaced by the `Errors` alarm and the log group; that is the accepted
+  trade. Nothing consuming the queue is deliberate for the failure it does keep, so
+  the level alarm is the right shape there: an undelivered scan is not self-healing.
+  The role's `sqs:SendMessage` was an implicit grant CDK added for that Function prop,
+  so removing the prop must remove the grant, and a test asserts both.
 - The chunk recovery window is not configurable from here. `internal/dynamo` derives
   it from the superseded snapshot's own stale-after threshold, so the only TTL knob in
   context is the attribute name, which has to match `attrExpiresAt`.

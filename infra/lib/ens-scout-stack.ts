@@ -19,7 +19,7 @@ import * as sns from 'aws-cdk-lib/aws-sns';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
 import { Construct } from 'constructs';
 
-import { Config, functionTimeout } from './config';
+import { Config, contextKeys, functionTimeout } from './config';
 import { scanSchedules } from './schedules';
 
 /**
@@ -57,9 +57,9 @@ export interface EnsScoutStackProps extends StackProps {
  *
  * It provisions exactly what `internal/scanner` and `internal/dynamo` need and
  * nothing else: the single-table snapshot store, the Go scanner function, the two
- * offset schedules, the failure queue, and the alarms. The read API, the frontend
- * distribution, and the deployment pipeline are later phases and are deliberately
- * absent.
+ * offset schedules, the undelivered-event queue, and the alarms. The read API, the
+ * frontend distribution, and the deployment pipeline are later phases and are
+ * deliberately absent.
  *
  * Nothing here creates a Secrets Manager secret, an account, a role outside this
  * stack, a domain, or a certificate. The Graph API key is referenced through an
@@ -70,7 +70,7 @@ export class EnsScoutStack extends Stack {
   readonly snapshotTable: dynamodb.Table;
   readonly scannerFunction: lambda.Function;
   readonly scannerLogGroup: logs.LogGroup;
-  readonly failureQueue: sqs.Queue;
+  readonly undeliveredEventQueue: sqs.Queue;
   readonly alarmTopic: sns.Topic;
   readonly scanRules: events.Rule[];
 
@@ -97,11 +97,16 @@ export class EnsScoutStack extends Stack {
       deletionProtection: true,
     });
 
-    // The failure queue. EventBridge invokes the function asynchronously, so an
-    // invocation that never ran - a throttle, or a function that could not start -
-    // lands here instead of disappearing. It is a record for an operator, not a
-    // work queue: nothing consumes it, and the alarm below is what surfaces it.
-    this.failureQueue = new sqs.Queue(this, 'ScanFailureQueue', {
+    // The undelivered-event queue. It holds exactly one thing: a schedule event
+    // EventBridge could not deliver to the function at all. A scan that ran and
+    // returned an error never reaches here - the function declares no
+    // DeadLetterConfig, so an execution failure is reported by the Errors alarm and
+    // the log group instead.
+    //
+    // It is a record for an operator, not a work queue: nothing consumes it, so a
+    // message stays visible until someone acts on it, and the alarm below is what
+    // surfaces it.
+    this.undeliveredEventQueue = new sqs.Queue(this, 'UndeliveredEventQueue', {
       retentionPeriod: Duration.days(config.dlqRetentionDays),
       encryption: sqs.QueueEncryption.SQS_MANAGED,
       enforceSSL: true,
@@ -218,10 +223,15 @@ export class EnsScoutStack extends Stack {
       // A failed scan waits for its next schedule instead of retrying. A rescan
       // costs the whole Graph budget again, and the publisher is designed so a
       // failure leaves the previous snapshot serving, so there is nothing urgent to
-      // recover. The queue records the invocation either way.
+      // recover.
+      //
+      // There is deliberately no function-level dead-letter queue. Lambda's async
+      // DeadLetterConfig receives the event for any failed asynchronous invocation,
+      // including a scan that ran and returned an error, and nothing drains the
+      // queue, so an ordinary Graph outage would leave a level alarm latched for the
+      // queue's whole retention and blind the delivery-failure alarm for that long.
+      // An execution failure is surfaced by the Errors alarm and the log group.
       retryAttempts: 0,
-      deadLetterQueue: this.failureQueue,
-      deadLetterQueueEnabled: true,
       environment: {
         ENS_SNAPSHOT_TABLE: this.snapshotTable.tableName,
         ENS_SUBGRAPH_ID: config.subgraphId,
@@ -265,7 +275,9 @@ export class EnsScoutStack extends Stack {
         new targets.LambdaFunction(this.scannerFunction, {
           event: events.RuleTargetInput.fromObject({ group: schedule.group }),
           retryAttempts: 0,
-          deadLetterQueue: this.failureQueue,
+          // The target dead-letter queue, which is the only thing that writes to it:
+          // it isolates a schedule event EventBridge could not hand to the function.
+          deadLetterQueue: this.undeliveredEventQueue,
         }),
       );
       return rule;
@@ -319,11 +331,14 @@ export class EnsScoutStack extends Stack {
         // the condition this alarm exists for, so missing data has to breach.
         treatMissingData: cloudwatch.TreatMissingData.BREACHING,
       }),
-      // An invocation that failed on the event-source side rather than inside the
-      // function, which the Errors metric never sees.
-      new cloudwatch.Alarm(this, 'ScanFailureQueueAlarm', {
-        alarmDescription: 'A scheduled ENS scan invocation landed on the failure queue',
-        metric: this.failureQueue.metricApproximateNumberOfMessagesVisible({
+      // A schedule event EventBridge could not deliver to the function at all, which
+      // the Errors metric never sees because no invocation ever happened. Nothing
+      // drains the queue, so this level alarm stays raised until an operator has
+      // dealt with the event, which is the intent: an undelivered scan is not
+      // self-healing.
+      new cloudwatch.Alarm(this, 'UndeliveredEventAlarm', {
+        alarmDescription: 'EventBridge could not deliver a scan schedule event to the scanner',
+        metric: this.undeliveredEventQueue.metricApproximateNumberOfMessagesVisible({
           period: Duration.hours(1),
           statistic: 'Maximum',
         }),
@@ -356,9 +371,9 @@ export class EnsScoutStack extends Stack {
       value: this.scannerLogGroup.logGroupName,
       description: 'Log group holding the redacted structured records of the publisher',
     });
-    new CfnOutput(this, 'ScanFailureQueueUrl', {
-      value: this.failureQueue.queueUrl,
-      description: 'Queue recording scan invocations that never ran',
+    new CfnOutput(this, 'UndeliveredEventQueueUrl', {
+      value: this.undeliveredEventQueue.queueUrl,
+      description: 'Queue recording schedule events EventBridge could not deliver to the scanner',
     });
     new CfnOutput(this, 'AlarmTopicArn', {
       value: this.alarmTopic.topicArn,
@@ -372,14 +387,36 @@ export class EnsScoutStack extends Stack {
 }
 
 /**
- * retentionDays maps a day count onto the enum CloudWatch Logs accepts, and rejects
- * a count that is not one of them rather than rounding to a longer retention than
- * was asked for.
+ * unboundedRetention is every `RetentionDays` member that means "never expire"
+ * rather than a day count.
+ *
+ * It is a list rather than a bare `=== 9999` so the rejection reads by meaning and a
+ * future member with the same meaning is excluded by adding it here. `INFINITE` is
+ * the only such member today.
+ */
+export const unboundedRetention: readonly logs.RetentionDays[] = [logs.RetentionDays.INFINITE];
+
+/**
+ * retentionDays maps a day count onto the enum CloudWatch Logs accepts.
+ *
+ * It rejects a count that is not one of them rather than rounding to a longer
+ * retention than was asked for, and it rejects the infinite sentinel outright: log
+ * volume grows with every invocation, so a group that never expires is unbounded
+ * cost and contradicts this stack's rule that anything which accumulates is bounded.
+ * Both errors name the context key, because that is what an operator has to change.
  */
 function retentionDays(days: number): logs.RetentionDays {
+  const key = contextKeys.logRetentionDays;
+  if (unboundedRetention.includes(days as logs.RetentionDays)) {
+    throw new Error(
+      `context key ${key} must be a finite log retention; ${days} days means records never expire`,
+    );
+  }
   const supported = Object.entries(logs.RetentionDays).find(([, value]) => value === days);
   if (!supported) {
-    throw new Error(`log retention of ${days} days is not a value CloudWatch Logs accepts`);
+    throw new Error(
+      `context key ${key}: a log retention of ${days} days is not a value CloudWatch Logs accepts`,
+    );
   }
   return days as logs.RetentionDays;
 }

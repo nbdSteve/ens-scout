@@ -47,16 +47,24 @@ describe('the scanner function', () => {
     expect(functionTimeout.toSeconds()).toBeLessThan(abandonedAfterSeconds);
   });
 
-  test('sends failed invocations to the failure queue and never retries a scan', () => {
-    template.hasResourceProperties('AWS::Lambda::Function', {
-      DeadLetterConfig: {
-        TargetArn: { 'Fn::GetAtt': [Match.stringLikeRegexp('^ScanFailureQueue'), 'Arn'] },
-      },
-    });
+  test('never retries a scan', () => {
     template.hasResourceProperties('AWS::Lambda::EventInvokeConfig', {
       MaximumRetryAttempts: 0,
     });
   });
+
+  test('declares no dead-letter queue of its own', () => {
+    // Lambda's async DeadLetterConfig receives the event for any failed asynchronous
+    // invocation, including a scan that ran and returned an error. Nothing drains the
+    // undelivered-event queue, so a function-level DLQ would latch that queue's level
+    // alarm for its whole retention on an ordinary Graph outage and blind the alarm to
+    // a real delivery failure arriving meanwhile. An execution failure is reported by
+    // the Errors alarm and the log group.
+    template.hasResourceProperties('AWS::Lambda::Function', {
+      DeadLetterConfig: Match.absent(),
+    });
+  });
+
 
   test('sets only environment variables internal/scanner reads', () => {
     // A variable this stack invents is a variable the Lambda ignores, which is a
@@ -118,7 +126,7 @@ describe('the scanner function', () => {
     template.resourceCountIs('Custom::LogRetention', 0);
   });
 
-  test('bounds the failure queue and encrypts it', () => {
+  test('bounds the undelivered-event queue and encrypts it', () => {
     template.hasResourceProperties('AWS::SQS::Queue', {
       MessageRetentionPeriod: testConfig.dlqRetentionDays * 24 * 60 * 60,
       SqsManagedSseEnabled: true,

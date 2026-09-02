@@ -3,8 +3,8 @@
 TypeScript AWS CDK application that defines the scheduled ENS snapshot publisher.
 
 One stack, `EnsScout-prod`, holds the DynamoDB snapshot table, the Go scanner
-Lambda, the two offset EventBridge schedules, the failure queue, the log group, the
-alarms, and the scanner's IAM role.
+Lambda, the two offset EventBridge schedules, the undelivered-event queue, the log
+group, the alarms, and the scanner's IAM role.
 Nothing else.
 The public read API, the frontend distribution, and the deployment pipeline are
 later phases of [docs/website-plan.md](../docs/website-plan.md) and are
@@ -79,13 +79,22 @@ deployed is recorded in the repository and any of it can be overridden with
 | `ens-scout:graphApiKeySecretName` | Secrets Manager secret holding the Graph API key |
 | `ens-scout:graphApiKeySecretField` | JSON field inside that secret |
 | `ens-scout:snapshotTtlAttribute` | DynamoDB TTL attribute, must match `internal/dynamo` |
-| `ens-scout:logRetentionDays` | Scanner log retention |
-| `ens-scout:dlqRetentionDays` | Failure queue retention |
+| `ens-scout:logRetentionDays` | Scanner log retention, a finite CloudWatch Logs value |
+| `ens-scout:dlqRetentionDays` | Undelivered-event queue retention |
 
 No key holds a credential.
 `resolveConfig` fails on a missing or malformed value instead of substituting one,
 because every key changes what a scheduled scan queries or where it publishes, and
 a silent default would point a real scan at the wrong subgraph or table.
+
+`ens-scout:logRetentionDays` has to be one of the finite day counts CloudWatch Logs
+accepts.
+An unsupported count is refused rather than rounded, because rounding up keeps
+records longer than the deployment asked for and rounding down discards them early.
+`9999` is refused too, even though CloudWatch Logs accepts it: it is
+`RetentionDays.INFINITE`, and log volume grows with every invocation, so a group that
+never expires is unbounded cost and contradicts the rule that anything this stack
+creates which accumulates is bounded.
 
 The scan tuning is in `lib/config.ts` rather than in context.
 It is a deployment decision derived from the query budget, not an operational knob,
@@ -134,6 +143,14 @@ they actually fire and requiring the intersection to be empty.
 Comparing the two cron strings would pass for two different expressions that
 describe the same instant.
 
+The bundle's reproducibility is asserted the same way.
+`scripts/bundle-scanner.js` exports the `go` argv and the environment it builds, and
+the suite runs those functions and asserts on the values, so deleting a flag fails a
+test.
+Matching the script's text would not: its own header comment names every flag, which
+is how a dropped `-buildvcs=false` went unnoticed once already.
+`npm test` never compiles the binary.
+
 ## Layout
 
 ```text
@@ -155,8 +172,23 @@ module, and two fixed cron schedules need nothing it adds.
 **No retry on a failed scan.** A rescan costs the whole Graph budget again, and the
 publisher is built so a failure leaves the previous snapshot serving, so there is
 nothing urgent to recover.
-The invocation is recorded on the failure queue either way, and the alarm is what
-surfaces it.
+A scan that ran and failed is surfaced by the error alarm and by the redacted
+records in the log group.
+
+**The queue holds undelivered schedule events only.** Its single writer is the
+EventBridge target's dead-letter queue, so a message in it means EventBridge could
+not hand the event to the function and no invocation ever happened - which is
+exactly the failure the Lambda `Errors` metric never sees.
+The function declares no dead-letter queue of its own, deliberately.
+Lambda's async `DeadLetterConfig` receives the event for *any* failed asynchronous
+invocation, including a scan that ran and returned an error, and nothing consumes
+this queue, so an ordinary Graph outage would leave `ApproximateNumberOfMessagesVisible`
+above zero - and its alarm latched - for the queue's whole retention, and a real
+delivery failure arriving in that window would notify nobody, because an alarm only
+notifies on a state change.
+Nothing consuming the queue is the point for the failure it does keep: an
+undelivered scan is not self-healing, so the message and the alarm both stay until
+an operator deals with them.
 
 **A declared log group, not `logRetention`.** The deprecated property provisions a
 helper Lambda holding `logs:PutRetentionPolicy` on every log group in the account.

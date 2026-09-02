@@ -1,6 +1,9 @@
 import { Match, Template } from 'aws-cdk-lib/assertions';
+import * as logs from 'aws-cdk-lib/aws-logs';
 
-import { synth } from './helpers';
+import { contextKeys } from '../lib/config';
+import { unboundedRetention } from '../lib/ens-scout-stack';
+import { synth, testConfig } from './helpers';
 
 describe('the alarms', () => {
   let template: Template;
@@ -66,7 +69,11 @@ describe('the alarms', () => {
     });
   });
 
-  test('report an invocation that never reached the function', () => {
+  test('report a schedule event EventBridge could not deliver', () => {
+    // The only writer to this queue is the EventBridge target's dead-letter queue, so
+    // a message here means no invocation ever happened and the Errors metric saw
+    // nothing. A level alarm is intended: nothing drains the queue, so an undelivered
+    // scan stays raised until an operator deals with it.
     template.hasResourceProperties('AWS::CloudWatch::Alarm', {
       MetricName: 'ApproximateNumberOfMessagesVisible',
       Namespace: 'AWS/SQS',
@@ -98,7 +105,7 @@ describe('the alarms', () => {
     }
   });
 
-  test('watch the scanner and the failure queue, and nothing else', () => {
+  test('watch the scanner and the undelivered-event queue, and nothing else', () => {
     const dimensions = Object.values(template.findResources('AWS::CloudWatch::Alarm')).map(
       (alarm) =>
         ((alarm.Properties as { Dimensions: Array<{ Name: string }> }).Dimensions ?? []).map(
@@ -120,7 +127,7 @@ describe('the alarms', () => {
 });
 
 describe('retention', () => {
-  test('is bounded on the log group and the failure queue', () => {
+  test('is bounded on the log group and the undelivered-event queue', () => {
     const template = synth().template;
     template.hasResourceProperties('AWS::Logs::LogGroup', {
       RetentionInDays: Match.anyValue(),
@@ -135,10 +142,25 @@ describe('retention', () => {
     // deployment asked for, and rounding it down would discard them early. Both are
     // worse than refusing to synthesize.
     expect(() => synth({ logRetentionDays: 45 })).toThrow(/log retention/);
+    expect(() => synth({ logRetentionDays: 45 })).toThrow(contextKeys.logRetentionDays);
   });
 
-  test('accepts every day count CloudWatch Logs does', () => {
-    for (const days of [1, 7, 30, 90, 365]) {
+  test('rejects every retention that means never expire', () => {
+    // 9999 is RetentionDays.INFINITE, which CloudWatch Logs does accept, so neither
+    // the positive-integer check in resolveConfig nor the enum-membership check
+    // catches it. Log volume grows with every invocation, so an unbounded group is
+    // unbounded cost and contradicts the rule that anything accumulating is bounded.
+    expect(unboundedRetention).toContain(logs.RetentionDays.INFINITE);
+    for (const days of unboundedRetention) {
+      expect(() => synth({ logRetentionDays: days })).toThrow(contextKeys.logRetentionDays);
+      expect(() => synth({ logRetentionDays: days })).toThrow(/finite/);
+    }
+  });
+
+  test('accepts every finite day count CloudWatch Logs does', () => {
+    // The two either side of the deployed default are the regression case: rejecting
+    // the infinite sentinel must not reject an ordinary neighbouring value.
+    for (const days of [1, 7, 14, testConfig.logRetentionDays, 60, 90, 365, 3653]) {
       expect(() => synth({ logRetentionDays: days })).not.toThrow();
     }
   });

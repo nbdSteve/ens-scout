@@ -209,10 +209,10 @@ go build -o bootstrap ./cmd/scan-lambda
 ## Infrastructure
 
 `infra/` is a TypeScript AWS CDK application that defines the stack this Lambda
-runs in: the snapshot table, the function, the two schedules, the failure queue, the
-log group, the alarms, and a hand-written least-privilege role. Every CDK command
-cross-compiles the scanner first, so a synth needs the Go toolchain and no AWS
-credentials.
+runs in: the snapshot table, the function, the two schedules, the undelivered-event
+queue, the log group, the alarms, and a hand-written least-privilege role. Every CDK
+command cross-compiles the scanner first, so a synth needs the Go toolchain and no
+AWS credentials.
 
 ```powershell
 cd infra

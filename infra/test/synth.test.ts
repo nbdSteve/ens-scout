@@ -5,8 +5,12 @@ import * as cdk from 'aws-cdk-lib';
 import { Template } from 'aws-cdk-lib/assertions';
 
 import { resolveConfig } from '../lib/config';
-import { EnsScoutStack } from '../lib/ens-scout-stack';
-import { fixtureCode, repoRoot, synth } from './helpers';
+import { EnsScoutStack, scannerHandler } from '../lib/ens-scout-stack';
+import { fixtureCode, goSource, repoRoot, synth } from './helpers';
+
+// The bundle script is plain CommonJS, so it is required rather than imported. The
+// assertions below run its exported functions instead of reading its text.
+const bundle = require('../scripts/bundle-scanner');
 
 const committedContext: Record<string, unknown> = JSON.parse(
   fs.readFileSync(path.join(__dirname, '..', 'cdk.json'), 'utf8'),
@@ -86,31 +90,89 @@ describe('synthesis', () => {
 });
 
 describe('the scanner bundle', () => {
-  test('is the only Go binary the stack packages', () => {
-    // The Lambda asset is the compiled scanner and its word lists, nothing else. A
-    // bundle that swept the repository in would ship the CLI, the fixtures, and the
-    // historical results, and its hash would change on every unrelated commit.
-    const script = fs.readFileSync(
-      path.join(repoRoot, 'infra', 'scripts', 'bundle-scanner.js'),
-      'utf8',
+  // The script's own argv and environment, not its text. Asserting on the source
+  // would pass from the header comment that names these flags, which is exactly how
+  // a dropped -buildvcs=false went unnoticed once already.
+  const args: string[] = bundle.buildArgs();
+  const env: Record<string, string> = bundle.buildEnv({});
+
+  test('compiles the scanner package and nothing else', () => {
+    // The Lambda asset is the compiled scanner and its word lists. A bundle that
+    // swept the repository in would ship the CLI, the fixtures, and the historical
+    // results, and its hash would change on every unrelated commit.
+    expect(args[0]).toBe('build');
+    expect(args.filter((arg) => arg.startsWith('./'))).toEqual(['./cmd/scan-lambda']);
+    expect(args[args.length - 1]).toBe('./cmd/scan-lambda');
+  });
+
+  test('writes the entrypoint name the provided runtime executes', () => {
+    const output = args[args.indexOf('-o') + 1];
+    expect(path.basename(output)).toBe(scannerHandler);
+  });
+
+  test('drops every stamp that would vary between two builds of one commit', () => {
+    // These are what make two builds of the same source produce the same bytes, and
+    // so the same CDK asset hash. -buildvcs=false is the one worth asserting:
+    // without it a git worktree and a normal clone of the same commit stamp
+    // different module versions and produce different asset hashes, so a deployment
+    // from one would report a Lambda update over the other.
+    expect(args).toContain('-trimpath');
+    expect(args).toContain('-buildvcs=false');
+    const ldflags = args[args.indexOf('-ldflags') + 1];
+    expect(ldflags.split(/\s+/)).toContain('-buildid=');
+  });
+
+  test('cross-compiles statically for the architecture the function declares', () => {
+    expect(env.GOOS).toBe('linux');
+    expect(env.GOARCH).toBe('arm64');
+    expect(env.CGO_ENABLED).toBe('0');
+  });
+
+  test('ships every word list internal/scanner.Lists names', () => {
+    // A list the Go definition names and the checkout does not hold would package,
+    // deploy cleanly, and then fail every invocation in loadLists.
+    const required: string[] = bundle.requiredWordLists(goSource('internal/scanner/scanner.go'));
+    expect(required.length).toBeGreaterThan(0);
+    const available = fs.readdirSync(path.join(repoRoot, 'data', 'words'));
+    expect(bundle.selectWordLists(available, required)).toEqual(expect.arrayContaining(required));
+  });
+
+  test('fails the bundle when a required word list is missing, and names it', () => {
+    const required: string[] = bundle.requiredWordLists(goSource('internal/scanner/scanner.go'));
+    const dropped = required[required.length - 1];
+    const available = required.filter((name) => name !== dropped);
+    expect(() => bundle.selectWordLists(available, required)).toThrow(dropped);
+  });
+
+  test('copies word lists only, never the fixtures or the historical results', () => {
+    const required: string[] = bundle.requiredWordLists(goSource('internal/scanner/scanner.go'));
+    const selected: string[] = bundle.selectWordLists(
+      [...required, 'results.json', 'notes.md', 'archive'],
+      required,
     );
-    expect(script).toContain('./cmd/scan-lambda');
-    expect(script).toContain('arm64');
-    expect(script).toContain('CGO_ENABLED');
-    // These three flags are what make two builds of the same source produce the same
-    // bytes, and so the same CDK asset hash. -buildvcs=false is the one worth
-    // asserting: without it a git worktree and a normal clone of the same commit
-    // stamp different module versions and produce different asset hashes, so a
-    // deployment from one would report a Lambda update over the other.
-    expect(script).toContain('-trimpath');
-    expect(script).toContain('-buildid=');
-    expect(script).toContain('-buildvcs=false');
+    expect(selected).toEqual([...required].sort());
   });
 
   test('targets the Go version go.mod declares', () => {
     // The repository holds Go 1.18 compatibility deliberately. A bundle built by a
     // newer toolchain is fine; source that needs one is not.
-    const goMod = fs.readFileSync(path.join(repoRoot, 'go.mod'), 'utf8');
-    expect(goMod).toMatch(/^go 1\.18$/m);
+    expect(goDirective(goSource('go.mod'))).toBe('1.18');
   });
 });
+
+/**
+ * goDirective is the version in go.mod's `go` directive.
+ *
+ * go.mod is a declarative artifact the Go tool consumes, so the assertion parses it
+ * into the value it means rather than matching the file's text.
+ */
+function goDirective(goMod: string): string {
+  const directive = goMod
+    .split('\n')
+    .map((line) => /^go\s+([0-9]+(?:\.[0-9]+)*)$/.exec(line.trim()))
+    .find((match) => match !== null);
+  if (!directive) {
+    throw new Error('go.mod declares no go directive');
+  }
+  return directive[1];
+}

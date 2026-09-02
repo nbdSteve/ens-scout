@@ -92,9 +92,13 @@ describe('the scanner role', () => {
     ]);
   });
 
-  test('may only send to the failure queue', () => {
+  test('cannot write to the undelivered-event queue, because EventBridge does', () => {
+    // sqs:SendMessage was an implicit grant CDK added for the function-level
+    // dead-letter queue, which no longer exists. EventBridge writes to that queue
+    // under the queue's own resource policy, so a grant here would be privilege
+    // nothing uses.
     const sqsActions = grantedActions(template).filter((action) => action.startsWith('sqs:'));
-    expect(sqsActions).toEqual(['sqs:SendMessage']);
+    expect(sqsActions).toEqual([]);
   });
 
   test('cannot read the secret, because CloudFormation resolves it', () => {
@@ -121,11 +125,12 @@ describe('the scanner role', () => {
     }
   });
 
-  test('grants nothing at all outside the four services it uses', () => {
+  test('grants nothing at all outside the two services it uses', () => {
     // The catch-all: a future edit that adds a permission also has to add its
     // service here, which is the moment to decide the grant is least privilege.
+    // Secrets Manager is deliberately not one of the two, which the test above says.
     const services = new Set(grantedActions(template).map((action) => action.split(':')[0]));
-    expect([...services].sort()).toEqual(['dynamodb', 'logs', 'sqs']);
+    expect([...services].sort()).toEqual(['dynamodb', 'logs']);
   });
 });
 
@@ -136,7 +141,7 @@ describe('the resource policies', () => {
     template = synth().template;
   });
 
-  test('open the failure queue only to the two scan rules', () => {
+  test('open the undelivered-event queue only to the two scan rules', () => {
     const statements = resourcePolicyStatements(template, 'AWS::SQS::QueuePolicy').filter(
       (statement) => statement.Effect === 'Allow',
     );
