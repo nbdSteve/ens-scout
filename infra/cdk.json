@@ -1,0 +1,24 @@
+{
+  "app": "node scripts/bundle-scanner.js && npx ts-node --prefer-ts-exts bin/ens-scout.ts",
+  "output": "cdk.out",
+  "watch": {
+    "include": ["bin/**", "lib/**", "scripts/**"],
+    "exclude": ["node_modules/**", "cdk.out/**", "dist-ts/**", "build/**", "test/**"]
+  },
+  "context": {
+    "ens-scout:environmentName": "prod",
+    "ens-scout:account": "289866763058",
+    "ens-scout:region": "ap-southeast-2",
+    "ens-scout:subgraphId": "5XqPmWe6gjyrJtFn9cLy237i4cWw2j9HcUJEXsP5qGtH",
+    "ens-scout:graphApiKeySecretName": "ens-scout/thegraph-api-key",
+    "ens-scout:graphApiKeySecretField": "apiKey",
+    "ens-scout:snapshotTtlAttribute": "expires_at",
+    "ens-scout:logRetentionDays": 30,
+    "ens-scout:dlqRetentionDays": 14,
+    "@aws-cdk/aws-iam:minimizePolicies": true,
+    "@aws-cdk/aws-lambda:recognizeLayerVersion": true,
+    "@aws-cdk/aws-lambda:useCdkManagedLogGroup": false,
+    "@aws-cdk/core:checkSecretUsage": true,
+    "@aws-cdk/core:target-partitions": ["aws"]
+  }
+}
