@@ -1,0 +1,510 @@
+/*
+ * The prototype's own stylesheet. It shares nothing with the shipped site, so the
+ * two can be judged side by side and neither can drag the other around.
+ *
+ * The look is built from three ideas and nothing else: a dark field lit by two
+ * out-of-frame gradients, one variable grotesk carrying the whole type scale, and
+ * names large enough to be the only thing on the page worth reading. Every rule
+ * that moves is inside the motion block at the bottom, so honouring
+ * `prefers-reduced-motion` is a single deletion rather than an audit.
+ */
+
+:root {
+  color-scheme: dark;
+
+  /* Instrument Sans Variable, self-hosted. No third-party font origin is used. */
+  --sans: 'Instrument Sans Variable', system-ui, sans-serif;
+  /* Mono appears inside `Data` and nowhere else. */
+  --mono: ui-monospace, 'SF Mono', 'Cascadia Mono', Menlo, monospace;
+
+  --ink: #f4f5fb;
+  --ink-dim: #a8adc6;
+  --ink-faint: #6d7392;
+  --field: #05060c;
+  --edge: rgb(255 255 255 / 9%);
+  --edge-lit: rgb(255 255 255 / 22%);
+  --glass: rgb(255 255 255 / 4%);
+
+  --violet: #7c5cff;
+  --cyan: #22d3ee;
+  --lime: #a3e635;
+
+  --radius: 1.25rem;
+  --bar: 4.25rem;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  min-height: 100%;
+  background: var(--field);
+  color: var(--ink);
+}
+
+body {
+  font-family: var(--sans);
+  /* The grotesk is variable on the weight axis, so weight is a design tool here
+     rather than a choice between two files. */
+  font-variation-settings: 'wght' 420;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+.proto {
+  position: relative;
+  isolation: isolate;
+  min-height: 100vh;
+  min-height: 100dvh;
+  overflow-x: clip;
+}
+
+/*
+ * The light. Four wide radial gradients, pushed mostly off-canvas so what reaches
+ * the page is the falloff rather than the source, over a faint grid that only
+ * shows where the light lands. It is one fixed layer behind everything, so no
+ * name needs a gradient of its own, and the two colours are the only two in the
+ * palette: mixing in a third turned the middle of the field muddy.
+ */
+.proto__aurora {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  background:
+    radial-gradient(58rem 42rem at 10% -6%, rgb(124 92 255 / 62%), rgb(124 92 255 / 0%) 66%),
+    radial-gradient(46rem 38rem at 98% 2%, rgb(34 211 238 / 38%), rgb(34 211 238 / 0%) 60%),
+    radial-gradient(56rem 42rem at 86% 98%, rgb(124 92 255 / 34%), rgb(124 92 255 / 0%) 68%),
+    radial-gradient(48rem 36rem at 2% 106%, rgb(34 211 238 / 22%), rgb(34 211 238 / 0%) 66%),
+    var(--field);
+}
+
+.proto__aurora::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(to right, rgb(255 255 255 / 4%) 1px, transparent 1px),
+    linear-gradient(to bottom, rgb(255 255 255 / 4%) 1px, transparent 1px);
+  background-size: 4.5rem 4.5rem;
+  mask-image: radial-gradient(72rem 52rem at 26% 2%, #000, transparent 80%);
+}
+
+/* Bar ------------------------------------------------------------------ */
+
+.proto__bar {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  height: var(--bar);
+  padding-inline: clamp(1rem, 4vw, 3rem);
+}
+
+.proto__mark {
+  margin: 0;
+  margin-inline-end: auto;
+  font-size: 1.0625rem;
+  font-variation-settings: 'wght' 620;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  background: linear-gradient(96deg, var(--ink), var(--cyan) 55%, var(--violet));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.proto__chip {
+  margin: 0;
+  padding: 0.3rem 0.7rem;
+  border: 1px solid var(--edge);
+  border-radius: 999px;
+  background: var(--glass);
+  color: var(--ink-dim);
+  font-size: 0.8125rem;
+  font-variation-settings: 'wght' 480;
+  white-space: nowrap;
+}
+
+.proto__verify {
+  padding: 0.3rem 0.85rem;
+  border: 1px solid var(--edge-lit);
+  border-radius: 999px;
+  color: var(--ink);
+  font-size: 0.8125rem;
+  font-variation-settings: 'wght' 520;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.proto__verify:hover,
+.proto__verify:focus-visible {
+  border-color: transparent;
+  background: linear-gradient(96deg, var(--violet), var(--cyan));
+  color: #05060c;
+}
+
+/* Main ----------------------------------------------------------------- */
+
+.proto__main {
+  width: min(100%, 84rem);
+  margin-inline: auto;
+  padding: clamp(0.5rem, 2vw, 1.5rem) clamp(1rem, 4vw, 3rem) clamp(2rem, 6vw, 4rem);
+}
+
+.proto__hero {
+  display: flex;
+  align-items: baseline;
+  gap: clamp(0.6rem, 1.6vw, 1.25rem);
+  margin: 0;
+  font-size: clamp(2.5rem, 7vw, 4.75rem);
+  font-variation-settings: 'wght' 560;
+  letter-spacing: -0.035em;
+  line-height: 0.95;
+}
+
+.proto__heroWord {
+  background: linear-gradient(180deg, var(--ink), rgb(244 245 251 / 62%));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.proto__heroCount {
+  font-size: 0.4em;
+  font-variation-settings: 'wght' 480;
+  letter-spacing: -0.01em;
+  color: var(--cyan);
+}
+
+/* Controls ------------------------------------------------------------- */
+
+.proto__controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  margin-block: clamp(1rem, 2.4vw, 1.75rem) clamp(1rem, 2.4vw, 1.75rem);
+}
+
+.proto__field {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  margin: 0;
+  padding: 0.35rem 0.4rem 0.35rem 0.9rem;
+  border: 1px solid var(--edge);
+  border-radius: 999px;
+  background: var(--glass);
+  backdrop-filter: blur(0.75rem);
+}
+
+.proto__field--wide {
+  /* Wide enough to type a label into, and no wider: a search box spanning the page
+     would be the widest thing above the names. */
+  flex: 1 1 14rem;
+  max-width: 24rem;
+}
+
+.proto__field:focus-within {
+  border-color: var(--edge-lit);
+}
+
+.proto__label {
+  color: var(--ink-faint);
+  font-size: 0.75rem;
+  font-variation-settings: 'wght' 520;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.proto__input {
+  flex: 1 1 auto;
+  width: 100%;
+  min-width: 0;
+  padding: 0.3rem 0.55rem;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.9375rem;
+}
+
+.proto__input:focus-visible {
+  outline: 2px solid var(--cyan);
+  outline-offset: 1px;
+}
+
+.proto__input--num {
+  width: 4.5rem;
+  flex: 0 0 auto;
+}
+
+/* Names ---------------------------------------------------------------- */
+
+/*
+ * The names flow like set text rather than filling a grid of cards. No borders, no
+ * card backgrounds, no cells: the type sits on the lit field, and the ragged right
+ * edge is the point - it reads as a page of names, not a table of them.
+ */
+.proto__names {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  column-gap: clamp(1.25rem, 3vw, 2.75rem);
+  row-gap: clamp(0.5rem, 1.6vw, 1rem);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.proto__item {
+  min-width: 0;
+}
+
+/*
+ * `--len` is the label's length in code points, set by the component. Longer labels
+ * are set smaller, so the type scale carries the one fact the two length controls
+ * filter on and no words are spent saying it.
+ */
+.proto__tile {
+  position: relative;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.08em;
+  padding: 0.1em 0.06em;
+  color: var(--ink);
+  text-decoration: none;
+  font-size: clamp(1.9rem, calc(6.4vw - (var(--len, 4) - 3) * 0.55vw), 4.5rem);
+  line-height: 1.02;
+}
+
+/*
+ * The lit smear that follows the pointer. `--mx`/`--my` are written by the tile's
+ * own pointermove handler and default to its centre, so a name reached by the
+ * keyboard is lit from the middle rather than from wherever the mouse last was.
+ * It sits behind the type and is clipped to the name's own box.
+ */
+.proto__tile::before {
+  content: '';
+  position: absolute;
+  z-index: -1;
+  inset: -0.35em -0.5em;
+  border-radius: var(--radius);
+  background: radial-gradient(
+    9rem 9rem at var(--mx, 50%) var(--my, 50%),
+    rgb(124 92 255 / 55%),
+    rgb(34 211 238 / 22%) 45%,
+    transparent 72%
+  );
+  opacity: 0;
+}
+
+.proto__tile:hover::before,
+.proto__tile:focus-visible::before {
+  opacity: 1;
+}
+
+.proto__tile:focus-visible {
+  outline: 2px solid var(--cyan);
+  outline-offset: 0.2em;
+  border-radius: 0.35rem;
+}
+
+.proto__name {
+  font-variation-settings: 'wght' 500;
+  letter-spacing: -0.045em;
+  /* Names are single words and must not be split; the line wraps instead. */
+  overflow-wrap: normal;
+}
+
+.proto__zone {
+  font-size: 0.3em;
+  font-variation-settings: 'wght' 450;
+  letter-spacing: 0.02em;
+  color: var(--ink-faint);
+}
+
+.proto__tile:hover .proto__name,
+.proto__tile:focus-visible .proto__name {
+  font-variation-settings: 'wght' 660;
+  background: linear-gradient(96deg, var(--ink), var(--cyan) 70%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.proto__tile:hover .proto__zone,
+.proto__tile:focus-visible .proto__zone {
+  color: var(--cyan);
+}
+
+/* Data ----------------------------------------------------------------- */
+
+.proto__data {
+  margin-top: clamp(1.5rem, 4vw, 2.5rem);
+  border-top: 1px solid var(--edge);
+  padding-top: 1rem;
+}
+
+.proto__dataSummary {
+  display: inline-block;
+  padding: 0.25rem 0.75rem;
+  border: 1px solid var(--edge);
+  border-radius: 999px;
+  color: var(--ink-dim);
+  cursor: pointer;
+  font-size: 0.8125rem;
+  font-variation-settings: 'wght' 520;
+  letter-spacing: 0.04em;
+  list-style: none;
+}
+
+.proto__dataSummary::-webkit-details-marker {
+  display: none;
+}
+
+.proto__dataSummary:hover,
+.proto__data[open] .proto__dataSummary {
+  border-color: var(--edge-lit);
+  color: var(--ink);
+}
+
+.proto__dataSummary:focus-visible {
+  outline: 2px solid var(--cyan);
+  outline-offset: 2px;
+}
+
+.proto__dataBody {
+  display: grid;
+  gap: 1.25rem;
+  margin-top: 1.25rem;
+  font-family: var(--mono);
+  font-size: 0.8125rem;
+  line-height: 1.6;
+  color: var(--ink-dim);
+}
+
+.proto__facts {
+  display: grid;
+  grid-template-columns: minmax(8rem, auto) 1fr;
+  gap: 0.2rem 1.25rem;
+  margin: 0;
+}
+
+.proto__factRow {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: subgrid;
+}
+
+.proto__facts dt {
+  color: var(--ink-faint);
+}
+
+.proto__facts dd {
+  margin: 0;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+
+.proto__note {
+  max-width: 62ch;
+  margin: 0;
+}
+
+/* Small screens -------------------------------------------------------- */
+
+@media (max-width: 30rem) {
+  :root {
+    --bar: 3.5rem;
+  }
+
+  .proto__bar {
+    flex-wrap: wrap;
+    height: auto;
+    padding-block: 0.75rem;
+  }
+
+  /*
+   * The bar has to wrap here, so it wraps deliberately: the wordmark takes the
+   * first line on its own and the chip and the link share the second. Left to
+   * itself the chip stayed beside the wordmark and the link dropped alone,
+   * which read as two unrelated rows.
+   */
+  .proto__mark {
+    flex-basis: 100%;
+    margin-inline-end: 0;
+  }
+
+  .proto__chip {
+    margin-inline-end: auto;
+  }
+
+  .proto__hero {
+    /* Keeps the first tile on the first screen at 320x568. */
+    font-size: clamp(2rem, 11vw, 2.75rem);
+  }
+
+  .proto__controls {
+    gap: 0.5rem;
+  }
+
+  .proto__field--wide {
+    flex-basis: 100%;
+  }
+
+  .proto__names {
+    column-gap: 1rem;
+    row-gap: 0.35rem;
+  }
+
+  .proto__tile {
+    /* Keeps the first name on the first screen at 320x568. */
+    font-size: clamp(1.6rem, calc(15vw - (var(--len, 4) - 3) * 1.1vw), 2.6rem);
+  }
+}
+
+/* Motion --------------------------------------------------------------- */
+
+/*
+ * Everything above is static. Motion is added here and only here, so the reduced
+ * -motion case is the default rather than an override of one.
+ */
+@media (prefers-reduced-motion: no-preference) {
+  .proto__verify,
+  .proto__field,
+  .proto__dataSummary,
+  .proto__tile,
+  .proto__tile::before,
+  .proto__name,
+  .proto__zone {
+    transition:
+      border-color 180ms ease,
+      background-color 180ms ease,
+      color 180ms ease,
+      opacity 220ms ease,
+      transform 220ms cubic-bezier(0.22, 1, 0.36, 1),
+      font-variation-settings 220ms ease;
+  }
+
+  .proto__tile:hover,
+  .proto__tile:focus-visible {
+    transform: translateY(-1px);
+  }
+}
