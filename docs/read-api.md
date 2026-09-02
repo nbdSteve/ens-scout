@@ -176,7 +176,8 @@ A failed read is not evidence of an empty store and not evidence of corruption, 
 A cancelled or expired request context is reported the same way, because it says nothing about what is stored.
 
 A pointer that cannot be read fails closed, even when a verified snapshot is already in the in-process cache.
-The cached entry is dropped rather than served, because a reader that cannot read the pointer cannot tell a live pointer from one that has since been superseded, and every endpoint answers `snapshot_unavailable` while the store is unreachable.
+The cached entry is not served, because a reader that cannot read the pointer cannot tell a live pointer from one that has since been superseded, and every endpoint answers `snapshot_unavailable` while the store is unreachable.
+The entry itself is kept, so a transient throttle costs one refused request rather than a full chunk re-download once the pointer reads again and compares equal.
 `/health` reports that outage rather than reporting `ok` from memory, so a monitor sees the read path's real dependency state instead of a healthy answer that outlives the store.
 Serving a last-known-good snapshot past a failed pointer read is a separate resilience feature, not this one: it needs its own grace bound on how long a snapshot may be served unvalidated, and its own decision about what `/health` then claims.
 
@@ -201,6 +202,8 @@ The entity tag is strong.
 A snapshot ID is lowercase letters, digits, and inner dashes, so it needs no escaping and can hold no quote, comma, or space that would change how a client parses the header.
 
 `If-None-Match` wins whenever it is present, as RFC 7232 requires, and `If-Modified-Since` is honored only in its absence, so a client that has only the weaker validator still avoids downloading a snapshot it already holds.
+The date comparison has one limitation, which is inherent to a date validator rather than to this API: a rollback to a snapshot whose scan time is older than the one a date-only client holds answers `304`, so that client keeps a snapshot that is no longer published until the next scan moves the time forward.
+That is why `ETag` is exposed through CORS, and why a browser revalidates on the strong validator instead, where a rolled-back pointer is a plain entity-tag mismatch and therefore a full response.
 Comparison is weak, so a client's `W/"id"` matches the `"id"` this API sent, and `*` matches because the resource exists by that point.
 An unparseable `If-Modified-Since` is ignored rather than guessed at, which costs one full response and never serves a snapshot the client does not have.
 

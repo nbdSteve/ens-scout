@@ -392,12 +392,14 @@ contract; these are the rules behind it.
   and a rolled-back pointer cannot be served from a stale entry; and the held
   lock makes a burst against a cold cache cost one snapshot read rather than one
   per request.
-- Fail closed on a pointer that cannot be read, and drop the cached entry rather
-  than serve it. A reader that cannot read the pointer cannot tell a live pointer
-  from one that has since been superseded, so a verified snapshot in memory is no
-  longer evidence of what is published, and `/health` reports the store outage
-  instead of answering `ok` while the store is unreachable. Serving a
-  last-known-good snapshot past a failed pointer read is a separate resilience
+- Fail closed on a pointer that cannot be read, and do not serve the cached entry.
+  A reader that cannot read the pointer cannot tell a live pointer from one that
+  has since been superseded, so a verified snapshot in memory is no longer
+  evidence of what is published, and `/health` reports the store outage instead
+  of answering `ok` while the store is unreachable. The entry is kept rather than
+  cleared, because a transient throttle must cost one refused request and not a
+  full chunk re-download once the pointer reads again and compares equal. Serving
+  a last-known-good snapshot past a failed pointer read is a separate resilience
   feature, not this one: it needs its own grace bound on how long a snapshot may
   be served unvalidated, and its own decision about what `/health` then claims.
 - Keep every cacheable response a pure function of the snapshot ID. That is why
