@@ -37,17 +37,7 @@ func (h *Handler) resolve(ctx context.Context) (*cachedSnapshot, *failure) {
 
 	latest, err := h.config.Store.GetLatest(ctx)
 	if err != nil {
-		switch {
-		case contextFailed(ctx, err):
-			return nil, failed(failureUnavailable)
-		case errors.Is(err, snapshot.ErrNotFound):
-			return nil, failed(failureNoSnapshot)
-		default:
-			// A pointer that does not read could be corrupt or the store could be
-			// failing, and this side of the call cannot tell which, so the code says
-			// only what is known: there is no snapshot to serve right now.
-			return nil, failed(failureUnavailable)
-		}
+		return nil, classifyStoreError(ctx, err, failureNoSnapshot)
 	}
 
 	// The declared raw size is checked before a single chunk is fetched, so an
@@ -61,19 +51,12 @@ func (h *Handler) resolve(ctx context.Context) (*cachedSnapshot, *failure) {
 		return h.cached, nil
 	}
 
+	// The pointer resolved, so absent chunks here are a published snapshot that
+	// disappeared rather than a store with nothing in it, and the contract keeps the
+	// two apart for the same reason this does.
 	chunks, err := h.config.Store.GetChunks(ctx, latest.SnapshotID)
 	if err != nil {
-		switch {
-		case contextFailed(ctx, err):
-			return nil, failed(failureUnavailable)
-		case errors.Is(err, snapshot.ErrNotFound):
-			// The pointer resolved and its chunks are gone. That is a published
-			// snapshot that disappeared rather than a store with nothing in it, and
-			// the contract keeps the two apart for the same reason this does.
-			return nil, failed(failureChunksMissing)
-		default:
-			return nil, failed(failureUnavailable)
-		}
+		return nil, classifyStoreError(ctx, err, failureChunksMissing)
 	}
 
 	// Verify is the only judge of the payload: chunk count, chunk identity, order,
@@ -115,6 +98,27 @@ func (h *Handler) resolve(ctx context.Context) (*cachedSnapshot, *failure) {
 		etag:   entityTag(latest.SnapshotID),
 	}
 	return h.cached, nil
+}
+
+// classifyStoreError maps one failed store read onto the failure that describes
+// it. notFound is what snapshot.ErrNotFound means for that particular read, which
+// is the only thing that differs between the steps: an absent pointer is a store
+// with nothing published, while absent chunks are a published snapshot that
+// vanished. Every other branch is shared, so the rule that a lost request is
+// never evidence about the store cannot be changed for one step and missed in the
+// other.
+func classifyStoreError(ctx context.Context, err error, notFound failure) *failure {
+	switch {
+	case contextFailed(ctx, err):
+		return failed(failureUnavailable)
+	case errors.Is(err, snapshot.ErrNotFound):
+		return failed(notFound)
+	default:
+		// A read that does not succeed could have found a corrupt record or a
+		// failing store, and this side of the call cannot tell which, so the code
+		// says only what is known: there is no snapshot to serve right now.
+		return failed(failureUnavailable)
+	}
 }
 
 // contextFailed reports whether a read failed because the request went away.

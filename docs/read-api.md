@@ -66,14 +66,36 @@ This is what a client polls to decide whether to download a replacement.
   "checksum": "...",
   "raw_bytes": 12345,
   "names": 100,
-  "counts": { "available": 10, "premium": 2, "registered": 80, "unknown": 0 },
+  "counts": {
+    "registered": 72,
+    "expiring-soon": 6,
+    "grace-period": 4,
+    "grace-ending-soon": 2,
+    "premium": 3,
+    "available": 12,
+    "unknown": 1
+  },
   "sources": [
     {
       "id": "three-letters",
       "path": "data/words/3-letters.txt",
       "cadence": "three-hourly",
-      "names": 40,
+      "names": 20,
       "scan_age": { "expected_interval_seconds": 10800, "stale_after_seconds": 21600 }
+    },
+    {
+      "id": "four-letters",
+      "path": "data/words/4-letters.txt",
+      "cadence": "three-hourly",
+      "names": 30,
+      "scan_age": { "expected_interval_seconds": 10800, "stale_after_seconds": 21600 }
+    },
+    {
+      "id": "five-letters",
+      "path": "data/words/5-letters.txt",
+      "cadence": "daily",
+      "names": 50,
+      "scan_age": { "expected_interval_seconds": 86400, "stale_after_seconds": 172800 }
     }
   ],
   "scan_age": { "expected_interval_seconds": 86400, "stale_after_seconds": 172800 },
@@ -82,8 +104,10 @@ This is what a client polls to decide whether to download a replacement.
 ```
 
 `counts` holds every lifecycle status in `ens.Statuses`, including the ones with no results, so a client never has to distinguish an absent status from a zero.
+The counts sum to `names`, and so do the per-source `names`, because every result is in exactly one status and comes from exactly one list.
 
 `checksum` and `raw_bytes` describe the `/api/snapshot` body, so a client can verify a download against a summary it fetched separately and can decide whether to fetch it at all.
+That affordance is unavailable in exactly one case: a snapshot larger than `ENS_API_MAX_BODY_BYTES` fails this endpoint too, with `snapshot_too_large`, because the declared size is checked before the payload is resolved and this document is built from the payload rather than from the pointer.
 
 Every field is fixed by the snapshot ID.
 That is what makes the entity tag a correct validator for this document as well as for the snapshot body.
@@ -118,12 +142,34 @@ It resolves exactly what `/api/snapshot` resolves, through the same call and the
     {
       "id": "three-letters",
       "cadence": "three-hourly",
-      "names": 40,
+      "names": 20,
       "scan_age": {
         "age_seconds": 25200,
         "expected_interval_seconds": 10800,
         "stale_after_seconds": 21600,
         "stale": true
+      }
+    },
+    {
+      "id": "four-letters",
+      "cadence": "three-hourly",
+      "names": 30,
+      "scan_age": {
+        "age_seconds": 25200,
+        "expected_interval_seconds": 10800,
+        "stale_after_seconds": 21600,
+        "stale": true
+      }
+    },
+    {
+      "id": "five-letters",
+      "cadence": "daily",
+      "names": 50,
+      "scan_age": {
+        "age_seconds": 25200,
+        "expected_interval_seconds": 86400,
+        "stale_after_seconds": 172800,
+        "stale": false
       }
     }
   ],
@@ -140,6 +186,13 @@ Staleness means the publisher is behind, which is a separate alarm from the read
 
 Per-list staleness is why the sources are reported separately.
 The example above is seven hours after a scan: the snapshot is not stale, because the daily list governs the snapshot-wide window, while both three-hourly lists are already past their own.
+
+Every source age resolves against the one snapshot-wide scan time, because the snapshot carries no per-source scan time.
+The sources therefore differ in how long that shared scan time may stand and not in what it is.
+The total-outage case the example describes resolves correctly: when publication stops altogether, the shared scan time stops advancing and each list trips its own threshold on its own schedule.
+One stopped schedule does not.
+A publisher merging forward re-derives the other group's results at the fresh scan's instant, so if the three-hourly schedule stops while the daily schedule keeps publishing, the three-hourly lists keep reporting a fresh age and never trip their own stale flag, even though they have not been queried against The Graph for days.
+Reporting that needs a per-source scan time in the snapshot contract, which is a `FormatVersion` bump, a fixture regeneration, and a publisher change, so it is a deliberate contract change for a later change rather than something the read path can infer.
 
 `status` has one value.
 A run that cannot serve a snapshot answers with a failure code instead, so there is no degraded state to name here.
@@ -186,7 +239,13 @@ No part of a failure response is derived from an upstream error, so no store det
 This matters because the Graph gateway carries `THEGRAPH_API_KEY` in its request path, so any text that quotes a URL can leak the credential.
 
 A failure is never cacheable.
-Every one carries `Cache-Control: no-store`, and every `503` carries `Retry-After`, because each of those failures is transient from a client's point of view: the next scheduled scan republishes.
+Every one carries `Cache-Control: no-store`.
+
+Every `503` except `snapshot_too_large` is transient from a client's point of view and carries `Retry-After`, because the next scheduled scan republishes.
+`snapshot_too_large` carries none.
+No scan can shrink a published snapshot below the limit a deployment chose, so that code persists until an operator raises `ENS_API_MAX_BODY_BYTES`, and advertising a retry delay would have a client poll a condition it cannot clear.
+The status, the `no-store`, and the fixed literals are the same either way.
+An oversized snapshot fails `/api/snapshot/meta` too, for the reason given under that endpoint: the declared size is checked before the payload is resolved, so the `raw_bytes` affordance described there is unavailable in exactly that case.
 
 ## Caching
 

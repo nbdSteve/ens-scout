@@ -412,6 +412,25 @@ contract; these are the rules behind it.
   because the fast lists go stale while the daily list still governs the
   snapshot, and a stale but complete snapshot is still a 200: staleness is a
   publisher alarm, not a read-path failure.
+- Every per-source age on `/health` resolves against the one snapshot-wide scan
+  time, because the snapshot carries no per-source scan time. A total outage
+  therefore reports correctly, since the shared scan time stops advancing and each
+  list trips its own threshold on its own schedule, but one stopped schedule does
+  not: a publisher merging forward re-derives the other group's results at the
+  fresh scan's instant, so a list whose own schedule has stopped keeps reporting a
+  fresh age and never trips its own stale flag. Reporting that needs a per-source
+  scan time in the snapshot contract, which is a `FormatVersion` bump plus a
+  fixture regeneration plus a publisher change, so it is a deliberate contract
+  change and not something the read path can infer.
+- Declare retryability per failure rather than inferring it from the 503. Most of
+  these failures are cleared by the next scheduled scan, but no scan can shrink a
+  published snapshot below `ENS_API_MAX_BODY_BYTES`, so `snapshot_too_large`
+  carries no `Retry-After` and a client is never told to poll a condition only an
+  operator can clear. The status, the `no-store`, and the fixed literals stay the
+  same either way. An oversized snapshot fails `/api/snapshot/meta` as well,
+  because the declared size is checked before the payload is resolved and the
+  metadata document is built from the payload `Verify` proved rather than from the
+  pointer, so nothing this API describes to a client is ever unverified.
 - Expose `ETag` through CORS. A browser cannot read it otherwise, and a browser
   that cannot read it cannot revalidate, which turns every poll into a full
   download. Origins match exactly, `*` is refused at startup, and `Vary: Origin`

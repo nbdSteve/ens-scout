@@ -46,33 +46,48 @@ type failure struct {
 	status  int
 	code    string
 	message string
+
+	// retryable says whether waiting and asking again can clear this failure, and
+	// it is declared per failure rather than inferred from the status. A 503 here
+	// means only that there is no snapshot to serve now: most of these are fixed by
+	// the next scheduled scan, but an oversized snapshot persists until an operator
+	// raises ENS_API_MAX_BODY_BYTES, so a client told to retry that one would poll
+	// forever. Retry-After is the only thing that separates the two.
+	retryable bool
 }
 
 var (
 	failureNoSnapshot = failure{
-		status:  http.StatusServiceUnavailable,
-		code:    CodeNoSnapshot,
-		message: "No snapshot has been published yet.",
+		status:    http.StatusServiceUnavailable,
+		code:      CodeNoSnapshot,
+		message:   "No snapshot has been published yet.",
+		retryable: true,
 	}
 	failureChunksMissing = failure{
-		status:  http.StatusServiceUnavailable,
-		code:    CodeChunksMissing,
-		message: "The published snapshot is incomplete.",
+		status:    http.StatusServiceUnavailable,
+		code:      CodeChunksMissing,
+		message:   "The published snapshot is incomplete.",
+		retryable: true,
 	}
 	failureUnreadable = failure{
-		status:  http.StatusServiceUnavailable,
-		code:    CodeUnreadable,
-		message: "The published snapshot did not verify.",
+		status:    http.StatusServiceUnavailable,
+		code:      CodeUnreadable,
+		message:   "The published snapshot did not verify.",
+		retryable: true,
 	}
 	failureTooLarge = failure{
 		status:  http.StatusServiceUnavailable,
 		code:    CodeTooLarge,
 		message: "The published snapshot is larger than this endpoint serves.",
+		// No scan can shrink a published snapshot below a limit this deployment
+		// chose, so this one is not retryable.
+		retryable: false,
 	}
 	failureUnavailable = failure{
-		status:  http.StatusServiceUnavailable,
-		code:    CodeUnavailable,
-		message: "The snapshot store could not be read.",
+		status:    http.StatusServiceUnavailable,
+		code:      CodeUnavailable,
+		message:   "The snapshot store could not be read.",
+		retryable: true,
 	}
 	failureMethodNotAllowed = failure{
 		status:  http.StatusMethodNotAllowed,
@@ -110,11 +125,12 @@ const contentTypeJSON = "application/json; charset=utf-8"
 // A failure is never cacheable. A 503 that a shared cache kept would outlive the
 // scan that fixes it, so every one of these carries no-store, and the ones a
 // client should retry carry Retry-After: nothing valid is published now, and the
-// next scheduled scan republishes.
+// next scheduled scan republishes. A failure that no scan can clear carries no
+// Retry-After, so the header never advertises a wait that would not help.
 func (h *Handler) writeFailure(w http.ResponseWriter, r *http.Request, f failure) {
 	header := w.Header()
 	header.Set("Cache-Control", "no-store")
-	if f.status == http.StatusServiceUnavailable {
+	if f.retryable {
 		header.Set("Retry-After", strconv.Itoa(h.config.RetrySeconds))
 	}
 	body, err := json.Marshal(errorDocument{

@@ -469,6 +469,86 @@ func TestOversizedSnapshotBoundsTheWork(t *testing.T) {
 	}
 }
 
+// TestRetryAfterMarksOnlyTransientFailures proves the header a client uses to
+// decide whether waiting helps says something true.
+//
+// Every failure here is a 503, because the API has no snapshot to serve in either
+// case, but they are not the same kind of failure. Nothing published is fixed by
+// the next scheduled scan; a snapshot larger than ENS_API_MAX_BODY_BYTES is not,
+// because no scan can shrink it and only an operator raising that setting clears
+// it. Telling a client to retry the second would have it poll forever.
+//
+// It also holds the oversized case on every endpoint, including /api/snapshot/meta:
+// the declared size is checked before the payload is resolved, so the summary a
+// client would poll to discover raw_bytes is refused too.
+func TestRetryAfterMarksOnlyTransientFailures(t *testing.T) {
+	tests := []struct {
+		name      string
+		store     func(t *testing.T) snapshot.Reader
+		code      string
+		wantRetry bool
+	}{
+		{
+			name: "an oversized snapshot no scan can shrink",
+			store: func(t *testing.T) snapshot.Reader {
+				inner := snapshot.NewMemoryStore()
+				publishFixture(t, inner, snapshot.FixturePreview)
+				return &countingStore{
+					inner: inner,
+					pointerRewrite: func(latest snapshot.Latest) snapshot.Latest {
+						latest.RawBytes = DefaultMaxBodyBytes + 1
+						return latest
+					},
+				}
+			},
+			code:      CodeTooLarge,
+			wantRetry: false,
+		},
+		{
+			name:      "nothing published, which the next scan fixes",
+			store:     func(t *testing.T) snapshot.Reader { return snapshot.NewMemoryStore() },
+			code:      CodeNoSnapshot,
+			wantRetry: true,
+		},
+	}
+
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			handler := newTestHandler(t, test.store(t), testNow)
+			for _, path := range []string{PathSnapshot, PathMeta, PathHealth} {
+				response := get(handler, http.MethodGet, path, nil)
+				if response.Code != http.StatusServiceUnavailable {
+					t.Fatalf("%s status = %d, want %d", path, response.Code, http.StatusServiceUnavailable)
+				}
+				var document errorDocument
+				if err := json.Unmarshal(response.Body.Bytes(), &document); err != nil {
+					t.Fatalf("%s body is not JSON: %v", path, err)
+				}
+				if document.Error.Code != test.code {
+					t.Fatalf("%s code = %q, want %q", path, document.Error.Code, test.code)
+				}
+				// The status, the no-store, and the fixed literals are the same either
+				// way. Only the retry advice differs.
+				if got := response.Header().Get("Cache-Control"); got != "no-store" {
+					t.Errorf("%s Cache-Control = %q, want no-store", path, got)
+				}
+				if document.Advisory != Advisory {
+					t.Errorf("%s dropped the advisory", path)
+				}
+
+				retry := response.Header().Get("Retry-After")
+				if test.wantRetry && retry != strconv.Itoa(DefaultRetrySeconds) {
+					t.Errorf("%s Retry-After = %q, want %d for %s", path, retry, DefaultRetrySeconds, test.code)
+				}
+				if !test.wantRetry && retry != "" {
+					t.Errorf("%s Retry-After = %q, want none for %s", path, retry, test.code)
+				}
+			}
+		})
+	}
+}
+
 func TestMetaSummarisesWithoutTheResults(t *testing.T) {
 	store := snapshot.NewMemoryStore()
 	latest := publishFixture(t, store, snapshot.FixturePreview)

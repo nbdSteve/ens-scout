@@ -81,8 +81,10 @@ const (
 	maxCacheSeconds     = 3600
 
 	// DefaultRetrySeconds is what a client is told to wait when nothing valid is
-	// published. Every such failure is transient from the client's point of view:
-	// the next scheduled scan republishes.
+	// published. Every 503 except CodeTooLarge is transient from the client's point
+	// of view and carries it: the next scheduled scan republishes. CodeTooLarge
+	// carries none, because no scan can shrink a published snapshot below this
+	// deployment's EnvMaxBodyBytes and only raising that setting clears it.
 	DefaultRetrySeconds = 60
 	maxRetrySeconds     = 3600
 )
