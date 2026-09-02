@@ -562,11 +562,57 @@ func Run(ctx context.Context, deps Dependencies, event Event) (Result, error) {
 	}
 
 	latest, replaced, publishErr := snapshot.Publish(ctx, deps.Store, built, deps.now().Truncate(time.Second))
+
+	result := Result{Group: group, Scanned: len(results), Carried: len(carried)}
+	// superseded is the snapshot the pointer write replaced, once it has been given the
+	// retention window it is owed. The reclaim pass is told about it so it can drop a
+	// leftover marker for it without aiming a second expiry at the same chunks.
+	superseded := ""
 	if publishErr == nil {
+		result.Latest = latest
 		// The snapshot is published, so its chunks are live and the marker has done
 		// its job. A marker left behind costs one wasted reclaim attempt, which is why
 		// this is not worth failing a successful publication over.
 		unstage(ctx, deps, logger, group, latest.SnapshotID)
+		logger.Log(LevelInfo, "snapshot_published", Fields{
+			Group:        group,
+			SnapshotID:   latest.SnapshotID,
+			Names:        latest.Names,
+			Scanned:      len(results),
+			Carried:      len(carried),
+			Chunks:       latest.ChunkCount,
+			Bytes:        latest.CompressedBytes,
+			ScannedAt:    latest.ScannedAt.Format(time.RFC3339),
+			DurationMill: millis(deps.now().Sub(started)),
+		})
+
+		// Retention follows the pointer this publication replaced, which is what the
+		// pointer write itself observed and not what the previous-snapshot read saw. The
+		// two differ whenever that read failed and was published past, whenever the stored
+		// pointer had to be quarantined, and whenever the other group's schedule published
+		// between this run's read and its own write. Expiring what was read in those cases
+		// would leave a superseded chunk set with no TTL and, because its own publisher
+		// unstaged it on success, no marker either: nothing could ever find it again.
+		//
+		// It happens here, immediately after the pointer write and before the budgeted
+		// reclaim pass. That expiry is the only thing that can ever bound the replaced
+		// set, and it is not retryable: a later run has no record of what this one
+		// replaced. The reclaim pass is the opposite - every action it takes is driven
+		// off a durable marker and is retried on the next schedule - so letting it run
+		// first would let a throttled table or an expiring deadline spend the retryable
+		// work and starve the work that has one chance.
+		switch {
+		case replaced.Previous != nil:
+			result.Previous = replaced.Previous.SnapshotID
+			superseded = replaced.Previous.SnapshotID
+			expireSuperseded(ctx, deps, logger, *replaced.Previous, latest)
+		case replaced.Unusable:
+			// The replaced pointer did not read, so which snapshot it named is unknown and
+			// no expiry can be aimed at it. Naming a snapshot on the word of a pointer that
+			// failed validation would be worse than leaking one, so this is reported for an
+			// operator to reconcile against the preserved pointer instead.
+			logger.Log(LevelWarn, "superseded_snapshot_unknown", Fields{Group: group, SnapshotID: latest.SnapshotID})
+		}
 	}
 
 	// Reclaiming runs after the publication attempt, and after it either way.
@@ -580,42 +626,11 @@ func Run(ctx context.Context, deps Dependencies, event Event) (Result, error) {
 	//
 	// It is given this run's own snapshot ID either way, so the set this run just
 	// published, or just abandoned, is left alone. Nothing it does can fail the run.
-	reclaimAbandoned(ctx, deps, logger, group, built.Metadata.SnapshotID, deps.now())
+	reclaimAbandoned(ctx, deps, logger, group, built.Metadata.SnapshotID, superseded, deps.now())
 
 	if publishErr != nil {
 		return Result{}, deps.fail(logger, "publish_failed",
 			Fields{Group: group, SnapshotID: built.Metadata.SnapshotID}, publishErr)
-	}
-	logger.Log(LevelInfo, "snapshot_published", Fields{
-		Group:        group,
-		SnapshotID:   latest.SnapshotID,
-		Names:        latest.Names,
-		Scanned:      len(results),
-		Carried:      len(carried),
-		Chunks:       latest.ChunkCount,
-		Bytes:        latest.CompressedBytes,
-		ScannedAt:    latest.ScannedAt.Format(time.RFC3339),
-		DurationMill: millis(deps.now().Sub(started)),
-	})
-
-	// Retention follows the pointer this publication replaced, which is what the
-	// pointer write itself observed and not what the previous-snapshot read saw. The
-	// two differ whenever that read failed and was published past, whenever the stored
-	// pointer had to be quarantined, and whenever the other group's schedule published
-	// between this run's read and its own write. Expiring what was read in those cases
-	// would leave a superseded chunk set with no TTL and, because its own publisher
-	// unstaged it on success, no marker either: nothing could ever find it again.
-	result := Result{Latest: latest, Group: group, Scanned: len(results), Carried: len(carried)}
-	switch {
-	case replaced.Previous != nil:
-		result.Previous = replaced.Previous.SnapshotID
-		expireSuperseded(ctx, deps, logger, *replaced.Previous, latest)
-	case replaced.Unusable:
-		// The replaced pointer did not read, so which snapshot it named is unknown and
-		// no expiry can be aimed at it. Naming a snapshot on the word of a pointer that
-		// failed validation would be worse than leaking one, so this is reported for an
-		// operator to reconcile against the preserved pointer instead.
-		logger.Log(LevelWarn, "superseded_snapshot_unknown", Fields{Group: group, SnapshotID: latest.SnapshotID})
 	}
 	return result, nil
 }
@@ -851,6 +866,14 @@ func readPrevious(ctx context.Context, deps Dependencies, logger *Logger) (*snap
 //     is neither live nor its own and report a served snapshot as abandoned. Nothing
 //     here can place an expiry on the live snapshot either way: this branch only
 //     unstages, and ExpireChunks refuses the live ID as well.
+//   - superseded is the snapshot this run's own pointer write replaced, and is
+//     treated exactly like the live one: its marker is removed and its chunks are left
+//     alone. They already carry the retention window expireSuperseded gave them, which
+//     is that snapshot's own stale-after threshold, and a reclaim here would overwrite
+//     it with the far cruder abandonedRetention. Just as importantly, a snapshot that
+//     was published and has since been superseded is not an abandoned chunk set, and
+//     reporting it as one is the same false alarm as reporting the live one, a run
+//     later.
 //   - keep is this run's own snapshot ID, which is otherwise never touched. A set
 //     this run goes on to publish must not be carrying an expiry, and a set it just
 //     abandoned is left for a later pass rather than expired by the run that lost it.
@@ -879,7 +902,7 @@ func readPrevious(ctx context.Context, deps Dependencies, logger *Logger) (*snap
 // Every failure here is logged and none fails the run. This is cleanup after an
 // earlier invocation, so refusing to publish over it would turn one failed run into
 // a permanently stuck schedule.
-func reclaimAbandoned(ctx context.Context, deps Dependencies, logger *Logger, group Group, keep string, now time.Time) {
+func reclaimAbandoned(ctx context.Context, deps Dependencies, logger *Logger, group Group, keep, superseded string, now time.Time) {
 	if ctx.Err() != nil {
 		// A dead context says nothing about what is staged, and cleanup is never
 		// worth reporting a failure the run has already reported.
@@ -913,8 +936,11 @@ func reclaimAbandoned(ctx context.Context, deps Dependencies, logger *Logger, gr
 		if ctx.Err() != nil {
 			return
 		}
-		published := entry.SnapshotID == live
-		if !published {
+		// The live snapshot and the one this run superseded are both accounted for:
+		// their chunks already carry the retention they should have, so all that is
+		// left of either is a stale marker.
+		retained := entry.SnapshotID == live || (superseded != "" && entry.SnapshotID == superseded)
+		if !retained {
 			if entry.SnapshotID == keep {
 				continue
 			}
@@ -933,7 +959,7 @@ func reclaimAbandoned(ctx context.Context, deps Dependencies, logger *Logger, gr
 		}
 		attempted++
 
-		if published {
+		if retained {
 			unstage(ctx, deps, logger, group, entry.SnapshotID)
 			continue
 		}

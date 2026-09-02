@@ -456,10 +456,28 @@ func parseKeyCondition(expression *string, names map[string]string, values map[s
 	return partition, prefix, nil
 }
 
-// evaluateCondition understands the three condition forms this package sends.
+// evaluateCondition understands the four condition forms this package sends.
 func evaluateCondition(expression string, names map[string]string, values map[string]types.AttributeValue, item map[string]types.AttributeValue) (bool, error) {
 	expression = strings.TrimSpace(expression)
 	switch {
+	case strings.HasPrefix(expression, "attribute_type(") && strings.HasSuffix(expression, ")"):
+		arguments := strings.SplitN(strings.TrimSuffix(strings.TrimPrefix(expression, "attribute_type("), ")"), ",", 2)
+		if len(arguments) != 2 {
+			return false, fmt.Errorf("fake: attribute_type condition %q needs a path and a type", expression)
+		}
+		name, err := resolveName(strings.TrimSpace(arguments[0]), names)
+		if err != nil {
+			return false, err
+		}
+		want, err := attributeString(values, strings.TrimSpace(arguments[1]))
+		if err != nil {
+			return false, err
+		}
+		got, exists := item[name]
+		if !exists {
+			return false, nil
+		}
+		return attributeTypeCode(got) == want, nil
 	case strings.HasPrefix(expression, "attribute_not_exists(") && strings.HasSuffix(expression, ")"):
 		name, err := resolveName(strings.TrimSuffix(strings.TrimPrefix(expression, "attribute_not_exists("), ")"), names)
 		if err != nil {

@@ -796,6 +796,97 @@ func TestPutLatestQuarantinesAnUnusablePointer(t *testing.T) {
 	assertReadsSnapshot(t, store, "scan-third")
 }
 
+// TestPutLatestReplacesAWronglyTypedPointer covers the unusable pointer that is not
+// merely unparseable: the document is present with the wrong attribute type. A guard
+// on that attribute's absence is a precondition the item that was read already
+// contradicts, so every attempt would fail its condition, each one would burn a
+// quarantine key, and publication would never recover from the very state the
+// quarantine path exists to escape from.
+func TestPutLatestReplacesAWronglyTypedPointer(t *testing.T) {
+	store, fake, _ := newTestStore(t, Options{})
+	first := testSnapshot(t, "scan-first", fixedNow, "zap", "orb")
+	publish(t, store, first, fixedNow)
+
+	// A hand-edited table, a foreign writer, or a half-applied migration leaves the
+	// document stored as a number rather than as a string.
+	corrupt := fake.stored(snapshot.LatestPartition, snapshot.LatestSort)
+	corrupt[attrPointer] = numberValue(7)
+	fake.put(corrupt)
+	if _, err := store.GetLatest(context.Background()); err == nil {
+		t.Fatalf("GetLatest accepted a pointer whose document is not a string")
+	}
+
+	newer := testSnapshot(t, "scan-second", fixedNow.Add(3*time.Hour), "zap", "orb", "helm")
+	_, replaced, err := snapshot.Publish(context.Background(), store, newer, fixedNow.Add(3*time.Hour))
+	if err != nil {
+		t.Fatalf("Publish over a wrongly typed pointer: %v", err)
+	}
+	assertReadsSnapshot(t, store, "scan-second")
+	if !replaced.Unusable || replaced.Previous != nil {
+		t.Errorf("replacing a wrongly typed pointer reported %+v, want an unusable replacement", replaced)
+	}
+
+	// The evidence is still preserved where no read addresses it, and one unusable
+	// pointer costs exactly one quarantine key rather than one per attempt.
+	preserved := fake.stored(snapshot.LatestPartition, quarantineSort(0))
+	if preserved == nil {
+		t.Fatalf("the wrongly typed pointer was replaced without being preserved")
+	}
+	if _, ok := preserved[attrPointer].(*types.AttributeValueMemberN); !ok {
+		t.Errorf("the preserved item holds %T, want the stored number verbatim", preserved[attrPointer])
+	}
+	if fake.stored(snapshot.LatestPartition, quarantineSort(1)) != nil {
+		t.Errorf("a second quarantine key was burned on one unusable pointer")
+	}
+}
+
+// TestPutLatestStillDetectsARaceOverAWronglyTypedPointer keeps the relaxed guard a
+// compare-and-swap. It has to hold for the item that was read, and it still has to
+// refuse the write once another publisher has replaced that item.
+func TestPutLatestStillDetectsARaceOverAWronglyTypedPointer(t *testing.T) {
+	store, fake, _ := newTestStore(t, Options{})
+	first := testSnapshot(t, "scan-first", fixedNow, "zap", "orb")
+	publish(t, store, first, fixedNow)
+
+	corrupt := fake.stored(snapshot.LatestPartition, snapshot.LatestSort)
+	corrupt[attrPointer] = numberValue(7)
+	fake.put(corrupt)
+
+	// A competitor publishes a newer scan between my read and my guarded write.
+	winner := testSnapshot(t, "scan-winner", fixedNow.Add(6*time.Hour), "zap")
+	winnerLatest := mustEncode(t, winner).Latest(fixedNow.Add(6 * time.Hour))
+	installed := false
+	fake.onPutItem = func(call int, item map[string]types.AttributeValue) error {
+		sort, err := stringAttribute(item, attrSort)
+		if err != nil {
+			return err
+		}
+		if installed || strings.HasPrefix(sort, quarantineSortPrefix) {
+			return nil
+		}
+		installed = true
+		winnerItem, err := latestItem(winnerLatest)
+		if err != nil {
+			return err
+		}
+		fake.putUnlocked(winnerItem)
+		return nil
+	}
+
+	mine := testSnapshot(t, "scan-mine", fixedNow.Add(3*time.Hour), "zap", "orb", "helm")
+	_, _, err := snapshot.Publish(context.Background(), store, mine, fixedNow.Add(3*time.Hour))
+	if !errors.Is(err, snapshot.ErrPointerConflict) {
+		t.Fatalf("Publish returned %v, want ErrPointerConflict: the guard did not see the competitor", err)
+	}
+	stored, err := store.GetLatest(context.Background())
+	if err != nil {
+		t.Fatalf("GetLatest: %v", err)
+	}
+	if stored.SnapshotID != "scan-winner" {
+		t.Errorf("the pointer names %q, want the competitor's %q", stored.SnapshotID, "scan-winner")
+	}
+}
+
 // TestPutLatestFailsRatherThanDestroyEvidence is the other half of the quarantine
 // rule: if the evidence cannot be preserved, the publication fails and the unusable
 // pointer stays exactly where an operator will find it.

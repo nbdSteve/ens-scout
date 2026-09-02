@@ -263,6 +263,37 @@ func stringValue(value string) types.AttributeValue {
 	return &types.AttributeValueMemberS{Value: value}
 }
 
+// attributeTypeCode is the DynamoDB type descriptor of a stored value, as the
+// attribute_type condition function names it, or "" for a value this SDK version
+// does not model. It lets a condition assert what type an attribute still holds
+// without needing to compare the value itself.
+func attributeTypeCode(value types.AttributeValue) string {
+	switch value.(type) {
+	case *types.AttributeValueMemberS:
+		return "S"
+	case *types.AttributeValueMemberN:
+		return "N"
+	case *types.AttributeValueMemberB:
+		return "B"
+	case *types.AttributeValueMemberSS:
+		return "SS"
+	case *types.AttributeValueMemberNS:
+		return "NS"
+	case *types.AttributeValueMemberBS:
+		return "BS"
+	case *types.AttributeValueMemberBOOL:
+		return "BOOL"
+	case *types.AttributeValueMemberNULL:
+		return "NULL"
+	case *types.AttributeValueMemberL:
+		return "L"
+	case *types.AttributeValueMemberM:
+		return "M"
+	default:
+		return ""
+	}
+}
+
 func numberValue(value int64) types.AttributeValue {
 	return &types.AttributeValueMemberN{Value: strconv.FormatInt(value, 10)}
 }

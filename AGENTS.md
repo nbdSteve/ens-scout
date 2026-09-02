@@ -242,6 +242,14 @@ implement the snapshot contract above rather than restating it.
   bounded unprocessed-write retries, strongly consistent reads, and a bounded
   compare-and-swap loop for the pointer. Losing that race is a lost race, not a
   transient failure.
+- The pointer compare-and-swap must guard on a condition the item it read already
+  satisfies. A guard that item contradicts is a precondition the write can never meet,
+  so every attempt fails its condition, each one burns another quarantine key, and the
+  pointer becomes permanently unreplaceable - the exact state quarantine exists to
+  escape from. That is why an unusable pointer whose document is present but wrongly
+  typed is guarded on the type it still holds rather than on the document's absence: a
+  publisher only ever writes that document as a string, so any write landing in between
+  changes the type, which keeps the swap a swap.
 - A quarantined unusable pointer keeps the `META` partition and takes a sort key
   under `LATEST-INVALID#`, and a staging marker takes one under `STAGING#`. Reads
   address the pointer by its exact primary key, so nothing on the read path can
@@ -257,10 +265,21 @@ implement the snapshot contract above rather than restating it.
   reports replacing, never the one the previous-snapshot read returned; the contract
   above says why, and `Result.Previous` therefore names what the run superseded and
   not what it merged forward from.
+  The TTL is written immediately after the pointer write and before the budgeted
+  reclaim pass, because it is the only thing that can ever bound the replaced set and
+  no later run can repeat it: that snapshot's own publisher unstaged it on success, so
+  the reclaim pass, which iterates nothing but staging markers, will never see it.
+  Everything the reclaim pass does is driven off a durable marker and is retried on the
+  next schedule, so the retryable work must not be able to spend a throttled table's
+  capacity or the invocation's remaining deadline ahead of the work that gets one
+  attempt.
 - Abandoned chunk sets are reclaimed, which is what makes the TTL actually bound
   table growth rather than only bounding it for snapshots that were published. The
   rules are what keep a pass from destroying live data: it removes the marker and
-  leaves the chunks alone when the marker names the published snapshot; it otherwise
+  leaves the chunks alone when the marker names the published snapshot, and treats the
+  snapshot this run's own pointer write replaced exactly the same way, because those
+  chunks already carry the retention the rule above aimed at them and a reclaim would
+  overwrite that with the far cruder abandoned window; it otherwise
   skips its own run's snapshot ID, because a set the run publishes must not carry an
   expiry that would outlive the pointer naming it; it defers the whole pass when the
   pointer cannot be read, because then nothing proves which snapshot is live; and it
@@ -269,7 +288,10 @@ implement the snapshot contract above rather than restating it.
   published-snapshot rule is judged before the own-run rule, because on the success
   path they name the same snapshot: judging its own ID first would skip the marker of
   the snapshot it just published, and a later run would then see a marker that is
-  neither live nor its own and report a snapshot it is serving as abandoned. Every
+  neither live nor its own and report a snapshot it is serving as abandoned. Excluding
+  the replaced snapshot closes the one-run-later form of the same false report: an
+  abandoned set is one an earlier publication wrote and never published, so a snapshot
+  that was published and has since been superseded must never be reported as one. Every
   failure here is logged, never returned: this is cleanup after an earlier
   invocation, so failing on it would turn one bad run into a stuck schedule.
 - The three ways a reclaim pass stops short are three distinct log events, because an

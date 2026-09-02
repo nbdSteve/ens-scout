@@ -588,6 +588,12 @@ type conditionalWrite struct {
 // Guarding on the whole stored pointer document rather than on its scan time covers
 // an item that carries no usable pointer as well as one that does, and it needs no
 // assumption about which attributes an unusable item happens to have.
+//
+// Whatever the stored item looks like, the condition has to be one that item already
+// satisfies. A guard the read item contradicts is a precondition the write can never
+// meet, so every attempt would fail its condition, the loop would burn a quarantine
+// key per attempt, and the pointer would be permanently unreplaceable - which is the
+// state the quarantine path exists to escape from.
 func pointerGuard(item map[string]types.AttributeValue) conditionalWrite {
 	if item == nil {
 		return conditionalWrite{
@@ -595,19 +601,38 @@ func pointerGuard(item map[string]types.AttributeValue) conditionalWrite {
 			names:      map[string]string{"#pk": attrPartition},
 		}
 	}
-	current, err := stringAttribute(item, attrPointer)
-	if err != nil {
-		// The item exists but holds no readable pointer document, so its absence
-		// is the only thing there is to compare against.
+	stored, exists := item[attrPointer]
+	if !exists {
+		// The item exists but holds no pointer document at all, so that absence is
+		// the only thing there is to compare against.
 		return conditionalWrite{
 			expression: "attribute_not_exists(#pointer)",
 			names:      map[string]string{"#pointer": attrPointer},
 		}
 	}
+	if document, ok := stored.(*types.AttributeValueMemberS); ok {
+		return conditionalWrite{
+			expression: "#pointer = :current",
+			names:      map[string]string{"#pointer": attrPointer},
+			values:     map[string]types.AttributeValue{":current": stringValue(document.Value)},
+		}
+	}
+	// The document is present but is not a string, so it cannot be compared as one.
+	// Its type is: a publisher only ever writes the document as a string, so any
+	// write that lands in between changes the type, which is the concurrent change
+	// this guard has to catch.
+	if code := attributeTypeCode(stored); code != "" {
+		return conditionalWrite{
+			expression: "attribute_type(#pointer, :type)",
+			names:      map[string]string{"#pointer": attrPointer},
+			values:     map[string]types.AttributeValue{":type": stringValue(code)},
+		}
+	}
+	// A value this SDK version does not model. Its presence is all that can be
+	// asserted, which still refuses a write that removed the document entirely.
 	return conditionalWrite{
-		expression: "#pointer = :current",
+		expression: "attribute_exists(#pointer)",
 		names:      map[string]string{"#pointer": attrPointer},
-		values:     map[string]types.AttributeValue{":current": stringValue(current)},
 	}
 }
 
