@@ -388,11 +388,13 @@ strong {
 }
 
 /*
- * The entrance, and the only animation on the page.
+ * The entrance.
  *
- * It is scoped to the hero and runs once. Animating the sections as they arrive
- * would mean the page's own measurements - a countdown's line count, a grid's row
- * count - are taken while it is still moving.
+ * It is scoped to the hero and runs once. The result rows have an entrance of their
+ * own further down, and it is the same shape for the same reasons; nothing else on
+ * the page animates on arrival, because a section that is still moving is a section
+ * whose measurements - a countdown's line count, a grid's row count - cannot be
+ * trusted while it moves.
  *
  * It moves the type and does not fade it. A fade would put the eyebrow and the
  * lede genuinely below 4.5:1 for the length of the animation, which is a contrast
@@ -826,13 +828,21 @@ strong {
   transition:
     background-color var(--quick) var(--ease),
     border-color var(--quick) var(--ease),
-    color var(--quick) var(--ease);
+    color var(--quick) var(--ease),
+    translate var(--quick) var(--ease);
 }
 
 .views__tab:hover {
   border-color: var(--ink-faint);
   background: var(--canvas-tint);
   color: var(--ink);
+  translate: 0 -1px;
+}
+
+/* Back down under the press. A control that lifts on approach and stays lifted
+   while it is being pressed has not acknowledged the press. */
+.views__tab:active {
+  translate: none;
 }
 
 .views__tab--current,
@@ -1124,9 +1134,17 @@ strong {
   max-width: var(--measure);
 }
 
+/*
+ * A legend, not a header bar.
+ *
+ * The heading row is the most spreadsheet-like thing a table has, and the name
+ * below it is now the largest text on the page, so this steps back to a quiet
+ * micro-label on a plain hairline. It stays a real `<th scope="col">` carrying
+ * `aria-sort`, because that is what a screen reader navigates the columns by.
+ */
 .results thead th {
   padding: 0 var(--space-4) var(--space-3) 0;
-  border-block-end: 1px solid var(--hairline-strong);
+  border-block-end: 1px solid var(--hairline);
   vertical-align: bottom;
   font-size: var(--step--2);
   font-weight: 600;
@@ -1135,12 +1153,99 @@ strong {
   color: var(--ink-faint);
 }
 
+/*
+ * `baseline`, not `top`. The name is set several steps larger than the status
+ * beside it, and aligning the cells' tops would leave the small text floating at
+ * the ceiling of a tall row. Aligning first baselines instead sets the status and
+ * the countdown on the name's own line, which is what makes the row read as one
+ * statement about one name rather than as three cells that happen to be adjacent.
+ */
 .results tbody th,
 .results tbody td {
   padding: var(--space-5) var(--space-4) var(--space-5) 0;
   border-block-end: 1px solid var(--hairline);
-  vertical-align: top;
+  vertical-align: baseline;
   font-weight: 400;
+  transition: background-color var(--quick) var(--ease);
+}
+
+/* The row is the event, so it gets the room. */
+@media (min-width: 48rem) {
+  .results tbody th,
+  .results tbody td {
+    padding-block: var(--space-5) var(--space-6);
+  }
+}
+
+/*
+ * Hover and keyboard focus are the same state, because they answer the same
+ * question: which name am I about to open? `:focus-within` is what carries it for
+ * the keyboard, since the thing that takes focus is the link inside the cell and
+ * the thing worth emphasising is the row around it.
+ */
+.results__row:hover > *,
+.results__row:focus-within > * {
+  background-color: var(--canvas-tint);
+}
+
+/*
+ * Rows arriving, when a view or a filter changes the list.
+ *
+ * There is no JavaScript behind this and no key to keep in step. React reuses a
+ * row's DOM node while its name is still in the list, so only genuinely new rows
+ * mount, and only those run the animation. Changing the sort reorders rows that
+ * were already there and is correctly silent; switching view brings different
+ * names, and those rise in.
+ *
+ * Transform only, and never opacity. A fade would put every row's text below the
+ * contrast threshold for the length of the animation, and the geometry the layout
+ * tests measure - how many lines a name takes, how many a timestamp takes, how wide
+ * a cell is - is unchanged by a vertical offset but not by a fade.
+ */
+@media (prefers-reduced-motion: no-preference) {
+  .results__row {
+    animation: row-in 420ms var(--ease) backwards;
+  }
+
+  .results__row:nth-child(2) {
+    animation-delay: 40ms;
+  }
+
+  .results__row:nth-child(3) {
+    animation-delay: 80ms;
+  }
+
+  .results__row:nth-child(4) {
+    animation-delay: 120ms;
+  }
+
+  .results__row:nth-child(5) {
+    animation-delay: 160ms;
+  }
+
+  .results__row:nth-child(6) {
+    animation-delay: 200ms;
+  }
+
+  .results__row:nth-child(7) {
+    animation-delay: 240ms;
+  }
+
+  /* The stagger stops here rather than running down a long page. Past the seventh
+     row it is no longer read as a sequence, only as a wait. */
+  .results__row:nth-child(n + 8) {
+    animation-delay: 280ms;
+  }
+}
+
+@keyframes row-in {
+  from {
+    transform: translateY(0.6rem);
+  }
+
+  to {
+    transform: none;
+  }
 }
 
 .results tbody tr:last-child > * {
@@ -1202,6 +1307,7 @@ strong {
 }
 
 .ens-link {
+  position: relative;
   display: inline-flex;
   flex-wrap: wrap;
   align-items: baseline;
@@ -1209,30 +1315,105 @@ strong {
   color: var(--ink);
   text-decoration: none;
   overflow-wrap: break-word;
+  transition: color var(--quick) var(--ease);
 }
 
-.ens-link:hover {
+/*
+ * The underline is drawn rather than declared.
+ *
+ * `text-decoration` cannot be animated from nothing to something, and at this size
+ * it lands too close to the letterforms. A bar of its own can sweep in from the
+ * start edge, which reads as the name being picked up rather than as a state flag
+ * switching on. It is a pseudo-element, so the text box keeps no background of its
+ * own and an automated contrast check still sees plain ink on the canvas.
+ */
+.ens-link::after {
+  content: '';
+  position: absolute;
+  inset-inline: 0;
+  inset-block-end: -0.06em;
+  height: max(1px, 0.055em);
+  background: currentcolor;
+  border-radius: 1px;
+  scale: 0 1;
+  transform-origin: left center;
+  transition: scale var(--quick) var(--ease);
+}
+
+.ens-link:hover,
+.results__row:focus-within .ens-link {
   color: var(--accent);
-  text-decoration: underline;
 }
 
-/* The name is the page's own subject, so it is set in the text face at reading
-   size rather than in the monospace used for machine timestamps. */
-.results__name .mono {
-  font-family: var(--font-sans);
+/*
+ * Hover only, and not `:focus-visible`.
+ *
+ * The keyboard already gets a 2px accent ring, and the bar lands within a pixel or
+ * two of it at this size, so drawing both merged them into one thick smudge that
+ * read as a rendering fault. The ring is the stronger cue and the one the
+ * accessibility requirement is about, so it keeps the job alone.
+ */
+.ens-link:hover::after {
+  scale: 1 1;
+}
+
+/*
+ * A ring sized for the name rather than for a 13px control.
+ *
+ * The global offset is tuned to the inputs and buttons, and at three times the type
+ * size it sits inside the descenders. Both values are proportional here for the same
+ * reason the type is: this is the largest interactive text on the page.
+ */
+.results__name .ens-link:focus-visible {
+  outline-offset: 0.14em;
+  border-radius: 0.22em;
+}
+
+/*
+ * The name is the subject of the whole page, so it is the largest thing on it after
+ * the headline: set in the text face, not the monospace kept for machine timestamps.
+ *
+ * It does not grow below 48rem, and that is a hard floor rather than a taste. A
+ * table cannot be narrower than its columns' widest unbreakable content added
+ * together, and at 320px a nine-character label at reading size is already most of
+ * the room the name column has. One step further and the name wraps, which is the
+ * one thing the layout tests forbid outright.
+ *
+ * The size is set on the link and inherited by the label inside it, not set on the
+ * label. That is what lets the focus ring above be expressed in `em` and scale with
+ * the name: an `em` on the link resolves against the link's own font size, so a size
+ * that lived only on the child would leave the ring at body scale.
+ */
+.results__name .ens-link {
   font-size: var(--step-0);
   letter-spacing: var(--track-snug);
 }
 
+/* The text face, not the monospace the global `.mono` rule would otherwise give it.
+   Monospace is kept for machine timestamps, where digits have to line up. */
+.results__name .mono {
+  font-family: var(--font-sans);
+  font-size: inherit;
+  letter-spacing: inherit;
+}
+
 @media (min-width: 48rem) {
-  .results__name .mono {
-    font-size: var(--step-1);
+  .results__name .ens-link {
+    font-size: var(--step-2);
+    letter-spacing: var(--track-tight);
+  }
+}
+
+@media (min-width: 64rem) {
+  .results__name .ens-link {
+    font-size: var(--step-3);
   }
 }
 
 .results__length {
   display: block;
-  margin-block-start: 0.2rem;
+  /* Clear of the hover underline, which is drawn just under the name's own box. */
+  margin-block-start: 0.5rem;
   color: var(--ink-faint);
   font-size: var(--step--1);
   font-variant-numeric: tabular-nums;
