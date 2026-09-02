@@ -10,9 +10,20 @@
 //
 // The build is kept reproducible on purpose: the CDK asset hash is the hash of
 // this directory's contents, so a binary that changed only because it was rebuilt
-// would make `cdk diff` report a Lambda update that is not one. -trimpath drops
-// absolute source paths and -buildid= drops the build ID, which are the two parts
-// of a Go binary that otherwise vary between machines and builds.
+// would make `cdk diff` report a Lambda update that is not one. Three flags are
+// what make the bytes depend on the source alone:
+//
+//   -trimpath        drops absolute source paths, which differ per checkout;
+//   -buildid=        drops the build ID;
+//   -buildvcs=false  drops the VCS stamp, which records the commit, the dirty
+//                    flag, and the revision time.
+//
+// The VCS stamp is the one that is easy to miss, because it makes an otherwise
+// identical build vary with how the checkout was made rather than with what is in
+// it. A git worktree stamps the module as `(devel)` and a normal clone stamps a
+// pseudo-version, so the same commit built two ways produced two asset hashes
+// until this flag was added. Deployment provenance belongs in the pipeline that
+// deploys, not in a byte that has to stay stable for a diff to be meaningful.
 
 const { execFileSync } = require('child_process');
 const fs = require('fs');
@@ -44,6 +55,7 @@ function main() {
     [
       'build',
       '-trimpath',
+      '-buildvcs=false',
       '-ldflags',
       '-s -w -buildid=',
       '-o',

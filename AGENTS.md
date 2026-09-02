@@ -465,10 +465,16 @@ section holds only the rules that a change here could quietly break.
   the target account and region come from CDK context rather than from ambient
   credentials. A synth that resolved the environment from whichever profile is
   logged in would silently describe a different account than the one under review.
-- Keep the scanner bundle reproducible: `-trimpath`, a cleared build id, and only
-  `data/words/*.txt` alongside the binary. The CDK asset hash is the content hash, so
-  a bundle that varies between builds makes every `cdk diff` report a Lambda update
-  that is not one, and a real change then hides among the noise.
+- Keep the scanner bundle reproducible: `-trimpath`, a cleared build id,
+  `-buildvcs=false`, and only `data/words/*.txt` alongside the binary. The CDK asset
+  hash is the content hash, so a bundle that varies between builds makes every
+  `cdk diff` report a Lambda update that is not one, and a real change then hides
+  among the noise. The VCS stamp is the part that is easy to miss, because it varies
+  with how the checkout was made rather than with what is in it: a git worktree
+  stamps the module `(devel)` and a normal clone stamps a pseudo-version, so the same
+  commit built in the two places produced two asset hashes. Any new flag added here
+  has to be judged the same way - does the output depend on the source, or on the
+  machine and checkout that built it.
 - Inject the Lambda code as a stack prop and let the tests supply the committed
   fixture in `test/fixtures/scan-lambda/`. A freshly built binary hashes differently
   per machine, so a test that packaged the real bundle would assert on whoever ran it.

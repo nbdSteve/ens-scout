@@ -97,10 +97,14 @@ describe('the scanner bundle', () => {
     expect(script).toContain('./cmd/scan-lambda');
     expect(script).toContain('arm64');
     expect(script).toContain('CGO_ENABLED');
-    // -trimpath and a cleared build id are what make two builds of the same source
-    // produce the same bytes, and so the same CDK asset hash.
+    // These three flags are what make two builds of the same source produce the same
+    // bytes, and so the same CDK asset hash. -buildvcs=false is the one worth
+    // asserting: without it a git worktree and a normal clone of the same commit
+    // stamp different module versions and produce different asset hashes, so a
+    // deployment from one would report a Lambda update over the other.
     expect(script).toContain('-trimpath');
     expect(script).toContain('-buildid=');
+    expect(script).toContain('-buildvcs=false');
   });
 
   test('targets the Go version go.mod declares', () => {

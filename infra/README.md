@@ -32,10 +32,14 @@ npm run check   # lint, test, and synth: the check to run before a commit
 
 `cdk.json` runs `scripts/bundle-scanner.js` before the app on every CDK command, so
 `npm run synth` works from a clean clone with no separate build step and no Docker.
-The bundle is `GOOS=linux GOARCH=arm64 CGO_ENABLED=0` with `-trimpath` and a cleared
-build id, so two builds of the same source produce the same bytes and the same CDK
-asset hash.
+The bundle is `GOOS=linux GOARCH=arm64 CGO_ENABLED=0` with `-trimpath`, a cleared
+build id, and `-buildvcs=false`, so two builds of the same source produce the same
+bytes and the same CDK asset hash.
 Without that, every `cdk diff` would report a Lambda update that is not one.
+The VCS stamp matters as much as the other two: it records the commit and the
+revision time, and a git worktree stamps a module version a normal clone does not,
+so the same commit built in the two places produced two different asset hashes until
+the flag was added.
 
 `npm run synth` prints a warning about absent AWS credentials and synthesizes
 anyway.
