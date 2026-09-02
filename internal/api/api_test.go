@@ -438,6 +438,72 @@ func TestRepublicationIsServedImmediately(t *testing.T) {
 	}
 }
 
+// TestFailedPointerReadIsNotServedFromCache proves the cache fails closed.
+//
+// A reader that cannot read the pointer cannot tell a live pointer from one that
+// has since been superseded, so a verified snapshot already in memory is no
+// longer evidence of what is published and must not be served. /health has to
+// report the outage for the same reason, rather than answering ok from memory
+// while the store is unreachable.
+//
+// The entry is kept rather than cleared, so a transient throttle costs one
+// refused request and not a full chunk re-download once the pointer reads again
+// and compares equal.
+func TestFailedPointerReadIsNotServedFromCache(t *testing.T) {
+	inner := snapshot.NewMemoryStore()
+	publishFixture(t, inner, snapshot.FixturePreview)
+	store := &failingPointerStore{inner: inner}
+	handler := newTestHandler(t, store, testNow)
+
+	warm := get(handler, http.MethodGet, PathSnapshot, nil)
+	if warm.Code != http.StatusOK {
+		t.Fatalf("warming status = %d, want %d", warm.Code, http.StatusOK)
+	}
+	warmBody := warm.Body.String()
+	if store.chunkCalls() != 1 {
+		t.Fatalf("chunk fetches while warming = %d, want 1", store.chunkCalls())
+	}
+
+	store.setFailing(true)
+	for _, path := range []string{PathSnapshot, PathMeta, PathHealth} {
+		response := get(handler, http.MethodGet, path, nil)
+		if response.Code != http.StatusServiceUnavailable {
+			t.Fatalf("%s status = %d, want %d while the pointer cannot be read",
+				path, response.Code, http.StatusServiceUnavailable)
+		}
+		var document errorDocument
+		if err := json.Unmarshal(response.Body.Bytes(), &document); err != nil {
+			t.Fatalf("%s body is not JSON: %v", path, err)
+		}
+		// A failed read is not evidence of an empty store and not evidence of
+		// corruption, so the code claims neither.
+		if document.Error.Code != CodeUnavailable {
+			t.Errorf("%s code = %q, want %q", path, document.Error.Code, CodeUnavailable)
+		}
+		if response.Body.String() == warmBody {
+			t.Errorf("%s served the cached snapshot past a pointer it could not read", path)
+		}
+		if got := response.Header().Get("ETag"); got != "" {
+			t.Errorf("%s carried ETag %q, so a client could revalidate against a refusal", path, got)
+		}
+	}
+
+	// The store recovers. The pointer now compares equal to the one the kept entry
+	// was verified against, so the snapshot is served again with no second chunk
+	// fetch.
+	store.setFailing(false)
+	recovered := get(handler, http.MethodGet, PathSnapshot, nil)
+	if recovered.Code != http.StatusOK {
+		t.Fatalf("recovered status = %d, want %d", recovered.Code, http.StatusOK)
+	}
+	if recovered.Body.String() != warmBody {
+		t.Error("the recovered response is not the snapshot that was cached")
+	}
+	if got := store.chunkCalls(); got != 1 {
+		t.Errorf("chunk fetches = %d, want 1: the kept entry was refetched", got)
+	}
+}
+
 // TestOversizedSnapshotBoundsTheWork proves the size limit is applied to the
 // pointer's declaration, before any chunk is fetched, so an oversized snapshot
 // costs one small read rather than a full download.

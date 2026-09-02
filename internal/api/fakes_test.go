@@ -160,6 +160,53 @@ func (s *countingStore) calls() (latest, chunks int) {
 	return s.latestCalls, s.chunksCalls
 }
 
+// failingPointerStore reads normally until it is switched to failing every
+// pointer read, so a test can present a store that goes unreachable after a
+// snapshot has already been verified and cached.
+//
+// Chunk reads keep working. That is deliberate: a test using this store proves
+// the refusal comes from the failed pointer read alone, and that the entry the
+// handler kept is reused rather than refetched once the pointer reads again.
+type failingPointerStore struct {
+	inner snapshot.Reader
+
+	mutex       sync.Mutex
+	failing     bool
+	chunksCalls int
+}
+
+func (s *failingPointerStore) setFailing(failing bool) {
+	s.mutex.Lock()
+	s.failing = failing
+	s.mutex.Unlock()
+}
+
+func (s *failingPointerStore) chunkCalls() int {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+	return s.chunksCalls
+}
+
+func (s *failingPointerStore) GetLatest(ctx context.Context) (snapshot.Latest, error) {
+	s.mutex.Lock()
+	failing := s.failing
+	s.mutex.Unlock()
+	if failing {
+		// A throttled table is the ordinary shape of this: the read failed and says
+		// nothing at all about what is stored.
+		return snapshot.Latest{}, fmt.Errorf("get latest pointer: throughput exceeded")
+	}
+	return s.inner.GetLatest(ctx)
+}
+
+func (s *failingPointerStore) GetChunks(ctx context.Context, snapshotID string) ([]snapshot.Chunk, error) {
+	s.mutex.Lock()
+	s.chunksCalls++
+	s.mutex.Unlock()
+
+	return s.inner.GetChunks(ctx, snapshotID)
+}
+
 // abandoningStore resolves the pointer normally and then loses the request: the
 // chunk fetch cancels the request context and fails with an error that wraps
 // snapshot.ErrNotFound, which is the one combination where the two possible
