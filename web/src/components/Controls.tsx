@@ -230,35 +230,38 @@ export function Controls({
           <label className="field__label" htmlFor="control-sort">
             Sort by
           </label>
-          <select
-            className="select"
-            id="control-sort"
-            onChange={(event) => {
-              if (isSortId(event.target.value)) {
-                setQuery({ sort: event.target.value })
-              }
-            }}
-            value={query.sort}
-          >
-            {SORT_IDS.map((sort) => (
-              <option key={sort} value={sort}>
-                {SORT_LABEL[sort]}
-              </option>
-            ))}
-          </select>
-          <button
-            className="button button--quiet"
-            onClick={() => {
-              setQuery({ direction: query.direction === 'asc' ? 'desc' : 'asc' })
-            }}
-            type="button"
-          >
-            {DIRECTION_LABEL[query.sort][query.direction]}
-            <span className="visually-hidden">
-              . Press to sort{' '}
-              {DIRECTION_LABEL[query.sort][query.direction === 'asc' ? 'desc' : 'asc']} instead.
-            </span>
-          </button>
+          {/* The key and the direction are one decision, so they share a row. */}
+          <div className="sort">
+            <select
+              className="select"
+              id="control-sort"
+              onChange={(event) => {
+                if (isSortId(event.target.value)) {
+                  setQuery({ sort: event.target.value })
+                }
+              }}
+              value={query.sort}
+            >
+              {SORT_IDS.map((sort) => (
+                <option key={sort} value={sort}>
+                  {SORT_LABEL[sort]}
+                </option>
+              ))}
+            </select>
+            <button
+              className="button button--quiet"
+              onClick={() => {
+                setQuery({ direction: query.direction === 'asc' ? 'desc' : 'asc' })
+              }}
+              type="button"
+            >
+              {DIRECTION_LABEL[query.sort][query.direction]}
+              <span className="visually-hidden">
+                . Press to sort{' '}
+                {DIRECTION_LABEL[query.sort][query.direction === 'asc' ? 'desc' : 'asc']} instead.
+              </span>
+            </button>
+          </div>
         </div>
       </div>
 

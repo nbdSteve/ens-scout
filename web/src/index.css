@@ -1,27 +1,59 @@
 /*
- * Design tokens and layout.
+ * The whole of the page's presentation.
  *
- * Dark and light both come from `prefers-color-scheme`, so the page matches the
- * rest of the visitor's system rather than asserting a preference. Every
- * foreground and background pair below is chosen to clear WCAG AA at its text
- * size; the status tones in particular are never the only signal for a status,
- * because colour alone excludes anyone who cannot distinguish them. Each status
- * always carries its own words too.
+ * The structure is editorial rather than dashboard: content sits directly on the
+ * canvas, sections are separated by a hairline and a lot of vertical space instead
+ * of being boxed in cards, and the type scale does the work a border would
+ * otherwise be asked to do. Only three things are given a real surface, and each
+ * for a reason: an advisory banner, because a visitor must be able to tell it from
+ * the prose it interrupts; a source-list tile, because those are a set of peers to
+ * compare; and a form control, because it has to look operable.
+ *
+ * Colour is deliberately scarce. One accent carries links and the page's own
+ * voice, and the lifecycle hues appear only as a small dot beside a word. Status
+ * is never colour alone - every dot has its label next to it - so the palette can
+ * stay quiet without costing anyone information.
+ *
+ * Both schemes are first-class and independently checked for contrast, because axe
+ * only ever sees the one the browser asked for. Every colour that carries text
+ * clears 4.5:1 on the lightest surface it can appear on, which is why the muted and
+ * faint inks are darker than the ones a system palette would suggest.
  */
 
 :root {
-  color-scheme: dark light;
+  color-scheme: light dark;
 
+  /*
+   * `-apple-system` first, so macOS and iOS render in SF Pro. The rest of the
+   * stack is a per-platform system font rather than a webfont: there is no font to
+   * download, so the first paint is the final one and no text reflows under the
+   * reader.
+   */
   --font-sans:
-    ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+    -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI Variable Text', 'Segoe UI',
+    ui-sans-serif, system-ui, Roboto, 'Helvetica Neue', Arial, sans-serif;
   --font-mono:
-    ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
+    ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;
 
-  --step--1: clamp(0.78rem, 0.76rem + 0.1vw, 0.83rem);
-  --step-0: clamp(0.94rem, 0.91rem + 0.14vw, 1rem);
-  --step-1: clamp(1.1rem, 1.03rem + 0.32vw, 1.25rem);
-  --step-2: clamp(1.32rem, 1.18rem + 0.63vw, 1.65rem);
-  --step-3: clamp(1.6rem, 1.34rem + 1.15vw, 2.25rem);
+  /*
+   * A fixed ramp for the small sizes and a fluid one above body copy. Small text
+   * that shrinks with the viewport gets unreadable on a phone long before the
+   * layout runs out of room, and a display size that does not grow with the
+   * viewport looks timid on a desktop.
+   */
+  --step--2: 0.75rem;
+  --step--1: 0.8125rem;
+  --step-0: 1.0625rem;
+  --step-1: clamp(1.1875rem, 1.11rem + 0.35vw, 1.3125rem);
+  --step-2: clamp(1.375rem, 1.16rem + 0.95vw, 1.75rem);
+  --step-3: clamp(1.75rem, 1.36rem + 1.75vw, 2.5rem);
+  --step-4: clamp(2.375rem, 1.55rem + 4vw, 4rem);
+
+  /* Tracking tightens as size grows, which is what keeps large text from looking
+     loose and small text from looking cramped. */
+  --track-tight: -0.028em;
+  --track-snug: -0.014em;
+  --track-wide: 0.07em;
 
   --space-1: 0.25rem;
   --space-2: 0.5rem;
@@ -30,88 +62,94 @@
   --space-5: 1.5rem;
   --space-6: 2rem;
   --space-7: 3rem;
+  --space-8: 4.5rem;
 
-  --radius-1: 0.375rem;
-  --radius-2: 0.625rem;
-  --radius-3: 1rem;
+  --radius-1: 0.5rem;
+  --radius-2: 0.875rem;
+  --radius-3: 1.25rem;
+  --radius-pill: 999px;
 
-  --measure: 68ch;
-  --page-max: 78rem;
+  --measure: 62ch;
+  --page-max: 68rem;
+  --gutter: clamp(1.25rem, 5vw, 3rem);
 
-  --canvas: #0b0f16;
-  --surface: #141a25;
-  --surface-raised: #1b2331;
-  --border: #2a3444;
-  --border-strong: #3b4859;
-  --ink: #eef2f7;
-  --ink-muted: #a8b4c4;
-  --ink-faint: #7d8b9d;
+  --canvas: #ffffff;
+  --canvas-tint: #fafafc;
+  --canvas-veil: rgb(255 255 255 / 72%);
+  --surface: #ffffff;
 
-  --accent: #5eead4;
-  --accent-ink: #062b26;
-  --accent-quiet: #1d3c3a;
+  --hairline: rgb(0 0 0 / 9%);
+  --hairline-strong: rgb(0 0 0 / 18%);
 
-  --good: #6ee7a8;
-  --good-quiet: #133227;
-  --warn: #fbbf6b;
-  --warn-quiet: #3a2a12;
-  --busy: #93b4f5;
-  --busy-quiet: #17253f;
-  --muted-tone: #a8b4c4;
-  --muted-quiet: #232c39;
-  --danger: #fca5a5;
-  --danger-quiet: #3a1c1c;
+  --ink: #1d1d1f;
+  /* 7.1:1 on white and 6.8:1 on the tinted banners, so body copy stays legible
+     wherever it lands. The conventional #6e6e73 clears white and fails a tint. */
+  --ink-muted: #575760;
+  --ink-faint: #6e6e73;
+  /* Text drawn on an `--ink` fill, for the selected view pill. */
+  --on-ink: #ffffff;
+  --on-ink-muted: rgb(255 255 255 / 72%);
 
-  --shadow-1: 0 1px 2px rgb(0 0 0 / 40%);
-  --shadow-2: 0 8px 24px rgb(0 0 0 / 35%);
+  --accent: #0063cc;
+  --accent-ink: #ffffff;
+  --accent-wash: #eff5ff;
+
+  --good: #0a7d43;
+  --warn: #b3610a;
+  --warn-wash: #fff7ec;
+  --busy: #2563c9;
+  --muted-tone: #8a8a94;
+  --danger: #c22a2a;
+  --danger-wash: #fff2f2;
+
+  --shadow-1: 0 1px 2px rgb(15 23 42 / 6%);
+  --shadow-2: 0 12px 32px -8px rgb(15 23 42 / 14%);
+
+  /* One duration and one curve for every hover and state change, so the page
+     feels like a single object rather than a collection of widgets. */
+  --ease: cubic-bezier(0.22, 1, 0.36, 1);
+  --quick: 180ms;
 }
 
-@media (prefers-color-scheme: light) {
+@media (prefers-color-scheme: dark) {
   :root {
-    --canvas: #f6f8fb;
-    --surface: #ffffff;
-    --surface-raised: #eef2f8;
-    --border: #d3dbe6;
-    --border-strong: #b3bfcf;
-    --ink: #131a25;
-    --ink-muted: #4a5769;
-    --ink-faint: #64748b;
+    --canvas: #000000;
+    --canvas-tint: #0b0b0d;
+    --canvas-veil: rgb(0 0 0 / 68%);
+    --surface: #101012;
 
-    /*
-     * Dark enough to clear 4.5:1 on the lightest tinted background a link sits on,
-     * which is `--danger-quiet`. The obvious teal, #0f766e, reaches 4.43:1 there:
-     * it passes on white and fails inside exactly the banners a visitor is meant to
-     * read, which is the worst place to lose contrast.
-     */
-    --accent: #0d6b64;
-    --accent-ink: #ffffff;
-    --accent-quiet: #d6f2ee;
+    --hairline: rgb(255 255 255 / 13%);
+    --hairline-strong: rgb(255 255 255 / 26%);
 
-    --good: #10693f;
-    --good-quiet: #daf3e5;
-    --warn: #8a5200;
-    --warn-quiet: #fdefd6;
-    --busy: #1f4fa8;
-    --busy-quiet: #dfe9fb;
-    --muted-tone: #4a5769;
-    --muted-quiet: #e6ebf2;
-    --danger: #a4262c;
-    --danger-quiet: #fbe1e1;
+    --ink: #f5f5f7;
+    --ink-muted: #b9b9c0;
+    --ink-faint: #97979f;
+    --on-ink: #000000;
+    --on-ink-muted: rgb(0 0 0 / 62%);
 
-    --shadow-1: 0 1px 2px rgb(15 23 42 / 8%);
-    --shadow-2: 0 8px 24px rgb(15 23 42 / 10%);
+    --accent: #4da3ff;
+    --accent-ink: #04121f;
+    --accent-wash: rgb(77 163 255 / 13%);
+
+    --good: #3ddc84;
+    --warn: #ffb02e;
+    --warn-wash: rgb(255 176 46 / 11%);
+    --busy: #6ea8ff;
+    --muted-tone: #8e8e96;
+    --danger: #ff6b6b;
+    --danger-wash: rgb(255 107 107 / 12%);
+
+    --shadow-1: 0 1px 2px rgb(0 0 0 / 60%);
+    --shadow-2: 0 12px 32px -8px rgb(0 0 0 / 70%);
   }
 }
 
-/*
- * More contrast when the visitor asks for it: borders become solid rather than
- * suggested, and muted text stops being muted.
- */
+/* Hairlines become real lines and the faint ink stops being faint. */
 @media (prefers-contrast: more) {
   :root {
-    --border: var(--border-strong);
-    --ink-muted: var(--ink);
+    --hairline: var(--hairline-strong);
     --ink-faint: var(--ink-muted);
+    --ink-muted: var(--ink);
   }
 }
 
@@ -122,6 +160,10 @@
 }
 
 html {
+  /* An anchor jump lands under the sticky header rather than behind it. No smooth
+     scrolling: the skip link has to arrive before the next keystroke, not after an
+     animation. */
+  scroll-padding-top: 4.5rem;
   -webkit-text-size-adjust: 100%;
 }
 
@@ -131,15 +173,18 @@ body {
   color: var(--ink);
   font-family: var(--font-sans);
   font-size: var(--step-0);
-  line-height: 1.55;
+  line-height: 1.5;
+  letter-spacing: var(--track-snug);
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 h1,
 h2,
 h3 {
-  line-height: 1.2;
   margin: 0;
+  line-height: 1.15;
+  letter-spacing: var(--track-tight);
   text-wrap: balance;
 }
 
@@ -148,26 +193,42 @@ p {
   text-wrap: pretty;
 }
 
+ul {
+  margin: 0;
+}
+
 a {
   color: var(--accent);
   text-decoration-thickness: from-font;
-  text-underline-offset: 0.16em;
+  text-underline-offset: 0.18em;
+  transition: color var(--quick) var(--ease);
 }
 
 a:hover {
-  text-decoration-thickness: 2px;
+  color: var(--ink);
 }
 
-/*
- * One focus treatment everywhere, always visible, and never removed. Keyboard
- * visitors are the only ones who see it and they need it on every control.
- */
+code {
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+  letter-spacing: 0;
+}
+
+strong {
+  font-weight: 600;
+}
+
 :focus-visible {
-  outline: 3px solid var(--accent);
-  outline-offset: 2px;
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
   border-radius: var(--radius-1);
 }
 
+/*
+ * The one motion switch. Not `0s`: a zero duration cancels the `transitionend` and
+ * `animationend` events some code waits on, so the conventional reset is a
+ * duration too short to see.
+ */
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
@@ -179,7 +240,6 @@ a:hover {
   }
 }
 
-/* Available to a screen reader, and to a keyboard visitor who tabs to it. */
 .visually-hidden {
   position: absolute;
   width: 1px;
@@ -192,613 +252,863 @@ a:hover {
   border: 0;
 }
 
+.mono {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
+}
+
+/* ---------------------------------------------------------------- skip link -- */
+
 .skip-link {
-  position: absolute;
-  top: var(--space-2);
-  left: var(--space-2);
-  z-index: 10;
-  padding: var(--space-2) var(--space-4);
-  background: var(--accent);
-  color: var(--accent-ink);
-  border-radius: var(--radius-1);
-  font-weight: 650;
-  transform: translateY(-200%);
+  position: fixed;
+  inset-block-start: var(--space-3);
+  inset-inline-start: var(--space-3);
+  /* Above the sticky header, which would otherwise cover it. */
+  z-index: 40;
+  padding: 0.7rem 1.1rem;
+  border-radius: var(--radius-pill);
+  background: var(--ink);
+  color: var(--on-ink);
+  font-size: var(--step--1);
+  font-weight: 500;
+  text-decoration: none;
+  box-shadow: var(--shadow-2);
+  transform: translateY(-250%);
+  transition: transform var(--quick) var(--ease);
 }
 
 .skip-link:focus-visible {
-  transform: translateY(0);
+  transform: none;
+  color: var(--on-ink);
 }
+
+/* ------------------------------------------------------------------ top bar -- */
+
+.topbar {
+  position: sticky;
+  inset-block-start: 0;
+  z-index: 20;
+  background: var(--canvas-veil);
+  border-block-end: 1px solid var(--hairline);
+  /* Saturation as well as blur, so content scrolling under the bar keeps its
+     colour instead of washing out to grey. */
+  backdrop-filter: saturate(180%) blur(20px);
+  -webkit-backdrop-filter: saturate(180%) blur(20px);
+}
+
+.topbar__inner {
+  max-width: var(--page-max);
+  margin-inline: auto;
+  padding-inline: var(--gutter);
+  min-height: 3.25rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+}
+
+.wordmark {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: var(--step-0);
+  font-weight: 600;
+  letter-spacing: var(--track-snug);
+}
+
+.wordmark::before {
+  content: '';
+  width: 0.5rem;
+  height: 0.5rem;
+  flex: none;
+  border-radius: 0.15rem;
+  background: var(--accent);
+  rotate: 45deg;
+}
+
+.topbar__link {
+  font-size: var(--step--1);
+  font-weight: 500;
+  color: var(--ink-muted);
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.topbar__link:hover {
+  color: var(--accent);
+}
+
+.topbar__link span {
+  display: inline-block;
+  transition: transform var(--quick) var(--ease);
+}
+
+.topbar__link:hover span {
+  transform: translate(0.1em, -0.1em);
+}
+
+/* -------------------------------------------------------------------- shell -- */
 
 .page {
   max-width: var(--page-max);
   margin-inline: auto;
-  padding: var(--space-5) var(--space-4) var(--space-7);
-  display: grid;
-  gap: var(--space-5);
+  padding-inline: var(--gutter);
 }
 
-@media (min-width: 48rem) {
-  .page {
-    padding-inline: var(--space-6);
+.hero {
+  display: grid;
+  gap: var(--space-4);
+  padding-block: clamp(2.25rem, 7vw, 5rem) clamp(1rem, 3vw, 2rem);
+}
+
+.hero__eyebrow {
+  font-size: var(--step--2);
+  font-weight: 600;
+  letter-spacing: var(--track-wide);
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+.hero__title {
+  font-size: var(--step-4);
+  font-weight: 700;
+  line-height: 1.03;
+  max-width: 24ch;
+  /* A display size can outrun its column on a phone; a long word breaks rather
+     than pushing the page sideways. */
+  overflow-wrap: break-word;
+}
+
+.hero__lede {
+  font-size: var(--step-1);
+  line-height: 1.45;
+  color: var(--ink-muted);
+  max-width: 44ch;
+}
+
+/*
+ * The entrance, and the only animation on the page.
+ *
+ * It is scoped to the hero and runs once. Animating the sections as they arrive
+ * would mean the page's own measurements - a countdown's line count, a grid's row
+ * count - are taken while it is still moving.
+ *
+ * It moves the type and does not fade it. A fade would put the eyebrow and the
+ * lede genuinely below 4.5:1 for the length of the animation, which is a contrast
+ * failure for that half-second and not merely one an audit happens to catch: a
+ * reader arrives during the entrance, and on a slow device it is all they see.
+ * Waiting for the animation in the test would hide the defect rather than fix it.
+ */
+@media (prefers-reduced-motion: no-preference) {
+  .hero > * {
+    animation: rise 560ms var(--ease) backwards;
+  }
+
+  .hero__title {
+    animation-delay: 60ms;
+  }
+
+  .hero__lede {
+    animation-delay: 120ms;
   }
 }
 
-/* A single column with one consistent gap, for sections that just follow each other. */
+@keyframes rise {
+  from {
+    transform: translateY(0.85rem);
+  }
+
+  to {
+    transform: none;
+  }
+}
+
 /*
- * `minmax(0, 1fr)`, not the implied `auto`. An `auto` column never shrinks below the
- * widest item's minimum content width, so one wide card - a table with three
- * unbreakable columns, say - silently widens every sibling and the page scrolls
- * sideways. Capping the column at the container keeps a mistake inside the card that
- * made it.
+ * `minmax(0, 1fr)` rather than the default `auto`. An `auto` column never shrinks
+ * below its content's min-content width, so one long unbreakable string anywhere
+ * inside would widen the whole page instead of wrapping.
  */
 .stack {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  gap: var(--space-5);
-  align-content: start;
 }
 
+/* Every caveat the page has to make, collected once, above the data. */
+.advisories {
+  display: grid;
+  gap: var(--space-3);
+  padding-block: var(--space-5);
+}
+
+/*
+ * A section: a heading, a hairline above it, and room around it. This is the card
+ * that used to be a box. Nothing here has a border or a fill, because the space
+ * and the rule already say where one section ends and the next begins.
+ */
 .card {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-3);
-  padding: var(--space-4);
-  box-shadow: var(--shadow-1);
-}
-
-@media (min-width: 48rem) {
-  .card {
-    padding: var(--space-5);
-  }
+  display: grid;
+  gap: var(--space-5);
+  padding-block: clamp(1.75rem, 4vw, 2.75rem);
+  border-block-start: 1px solid var(--hairline);
 }
 
 .card__title {
-  font-size: var(--step-1);
-  margin-bottom: var(--space-1);
+  font-size: var(--step-2);
+  font-weight: 600;
+}
+
+.section-head {
+  display: grid;
+  gap: var(--space-2);
 }
 
 .prose {
-  max-width: var(--measure);
   color: var(--ink-muted);
+  max-width: var(--measure);
 }
 
-.mono {
-  font-family: var(--font-mono);
-  font-variant-numeric: tabular-nums;
-}
-
-/* ---- header ---- */
-
-.masthead {
+.footer {
   display: grid;
   gap: var(--space-3);
+  padding-block: var(--space-7) var(--space-8);
+  border-block-start: 1px solid var(--hairline);
+  color: var(--ink-faint);
+  font-size: var(--step--1);
 }
 
-.masthead__title {
-  font-size: var(--step-3);
-  letter-spacing: -0.02em;
-}
-
-.masthead__lede {
+/*
+ * The measure goes on the paragraphs, not on the footer. Every other section rule
+ * on the page spans the full column, and one that stopped two thirds of the way
+ * across would read as a mistake rather than as a margin.
+ */
+.footer > p {
   max-width: var(--measure);
-  color: var(--ink-muted);
 }
 
-/* ---- notices ---- */
+/* ------------------------------------------------------------------ notices -- */
 
+/*
+ * A banner. The colour is an accent on one edge, never the whole surface: a page
+ * whose first screen is three saturated slabs teaches the reader to skip them, and
+ * these are the ones that must be read.
+ */
 .notice {
   display: grid;
   gap: var(--space-2);
+  /* Sized to the words rather than to the column. A banner stretched across a
+     desktop-width page reads as a slab; kept to a paragraph's measure it reads as
+     a note, which is what it is. */
+  max-width: 44rem;
   padding: var(--space-4);
-  border-radius: var(--radius-2);
-  border: 1px solid var(--border-strong);
-  border-left-width: 5px;
-  background: var(--surface-raised);
-}
-
-.notice__title {
-  font-size: var(--step-0);
-  font-weight: 700;
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-}
-
-.notice__body {
-  color: var(--ink-muted);
-  max-width: var(--measure);
-}
-
-.notice--warn {
-  border-color: var(--warn);
-  background: var(--warn-quiet);
-}
-
-.notice--warn .notice__body {
-  color: var(--ink);
-}
-
-.notice--danger {
-  border-color: var(--danger);
-  background: var(--danger-quiet);
-}
-
-.notice--danger .notice__body {
-  color: var(--ink);
+  border: 1px solid var(--hairline);
+  border-inline-start: 3px solid var(--notice-tone);
+  border-start-start-radius: var(--radius-2);
+  border-start-end-radius: var(--radius-2);
+  border-end-end-radius: var(--radius-2);
+  border-end-start-radius: var(--radius-2);
+  background: var(--notice-wash, var(--canvas-tint));
 }
 
 .notice--info {
-  border-color: var(--busy);
-  background: var(--busy-quiet);
+  --notice-tone: var(--busy);
 }
 
-.notice--info .notice__body {
-  color: var(--ink);
+.notice--warn {
+  --notice-tone: var(--warn);
+  --notice-wash: var(--warn-wash);
+}
+
+.notice--danger {
+  --notice-tone: var(--danger);
+  --notice-wash: var(--danger-wash);
+}
+
+/* A banner that appeared after the page settled gets the heavier edge. It is the
+   only one a reader has not already had the chance to read. */
+.notice[role='alert'] {
+  border-inline-start-width: 4px;
+  box-shadow: var(--shadow-1);
+}
+
+/* These carry the data-trust warnings, which are the most consequential sentences
+   on the page. Set at reading size rather than as fine print: the one thing that
+   would make them fail is being skippable. */
+.notice__title {
+  font-size: var(--step-0);
+  font-weight: 600;
+}
+
+.notice__body {
+  display: grid;
+  gap: var(--space-3);
+  justify-items: start;
+  color: var(--ink-muted);
+  font-size: var(--step-0);
+  line-height: 1.5;
 }
 
 .notice__list {
-  margin: 0;
-  padding-left: var(--space-5);
   display: grid;
-  gap: var(--space-1);
-}
-
-/* ---- summary ---- */
-
-.summary {
-  display: grid;
-  gap: var(--space-4);
-}
-
-.summary__total {
-  font-size: var(--step-2);
-  font-weight: 700;
-  letter-spacing: -0.01em;
-}
-
-/*
- * `8.5rem`, which is the largest track that still fits all seven statuses on one
- * row at 1440px. A wider track drops the seventh onto a row of its own, and a
- * lone card under six is read as a rendering fault rather than as a count. Seven
- * divides only by one and seven, so any intermediate width leaves a short last
- * row; the track is chosen so the widths that matter most are the whole ones.
- */
-.counts {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(8.5rem, 1fr));
-  gap: var(--space-3);
-  margin: 0;
-}
-
-/*
- * `align-content: start` for the reason `.field` needs it: the cards in a row are
- * stretched to the tallest one, and a grid of `auto` rows answers the extra height
- * by growing the gap. "Grace ending soon" wraps to two lines at phone width, so
- * without this the label of every shorter card in that row drifts away from its
- * number and the row stops reading as one set of counts.
- */
-.count {
-  display: grid;
-  align-content: start;
-  gap: var(--space-1);
-  padding: var(--space-3);
-  border-radius: var(--radius-2);
-  border: 1px solid var(--border);
-  background: var(--surface-raised);
-}
-
-/*
- * The number reads first and the label under it, while the markup keeps the
- * `dt` before its `dd`. Reordering in CSS rather than in the DOM keeps the
- * description list valid and leaves a screen reader hearing the label first.
- */
-.count__value {
-  order: -1;
-  font-size: var(--step-2);
-  font-weight: 700;
-  font-variant-numeric: tabular-nums;
-  line-height: 1.1;
-  margin: 0;
-}
-
-.count__label {
-  font-size: var(--step--1);
-  color: var(--ink-muted);
-  display: flex;
-  align-items: center;
   gap: var(--space-2);
+  padding-inline-start: 1.15rem;
 }
 
-.count--good {
-  border-left: 4px solid var(--good);
-}
-
-.count--warn {
-  border-left: 4px solid var(--warn);
-}
-
-.count--busy {
-  border-left: 4px solid var(--busy);
-}
-
-.count--muted {
-  border-left: 4px solid var(--muted-tone);
-}
-
-/* ---- scan status ---- */
-
-.scan {
-  display: grid;
-  gap: var(--space-4);
-}
+/* -------------------------------------------------------------------- scan -- */
 
 .facts {
   display: grid;
-  gap: var(--space-3) var(--space-5);
-  margin: 0;
-  grid-template-columns: 1fr;
+  gap: var(--space-5) var(--space-6);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
-@media (min-width: 34rem) {
+/* Uneven on purpose. The four facts are very different lengths - a full UTC
+   timestamp against "just now" - and equal columns would wrap the one fact that
+   must not be read in two pieces. */
+@media (min-width: 48rem) {
   .facts {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-}
-
-@media (min-width: 62rem) {
-  .facts {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns:
+      minmax(0, 1.4fr) minmax(0, 0.8fr)
+      minmax(0, 0.9fr) minmax(0, 1.1fr);
   }
 }
 
 .fact {
   display: grid;
   gap: var(--space-1);
-  min-width: 0;
+  align-content: start;
 }
 
 .fact__label {
-  font-size: var(--step--1);
-  color: var(--ink-muted);
+  margin: 0;
+  font-size: var(--step--2);
   font-weight: 600;
-  letter-spacing: 0.02em;
+  letter-spacing: var(--track-wide);
   text-transform: uppercase;
+  color: var(--ink-faint);
 }
 
 .fact__value {
   margin: 0;
-  overflow-wrap: anywhere;
+  font-size: var(--step-0);
+  color: var(--ink);
+  overflow-wrap: break-word;
+}
+
+.field__hint {
+  color: var(--ink-faint);
+  font-size: var(--step--1);
+  max-width: var(--measure);
 }
 
 .groups {
   display: grid;
   gap: var(--space-3);
-  grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
-  margin: 0;
   padding: 0;
   list-style: none;
 }
 
+@media (min-width: 48rem) {
+  .groups {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+/*
+ * A source list, as a tile. These are the one place a real surface earns its
+ * keep: they are peers to be compared, and an out-of-date one has to be findable
+ * at a glance without reading all three.
+ */
 .group {
   display: grid;
   gap: var(--space-2);
-  padding: var(--space-3);
-  border: 1px solid var(--border);
+  align-content: start;
+  padding: var(--space-4);
+  border: 1px solid var(--hairline);
   border-radius: var(--radius-2);
-  background: var(--surface-raised);
+  background: var(--canvas-tint);
+  transition:
+    border-color var(--quick) var(--ease),
+    background-color var(--quick) var(--ease);
 }
 
 .group--stale {
   border-color: var(--warn);
-  background: var(--warn-quiet);
+  background: var(--warn-wash);
 }
 
 .group__name {
-  font-weight: 650;
   display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-3);
   align-items: baseline;
   justify-content: space-between;
-  gap: var(--space-2);
-  flex-wrap: wrap;
+  font-size: var(--step-0);
+  font-weight: 600;
+  overflow-wrap: break-word;
 }
 
 .group__meta {
-  font-size: var(--step--1);
-  color: var(--ink-muted);
   display: grid;
   gap: var(--space-1);
-}
-
-.group--stale .group__meta {
-  color: var(--ink);
-}
-
-/* ---- badges ---- */
-
-.badge {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-1);
-  padding: 0.1rem var(--space-2);
-  border-radius: 999px;
+  color: var(--ink-muted);
   font-size: var(--step--1);
-  font-weight: 650;
-  white-space: nowrap;
-  border: 1px solid transparent;
 }
 
-.badge--good {
-  background: var(--good-quiet);
-  color: var(--good);
-  border-color: var(--good);
-}
-
-.badge--warn {
-  background: var(--warn-quiet);
-  color: var(--warn);
-  border-color: var(--warn);
-}
-
-.badge--busy {
-  background: var(--busy-quiet);
-  color: var(--busy);
-  border-color: var(--busy);
-}
-
-.badge--muted {
-  background: var(--muted-quiet);
-  color: var(--muted-tone);
-  border-color: var(--border-strong);
-}
-
-/* ---- views ---- */
+/* -------------------------------------------------------------------- badge -- */
 
 /*
- * The view links wrap onto as many rows as they need.
+ * A status, as a dot and a word.
  *
- * A sideways-scrolling strip was tidier on a wide screen and wrong on a narrow one:
- * at 320px the five views are 649px of content in a 304px box, so two of them are
- * off-screen entirely and a third is clipped mid-word, with no scrollbar drawn on a
- * touch device to say that anything is hidden. A ragged second row is not as neat,
- * but every view is visible and reachable without a swipe nobody was told about.
- *
- * The padding and the matching negative margin keep a focus ring from being clipped
- * by the card edges, which is why they are on the container rather than the list.
+ * The dot is the only place a lifecycle hue appears, and it is never alone: the
+ * label beside it is the actual answer, so the page loses nothing for a reader who
+ * cannot separate the hues or is not seeing them at all.
  */
-.views {
-  margin-inline: calc(var(--space-1) * -1);
-  padding: var(--space-1);
+.badge {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.45em;
+  font-size: var(--step--1);
+  font-weight: 500;
+  color: var(--ink);
+  white-space: nowrap;
 }
 
+.badge::before {
+  content: '';
+  width: 0.4375rem;
+  height: 0.4375rem;
+  flex: none;
+  /* Baseline alignment keeps the dot on the text's optical centre rather than
+     centred on the line box, which sits too high beside small type. */
+  translate: 0 -0.28em;
+  border-radius: 50%;
+  background: var(--tone, var(--muted-tone));
+}
+
+.badge--good,
+.count--good {
+  --tone: var(--good);
+}
+
+.badge--warn,
+.count--warn {
+  --tone: var(--warn);
+}
+
+.badge--busy,
+.count--busy {
+  --tone: var(--busy);
+}
+
+.badge--muted,
+.count--muted {
+  --tone: var(--muted-tone);
+}
+
+/* ----------------------------------------------------------------- summary -- */
+
+.summary__total {
+  color: var(--ink-muted);
+  font-size: var(--step-1);
+}
+
+/*
+ * Explicit column counts rather than `auto-fit`.
+ *
+ * `auto-fit` answers a track it cannot quite fit by silently dropping to one
+ * column, and three pixels of shortfall once turned all seven counts into seven
+ * full-width rows. Naming the count per breakpoint makes the packing something
+ * that was decided rather than something that happened.
+ */
+.counts {
+  display: grid;
+  gap: var(--space-5) var(--space-4);
+  margin: 0;
+  /* Capped so the seven figures stay a group the eye takes in at once. Spread over
+     a full desktop column they read as separate facts instead of one summary. */
+  max-width: 48rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+@media (min-width: 30rem) {
+  .counts {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (min-width: 48rem) {
+  .counts {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+.count {
+  display: grid;
+  gap: var(--space-1);
+  align-content: start;
+}
+
+/* The number reads first, so it is ordered first. The label stays the `<dt>` in
+   the markup, because that is what it is. */
+.count__value {
+  order: -1;
+  margin: 0;
+  font-size: var(--step-3);
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: var(--track-tight);
+  font-variant-numeric: tabular-nums;
+}
+
+.count__label {
+  display: flex;
+  align-items: baseline;
+  gap: 0.45em;
+  color: var(--ink-muted);
+  font-size: var(--step--1);
+}
+
+.count__label::before {
+  content: '';
+  width: 0.4375rem;
+  height: 0.4375rem;
+  flex: none;
+  translate: 0 -0.28em;
+  border-radius: 50%;
+  background: var(--tone, var(--muted-tone));
+}
+
+/* ------------------------------------------------------------------- views -- */
+
+/*
+ * The views and the filters are one band: choosing a view and narrowing it are the
+ * same job, so the hairline goes above the tabs and not between them.
+ */
+.views {
+  padding-block-start: clamp(1.75rem, 4vw, 2.75rem);
+  border-block-start: 1px solid var(--hairline);
+}
+
+.controls {
+  padding-block-start: var(--space-5);
+  border-block-start: 0;
+}
+
+/*
+ * The views, as a set of pills that wrap.
+ *
+ * A horizontally scrolling strip is the usual answer at phone width and it is the
+ * wrong one here: a link parked outside the viewport is unreachable on a touch
+ * device, which draws no scrollbar to say anything is hidden. Wrapping keeps all
+ * five on screen at every width.
+ */
 .views__list {
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-2);
-  list-style: none;
-  margin: 0;
   padding: 0;
+  list-style: none;
 }
 
 .views__tab {
   display: inline-flex;
   align-items: baseline;
-  gap: var(--space-2);
-  white-space: nowrap;
-  padding: var(--space-2) var(--space-4);
-  min-height: 2.75rem;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  background: var(--surface);
-  color: var(--ink-muted);
-  font-weight: 650;
+  gap: 0.45em;
+  padding: 0.5rem 0.95rem;
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--radius-pill);
+  font-size: var(--step--1);
+  font-weight: 500;
+  color: var(--ink);
   text-decoration: none;
+  white-space: nowrap;
+  transition:
+    background-color var(--quick) var(--ease),
+    border-color var(--quick) var(--ease),
+    color var(--quick) var(--ease);
 }
 
 .views__tab:hover {
-  border-color: var(--accent);
+  border-color: var(--ink-faint);
+  background: var(--canvas-tint);
   color: var(--ink);
 }
 
-/*
- * The current view is marked by fill, border, and weight together, not by colour
- * alone, and `aria-current` carries it for anyone who cannot see any of the three.
- */
-.views__tab--current {
-  background: var(--accent-quiet);
-  border-color: var(--accent);
-  color: var(--ink);
+.views__tab--current,
+.views__tab--current:hover {
+  background: var(--ink);
+  border-color: var(--ink);
+  color: var(--on-ink);
 }
 
 .views__count {
-  font-size: var(--step--1);
+  color: var(--ink-faint);
   font-variant-numeric: tabular-nums;
-  color: var(--ink-muted);
 }
 
 .views__tab--current .views__count {
-  color: var(--ink);
+  color: var(--on-ink-muted);
 }
 
-/* ---- controls ---- */
-
-.controls {
-  display: grid;
-  gap: var(--space-4);
-}
+/* ---------------------------------------------------------------- controls -- */
 
 .controls__grid {
   display: grid;
-  gap: var(--space-4);
-  grid-template-columns: 1fr;
+  gap: var(--space-5);
+  grid-template-columns: minmax(0, 1fr);
 }
 
-@media (min-width: 42rem) {
+@media (min-width: 34rem) {
   .controls__grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
-@media (min-width: 70rem) {
+@media (min-width: 62rem) {
   .controls__grid {
     grid-template-columns: repeat(4, minmax(0, 1fr));
   }
 }
 
-/*
- * `align-content: start`, because the fields in a row are not the same height: one
- * carries a hint under its control and one carries a second control. A grid whose
- * rows are all `auto` stretches them to fill a taller row, so the label and the
- * control of the shortest field drift downwards and the row of inputs no longer
- * lines up. Keeping the rows at their content height leaves the slack at the bottom
- * of the field, where nothing is looking.
- */
 .field {
   display: grid;
-  align-content: start;
   gap: var(--space-2);
+  align-content: start;
   min-width: 0;
 }
 
 .field__label {
-  font-weight: 650;
   font-size: var(--step--1);
-}
-
-.field__hint {
-  font-size: var(--step--1);
-  color: var(--ink-muted);
+  font-weight: 600;
+  color: var(--ink);
 }
 
 .input,
 .select {
-  font: inherit;
-  color: var(--ink);
-  background: var(--canvas);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-1);
-  padding: var(--space-2) var(--space-3);
-  min-height: 2.75rem;
+  appearance: none;
   width: 100%;
+  min-width: 0;
+  min-height: 2.75rem;
+  padding: 0.55rem 0.8rem;
+  font: inherit;
+  font-size: var(--step-0);
+  letter-spacing: inherit;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--radius-1);
+  transition:
+    border-color var(--quick) var(--ease),
+    background-color var(--quick) var(--ease);
 }
 
 .input::placeholder {
   color: var(--ink-faint);
 }
 
+.input:hover,
+.select:hover {
+  border-color: var(--ink-faint);
+}
+
+/*
+ * The chevron is a background image rather than a pseudo-element, because a
+ * `<select>` does not reliably render one. It cannot read `currentColor`, so each
+ * scheme names its own.
+ */
+.select {
+  padding-inline-end: 2.25rem;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8'%3E%3Cpath d='M1 1.75 6 6.5l5-4.75' fill='none' stroke='%23575760' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 0.8rem center;
+  background-size: 0.7rem;
+  cursor: pointer;
+}
+
+@media (prefers-color-scheme: dark) {
+  .select {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8'%3E%3Cpath d='M1 1.75 6 6.5l5-4.75' fill='none' stroke='%23b9b9c0' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  }
+}
+
 .range {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
   align-items: center;
   gap: var(--space-2);
 }
 
-.range .input {
-  width: 5.5rem;
-}
-
 .range__to {
-  color: var(--ink-muted);
+  color: var(--ink-faint);
   font-size: var(--step--1);
 }
 
+/* `auto` for the toggle so its label sets its width, and `minmax(0, 1fr)` for the
+   select so it gives that width up rather than pushing the row wider. */
+.sort {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--space-2);
+}
+
+.sort .button {
+  padding-inline: 0.85rem;
+  white-space: nowrap;
+}
+
 .fieldset {
-  border: 1px solid var(--border);
-  border-radius: var(--radius-2);
-  padding: var(--space-3);
   margin: 0;
+  padding: 0;
+  border: 0;
+  display: grid;
+  gap: var(--space-3);
   min-width: 0;
 }
 
 .fieldset__legend {
-  font-weight: 650;
+  padding: 0;
   font-size: var(--step--1);
-  padding-inline: var(--space-2);
+  font-weight: 600;
+  color: var(--ink);
 }
 
 .checkbox-list {
-  display: grid;
+  display: flex;
+  flex-wrap: wrap;
   gap: var(--space-2);
 }
 
+/*
+ * A status filter, as a chip around a real checkbox.
+ *
+ * The input keeps its own visible box rather than being hidden behind the chip.
+ * A hidden input is still focusable, so the tests still pass, but the focus ring
+ * is then drawn on a one-pixel target nobody can see - and a chip that only looks
+ * pressed loses the one affordance that says it is a checkbox and not a link.
+ */
 .checkbox {
-  display: flex;
-  align-items: flex-start;
-  gap: var(--space-2);
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.45rem 0.85rem 0.45rem 0.6rem;
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--radius-pill);
   font-size: var(--step--1);
-  line-height: 1.4;
-  min-height: 1.75rem;
+  cursor: pointer;
+  transition:
+    background-color var(--quick) var(--ease),
+    border-color var(--quick) var(--ease);
+}
+
+.checkbox:hover {
+  border-color: var(--ink-faint);
+  background: var(--canvas-tint);
+}
+
+.checkbox:has(input:checked) {
+  border-color: var(--accent);
+  background: var(--accent-wash);
 }
 
 .checkbox input {
-  width: 1.15rem;
-  height: 1.15rem;
-  margin: 0.1rem 0 0;
-  accent-color: var(--accent);
+  appearance: none;
   flex: none;
+  width: 1.05rem;
+  height: 1.05rem;
+  margin: 0;
+  border: 1.5px solid var(--hairline-strong);
+  border-radius: 0.3rem;
+  background: var(--surface);
+  cursor: pointer;
+  transition:
+    background-color var(--quick) var(--ease),
+    border-color var(--quick) var(--ease);
+}
+
+.checkbox input:checked {
+  border-color: var(--accent);
+  background-color: var(--accent);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 10'%3E%3Cpath d='M1 5.2 4.3 8.5 11 1.5' fill='none' stroke='%23ffffff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: 0.68rem;
 }
 
 .checkbox__count {
-  color: var(--ink-muted);
+  color: var(--ink-faint);
   font-variant-numeric: tabular-nums;
 }
 
+/* No rule above this line. The section boundary below it is already a rule, and a
+   second one a few lines up turns the closing count into a stripe. */
 .controls__footer {
   display: flex;
   flex-wrap: wrap;
-  align-items: center;
+  gap: var(--space-2) var(--space-4);
+  align-items: baseline;
   justify-content: space-between;
-  gap: var(--space-3);
-  border-top: 1px solid var(--border);
-  padding-top: var(--space-3);
-}
-
-.button {
-  font: inherit;
-  font-weight: 650;
-  color: var(--ink);
-  background: var(--surface-raised);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-1);
-  padding: var(--space-2) var(--space-4);
-  min-height: 2.75rem;
-  cursor: pointer;
-}
-
-.button:hover {
-  border-color: var(--accent);
-}
-
-.button--quiet {
-  background: transparent;
+  font-size: var(--step--1);
 }
 
 .result-count {
+  color: var(--ink);
+  font-size: var(--step-0);
+  font-weight: 600;
   font-variant-numeric: tabular-nums;
-  color: var(--ink-muted);
 }
 
-/* ---- results ---- */
+/* ----------------------------------------------------------------- buttons -- */
 
-/*
- * `minmax(0, 1fr)` for the same reason `.stack` needs it: an implied `auto` column
- * never shrinks below its widest item, so a table whose three columns cannot all fit
- * would widen the card itself and, through it, the page. Capping the column makes
- * the table the only thing that has to give.
- */
+.button {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4em;
+  min-height: 2.75rem;
+  padding: 0.55rem 1.15rem;
+  font: inherit;
+  font-size: var(--step--1);
+  font-weight: 500;
+  letter-spacing: inherit;
+  color: var(--on-ink);
+  background: var(--ink);
+  border: 1px solid var(--ink);
+  border-radius: var(--radius-pill);
+  cursor: pointer;
+  transition:
+    background-color var(--quick) var(--ease),
+    border-color var(--quick) var(--ease),
+    color var(--quick) var(--ease),
+    transform var(--quick) var(--ease);
+}
+
+.button:hover {
+  transform: translateY(-1px);
+}
+
+.button:active {
+  transform: none;
+}
+
+.button--quiet {
+  color: var(--ink);
+  background: var(--surface);
+  border-color: var(--hairline-strong);
+}
+
+.button--quiet:hover {
+  border-color: var(--ink-faint);
+  background: var(--canvas-tint);
+}
+
+/* ----------------------------------------------------------------- results -- */
+
 .results-card {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: var(--space-4);
+  scroll-margin-block-start: 4.5rem;
 }
 
-/*
- * A real table at every width.
- *
- * `display: block` on a table, a row, or a cell is the usual way to make one
- * "responsive", and it silently removes the table roles that let a screen reader
- * say which column a value is in. So the table stays a table and the layout is
- * done with column widths and wrapping instead. Three columns fit 320px without
- * horizontal scrolling.
- */
 .results {
   width: 100%;
   border-collapse: collapse;
@@ -808,236 +1118,224 @@ a:hover {
 .results__caption {
   caption-side: top;
   text-align: left;
+  padding-block-end: var(--space-5);
   color: var(--ink-muted);
   font-size: var(--step--1);
   max-width: var(--measure);
-  padding-bottom: var(--space-3);
 }
 
-.results th,
-.results td {
-  padding: var(--space-3) var(--space-2);
-  border-top: 1px solid var(--border);
+.results thead th {
+  padding: 0 var(--space-4) var(--space-3) 0;
+  border-block-end: 1px solid var(--hairline-strong);
+  vertical-align: bottom;
+  font-size: var(--step--2);
+  font-weight: 600;
+  letter-spacing: var(--track-wide);
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+
+.results tbody th,
+.results tbody td {
+  padding: var(--space-5) var(--space-4) var(--space-5) 0;
+  border-block-end: 1px solid var(--hairline);
   vertical-align: top;
+  font-weight: 400;
+}
+
+.results tbody tr:last-child > * {
+  border-block-end: 0;
+}
+
+.results thead th:last-child,
+.results tbody tr > *:last-child {
+  padding-inline-end: 0;
+}
+
+/* Proportions only once there is room for them. Below this the browser's own
+   measurement of the content is the better judge, and a fixed 28% name column
+   at phone width is what breaks a name across two lines. */
+@media (min-width: 48rem) {
+  .results thead th:first-child {
+    width: 28%;
+  }
+
+  .results thead th:nth-child(2) {
+    width: 20%;
+  }
+
+  /* A percentage on a column is a preference the auto table layout will still give
+     up to a wordier column beside it. Holding the headings on one line puts a floor
+     under the first two columns, which is what the percentages were asking for. */
+  .results thead th {
+    white-space: nowrap;
+  }
 }
 
 /*
- * The headings wrap. `white-space: nowrap` here reads as a tidier header row, but
- * "Status at the scan time" is then a hard minimum width that the browser takes
- * out of the name column, and names start breaking mid-token: "amber.e / th".
- * A heading over two lines costs one row; an unreadable name costs every row.
+ * Three columns at 320 CSS px.
+ *
+ * A table cannot be narrower than the widest unbreakable thing in each of its
+ * columns added together, so reflow here is won by shortening those, not by
+ * restyling the table: the column gutters tighten, the status wraps to two lines,
+ * and the ticking value drops a step. Turning the rows into blocks would fit too,
+ * and would take the table roles a screen reader navigates by with it.
  */
-.results thead th {
-  border-top: 0;
-  border-bottom: 1px solid var(--border-strong);
-  font-size: var(--step--1);
-  color: var(--ink-muted);
-  padding-top: 0;
-}
+@media (max-width: 47.99rem) {
+  .results thead th,
+  .results tbody th,
+  .results tbody td {
+    padding-inline-end: var(--space-3);
+  }
 
-.results tbody tr:hover {
-  background: var(--surface-raised);
+  .badge {
+    white-space: normal;
+  }
+
+  .countdown__value {
+    font-size: var(--step-0);
+  }
 }
 
 .results__name {
-  font-weight: 400;
-  padding-left: 0;
+  display: table-cell;
+}
+
+.ens-link {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  font-weight: 600;
+  color: var(--ink);
+  text-decoration: none;
+  overflow-wrap: break-word;
+}
+
+.ens-link:hover {
+  color: var(--accent);
+  text-decoration: underline;
+}
+
+/* The name is the page's own subject, so it is set in the text face at reading
+   size rather than in the monospace used for machine timestamps. */
+.results__name .mono {
+  font-family: var(--font-sans);
+  font-size: var(--step-0);
+  letter-spacing: var(--track-snug);
+}
+
+@media (min-width: 48rem) {
+  .results__name .mono {
+    font-size: var(--step-1);
+  }
 }
 
 .results__length {
   display: block;
-  font-size: var(--step--1);
+  margin-block-start: 0.2rem;
   color: var(--ink-faint);
+  font-size: var(--step--1);
   font-variant-numeric: tabular-nums;
   /* "5 characters" is one fact and reads badly split over two lines. */
   white-space: nowrap;
 }
 
 .results__next {
-  padding-right: 0;
+  min-width: 0;
 }
 
-/*
- * `break-word`, not `anywhere`. The two break the same way once a label really is
- * wider than its cell, but they report different minimum widths: `anywhere` says a
- * single character is enough, so the table's automatic layout hands the name column
- * almost nothing and breaks every label mid-token to pay for the columns beside it.
- * `break-word` keeps the whole label as the minimum, so the column is only squeezed
- * when the viewport genuinely cannot afford it.
- */
-.ens-link {
-  font-weight: 650;
-  overflow-wrap: break-word;
+/* Standing alone in the cell rather than under a countdown, the note is the cell's
+   own first line, and the space that separates it from a countdown above would
+   push it out of line with the status beside it. */
+.results__next > .countdown__note:first-child {
+  margin-block-start: 0;
+  max-width: 46ch;
 }
 
-/*
- * The narrowest supported viewport, 320px.
- *
- * WCAG 1.4.10 asks for content to reflow at 320 CSS pixels without scrolling in
- * two directions, and three columns of real content plus the page and card gutters
- * do not fit there at the comfortable spacing. So the gutters give way and the
- * content does not: the page, the card, and the cells all tighten, and the status
- * pill is allowed to wrap.
- *
- * The pill is `white-space: nowrap` everywhere else, because a pill split over two
- * lines looks like a rendering fault. But on one line "Grace ending soon" puts a
- * 130px floor under the middle column, and a page that scrolls sideways is worse
- * than a pill that wraps.
- */
-@media (max-width: 23.999rem) {
-  .page {
-    padding-inline: var(--space-3);
-  }
-
-  .card {
-    padding: var(--space-3);
-  }
-
-  .results th,
-  .results td {
-    padding-inline: var(--space-1);
-  }
-
-  /*
-   * A shorter track than the one above, because at 320px the card is 270px wide
-   * and two 8.5rem tracks plus their gap need 284px. `auto-fit` answers three
-   * pixels of shortfall by dropping to a single column, so all seven counts
-   * stack and the summary becomes seven screens' worth of scrolling. Nothing
-   * about the cards needs the extra width: the labels already wrap here.
-   */
-  .counts {
-    grid-template-columns: repeat(auto-fit, minmax(7.5rem, 1fr));
-  }
-}
-
-/*
- * Below 48rem the status pill is allowed to wrap.
- *
- * The pill is `white-space: nowrap` everywhere else, because a pill split over two
- * lines looks like a rendering fault. But "Grace ending soon" on one line puts a
- * 150px floor under the middle column, and at phone widths that floor is taken out
- * of the two columns either side: the name breaks mid-token or the recorded instant
- * shreds. A wrapped pill is still legible; a shredded date is not.
- */
-@media (max-width: 47.999rem) {
-  .results .badge {
-    white-space: normal;
-  }
-}
-
-@media (min-width: 48rem) {
-  .results__name {
-    width: 34%;
-  }
-
-  .results__status {
-    width: 12rem;
-  }
-}
-
-/*
- * A third of the table is the right share for the name column while the three
- * columns are still close in width. Past 64rem it is not: a third of 1288px is
- * 386px holding a 90px name, so the status pill sits 300px away from the name it
- * describes and the eye has to cross empty space to pair them. A fixed column
- * keeps the three together and leaves the slack at the right-hand edge, which is
- * where a reader already expects a table to run out.
- */
-@media (min-width: 64rem) {
-  .results__name {
-    width: 15rem;
-  }
-}
-
-/* ---- countdown ---- */
+/* --------------------------------------------------------------- countdown -- */
 
 .countdown {
   display: grid;
-  gap: var(--space-1);
-}
-
-/*
- * Each half of the recorded instant is one token. Left to wrap freely the instant
- * breaks after every `-` and every `:`, so a phone-width third column turns
- * "2026-03-04 12:00:00 UTC" into four lines and every row grows to match. Keeping
- * the halves whole also gives the column an honest minimum width, so the table's
- * automatic layout stops handing that width to its neighbours. The break between the
- * two halves stays available, which is what lets three columns reflow at 320px.
- */
-.countdown__at .mono > span {
-  white-space: nowrap;
-}
-
-/*
- * The countdown is one token from 24rem up. Below that it is not: "399d 16:00:00" on
- * one line puts a 140px floor under the third column, and at 320px the two columns
- * beside it cannot pay it. The break falls between the days and the clock, which are
- * two separate readings anyway. Stated as a floor rather than as an override, so it
- * does not depend on which rule appears later in this file.
- */
-@media (min-width: 24rem) {
-  .countdown__value {
-    white-space: nowrap;
-  }
-}
-
-/*
- * The boundary labels come from the lifecycle data as lowercase phrases, so the
- * sentence case is applied here. Capitalising them at the source would put display
- * decisions into the shared vocabulary.
- */
-.countdown__what::first-letter {
-  text-transform: uppercase;
+  gap: 0.15rem;
+  justify-items: start;
 }
 
 .countdown__what {
-  font-size: var(--step--1);
   color: var(--ink-muted);
-}
-
-.countdown__at {
   font-size: var(--step--1);
 }
 
 .countdown__left {
-  font-size: var(--step-1);
-  line-height: 1.25;
+  order: -1;
 }
 
+.countdown__value {
+  font-size: var(--step-1);
+  font-weight: 600;
+  letter-spacing: var(--track-snug);
+  color: var(--ink);
+}
+
+/* Tabular sans, not the monospace face. A ticking value needs digits of a fixed
+   advance so the line does not twitch every second, and `tabular-nums` gives that
+   without setting the page's largest changing number as terminal output. The
+   timestamp under it stays monospace, because that one really is machine text. */
+.countdown__value.mono {
+  font-family: var(--font-sans);
+  letter-spacing: var(--track-tight);
+}
+
+/* A boundary already behind us. The words below say what that does and does not
+   mean; the colour only draws the eye to them. */
 .countdown__value--passed {
+  color: var(--warn);
+}
+
+.countdown__at {
+  margin-block-start: 0.2rem;
   color: var(--ink-faint);
-  text-decoration: line-through;
+  font-size: var(--step--2);
+}
+
+/* `Countdown` splits the instant into two spans so it can break in exactly one
+   place. Each half has to be unbreakable for that to hold, and `12:00:00 UTC`
+   carries a space of its own: left alone it becomes a third line. */
+.countdown__at time > span {
+  white-space: nowrap;
 }
 
 .countdown__note {
-  font-size: var(--step--1);
+  margin-block-start: var(--space-2);
   color: var(--ink-muted);
-  max-width: 44ch;
+  font-size: var(--step--1);
+  max-width: 34ch;
 }
 
-/* ---- pagination ---- */
+/* ------------------------------------------------------------------- pager -- */
 
 .pager {
-  display: grid;
-  gap: var(--space-3);
-  border-top: 1px solid var(--border);
-  padding-top: var(--space-3);
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3) var(--space-5);
+  align-items: center;
+  justify-content: space-between;
+  padding-block-start: var(--space-5);
+  border-block-start: 1px solid var(--hairline);
 }
 
 .pager__range {
-  font-size: var(--step--1);
   color: var(--ink-muted);
+  font-size: var(--step--1);
   font-variant-numeric: tabular-nums;
 }
 
 .pager__list {
   display: flex;
   flex-wrap: wrap;
+  gap: var(--space-1);
   align-items: center;
-  gap: var(--space-2);
-  list-style: none;
-  margin: 0;
   padding: 0;
+  list-style: none;
 }
 
 .pager__page,
@@ -1045,83 +1343,79 @@ a:hover {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 2.75rem;
-  min-height: 2.75rem;
-  padding-inline: var(--space-3);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-1);
-  background: var(--surface);
+  min-width: 2.25rem;
+  min-height: 2.25rem;
+  padding-inline: 0.6rem;
+  border: 1px solid transparent;
+  border-radius: var(--radius-pill);
+  color: var(--ink);
+  font-size: var(--step--1);
+  font-weight: 500;
   font-variant-numeric: tabular-nums;
   text-decoration: none;
+  transition:
+    background-color var(--quick) var(--ease),
+    border-color var(--quick) var(--ease),
+    color var(--quick) var(--ease);
 }
 
 .pager__page:hover,
 .pager__step:hover {
-  border-color: var(--accent);
-}
-
-.pager__page--current {
-  background: var(--accent-quiet);
-  border-color: var(--accent);
+  background: var(--canvas-tint);
+  border-color: var(--hairline-strong);
   color: var(--ink);
-  font-weight: 650;
 }
 
-/* At the first or last page there is nowhere to go, so this is not a link. */
+.pager__page--current,
+.pager__page--current:hover {
+  background: var(--ink);
+  border-color: var(--ink);
+  color: var(--on-ink);
+}
+
+/* Not a link and not a disabled button: there is nowhere to go, so there is
+   nothing here to offer or to focus. */
 .pager__step--off {
   color: var(--ink-faint);
-  border-style: dashed;
+  cursor: default;
 }
 
 .pager__step--off:hover {
-  border-color: var(--border);
+  background: none;
+  border-color: transparent;
+  color: var(--ink-faint);
 }
 
 .pager__gap {
+  padding-inline: 0.35rem;
   color: var(--ink-faint);
-  padding-inline: var(--space-1);
 }
 
-/* ---- states ---- */
+/* ------------------------------------------------------------------ states -- */
 
 .state {
   display: grid;
   gap: var(--space-3);
   justify-items: start;
-  padding: var(--space-6) var(--space-4);
-  text-align: left;
+  padding-block: var(--space-6);
 }
 
 .state__title {
   font-size: var(--step-2);
+  font-weight: 600;
 }
 
 .spinner {
   width: 1.5rem;
   height: 1.5rem;
+  border: 2px solid var(--hairline-strong);
+  border-block-start-color: var(--accent);
   border-radius: 50%;
-  border: 3px solid var(--border-strong);
-  border-top-color: var(--accent);
-  animation: spin 900ms linear infinite;
+  animation: spin 700ms linear infinite;
 }
 
 @keyframes spin {
   to {
-    transform: rotate(360deg);
+    rotate: 360deg;
   }
-}
-
-/* ---- footer ---- */
-
-.footer {
-  border-top: 1px solid var(--border);
-  padding-top: var(--space-4);
-  display: grid;
-  gap: var(--space-3);
-  color: var(--ink-muted);
-  font-size: var(--step--1);
-}
-
-.footer strong {
-  color: var(--ink);
 }

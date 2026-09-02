@@ -30,6 +30,11 @@ import { VIEWS, viewOrDefault } from './state/views'
  * whether the data is overdue, when it was scanned, what it found, how to narrow
  * it, and only then the names. Putting the caveats after the results would make
  * them decoration.
+ *
+ * Every one of those caveats is a banner, and they are collected into one block
+ * above the data rather than scattered through it. The reader meets them once, in a
+ * single place, and can then read the rest without being interrupted - which is
+ * what makes them likely to be read at all.
  */
 export interface AppProps {
   /** Overridden in tests. Defaults to the build-time configuration. */
@@ -89,122 +94,160 @@ export function App({ config = appConfig, deps }: AppProps): ReactNode {
       <a className="skip-link" href="#results">
         Skip to the names
       </a>
+
+      {/*
+       * Outside `.page` on purpose. The bar is full-bleed, so keeping it out of the
+       * centred column means nothing inside that column is ever wider than it, and
+       * it stays the page's only banner landmark.
+       */}
+      <header className="topbar">
+        <div className="topbar__inner">
+          <span className="wordmark">ENS Scout</span>
+          <a
+            className="topbar__link"
+            href="https://app.ens.domains/"
+            rel="noopener noreferrer"
+            target="_blank"
+          >
+            Open the ENS app <span aria-hidden="true">&#8599;</span>
+          </a>
+        </div>
+      </header>
+
       <div className="page">
-        <header className="masthead">
-          <h1 className="masthead__title">ENS Scout</h1>
-          <p className="masthead__lede">
-            A published snapshot of candidate <code>.eth</code> names. Every status below is what
-            the ENS subgraph reported at one recorded instant.
-          </p>
-          <Notice tone="info" title="This page is not the ENS registry">
-            <p>
-              The subgraph is an index, not the registration authority, and nothing here is checked
-              again when you open the page. Confirm availability and price with{' '}
-              <a href="https://app.ens.domains/">the ENS app</a> before registering anything.
+        <main id="main">
+          <div className="hero">
+            <p className="hero__eyebrow">Published snapshot</p>
+            <h1 className="hero__title">Every name, exactly as one scan found it.</h1>
+            <p className="hero__lede">
+              Every status and countdown below is what the ENS subgraph reported at one recorded
+              instant. Nothing is checked again when you open this page.
             </p>
-          </Notice>
-        </header>
+          </div>
 
-        <main className="stack" id="main">
-          {query.now !== null && (
-            <SimulatedClockNotice now={now} realHref={hrefFor({ now: null })} />
-          )}
-
-          {warnings.length > 0 && (
-            <Notice alert tone="warn" title="Part of that link could not be applied">
-              <ul className="notice__list">
-                {warnings.map((warning) => (
-                  <li key={warning}>{warning}</li>
-                ))}
-              </ul>
-            </Notice>
-          )}
-
-          {config.apiBaseUrl === null && (
-            <Notice tone="info" title="Local preview">
+          <div className="advisories">
+            <Notice tone="info" title="This page is not the ENS registry">
               <p>
-                No read API is configured, so this page is showing the committed{' '}
-                <code>{config.fixtureId}</code> fixture: {FIXTURE_DESCRIPTION[config.fixtureId]}
+                The subgraph is an index, not the registration authority, and nothing here is
+                checked again when you open the page. Confirm availability and price with{' '}
+                <a href="https://app.ens.domains/">the ENS app</a> before registering anything.
               </p>
             </Notice>
-          )}
 
-          {store.failure !== null && store.snapshot !== null && (
-            <Notice alert tone="warn" title="Showing a stored copy">
-              <p>
-                The read API could not be reached, so this is the snapshot this browser stored on an
-                earlier visit. It has not been refreshed. Reported reason:{' '}
-                <span className="mono">{store.failure.message}</span>
-              </p>
-              <p>
-                <button className="button" onClick={store.retry} type="button">
-                  Try to refresh
-                </button>
-              </p>
-            </Notice>
-          )}
+            {query.now !== null && (
+              <SimulatedClockNotice now={now} realHref={hrefFor({ now: null })} />
+            )}
 
-          {store.phase === 'loading' && <LoadingState />}
+            {warnings.length > 0 && (
+              <Notice alert tone="warn" title="Part of that link could not be applied">
+                <ul className="notice__list">
+                  {warnings.map((warning) => (
+                    <li key={warning}>{warning}</li>
+                  ))}
+                </ul>
+              </Notice>
+            )}
 
-          {store.phase === 'failed' && store.failure !== null && (
-            <ErrorState failure={store.failure} onRetry={store.retry} />
-          )}
+            {config.apiBaseUrl === null && (
+              <Notice tone="info" title="Local preview">
+                <p>
+                  No read API is configured, so this page is showing the committed{' '}
+                  <code>{config.fixtureId}</code> fixture: {FIXTURE_DESCRIPTION[config.fixtureId]}
+                </p>
+              </Notice>
+            )}
 
-          {snapshot !== null && store.origin !== null && attribution !== null && page !== null && (
-            <>
-              <StaleWarning metadata={snapshot.metadata} now={now} />
-              <SnapshotStatus
-                cachedAt={store.cachedAt}
-                confirmedCurrent={store.confirmedCurrent}
-                now={now}
-                origin={store.origin}
-                snapshot={snapshot}
-              />
-              <SummaryCounts metadata={snapshot.metadata} />
-              <ViewTabs
-                counts={viewCounts}
-                current={view.id}
-                hrefForView={(id) => hrefFor({ view: id })}
-              />
-              <Controls
-                attribution={attribution}
-                query={query}
-                resetHref={resetHref}
-                setQuery={setQuery}
-                sources={snapshot.metadata.sources}
-                statusCounts={statusCounts}
-                total={page.total}
-              />
-              <section aria-labelledby="results-heading" className="card results-card" id="results">
-                <div>
-                  <h2 className="card__title" id="results-heading">
-                    {view.label}
-                  </h2>
-                  <p className="prose">{view.summary}</p>
-                </div>
-                {page.total === 0 ? (
-                  <EmptyState filtered={filtered} resetHref={resetHref} viewLabel={view.label} />
-                ) : (
-                  <>
-                    <ResultsTable
-                      direction={query.direction}
-                      now={now}
-                      rows={page.rows}
-                      sort={query.sort}
-                    />
-                    <Pagination
-                      firstRow={page.firstRow}
-                      hrefForPage={(n) => hrefFor({ page: n })}
-                      lastRow={page.lastRow}
-                      page={page.page}
-                      pageCount={page.pageCount}
-                      total={page.total}
-                    />
-                  </>
-                )}
-              </section>
-            </>
-          )}
+            {store.failure !== null && store.snapshot !== null && (
+              <Notice alert tone="warn" title="Showing a stored copy">
+                <p>
+                  The read API could not be reached, so this is the snapshot this browser stored on
+                  an earlier visit. It has not been refreshed. Reported reason:{' '}
+                  <span className="mono">{store.failure.message}</span>
+                </p>
+                <p>
+                  <button className="button" onClick={store.retry} type="button">
+                    Try to refresh
+                  </button>
+                </p>
+              </Notice>
+            )}
+
+            {snapshot !== null && <StaleWarning metadata={snapshot.metadata} now={now} />}
+          </div>
+
+          <div className="stack">
+            {store.phase === 'loading' && <LoadingState />}
+
+            {store.phase === 'failed' && store.failure !== null && (
+              <ErrorState failure={store.failure} onRetry={store.retry} />
+            )}
+
+            {snapshot !== null &&
+              store.origin !== null &&
+              attribution !== null &&
+              page !== null && (
+                <>
+                  <SnapshotStatus
+                    cachedAt={store.cachedAt}
+                    confirmedCurrent={store.confirmedCurrent}
+                    now={now}
+                    origin={store.origin}
+                    snapshot={snapshot}
+                  />
+                  <SummaryCounts metadata={snapshot.metadata} />
+                  <ViewTabs
+                    counts={viewCounts}
+                    current={view.id}
+                    hrefForView={(id) => hrefFor({ view: id })}
+                  />
+                  <Controls
+                    attribution={attribution}
+                    query={query}
+                    resetHref={resetHref}
+                    setQuery={setQuery}
+                    sources={snapshot.metadata.sources}
+                    statusCounts={statusCounts}
+                    total={page.total}
+                  />
+                  <section
+                    aria-labelledby="results-heading"
+                    className="card results-card"
+                    id="results"
+                  >
+                    <div className="section-head">
+                      <h2 className="card__title" id="results-heading">
+                        {view.label}
+                      </h2>
+                      <p className="prose">{view.summary}</p>
+                    </div>
+                    {page.total === 0 ? (
+                      <EmptyState
+                        filtered={filtered}
+                        resetHref={resetHref}
+                        viewLabel={view.label}
+                      />
+                    ) : (
+                      <>
+                        <ResultsTable
+                          direction={query.direction}
+                          now={now}
+                          rows={page.rows}
+                          sort={query.sort}
+                        />
+                        <Pagination
+                          firstRow={page.firstRow}
+                          hrefForPage={(n) => hrefFor({ page: n })}
+                          lastRow={page.lastRow}
+                          page={page.page}
+                          pageCount={page.pageCount}
+                          total={page.total}
+                        />
+                      </>
+                    )}
+                  </section>
+                </>
+              )}
+          </div>
         </main>
 
         <footer className="footer">
