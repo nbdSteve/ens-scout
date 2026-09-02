@@ -1,37 +1,46 @@
 /*
- * The whole of the page's presentation.
+ * Prism on Paper: the whole of the page's presentation.
  *
- * The structure is editorial rather than dashboard: content sits directly on the
- * canvas, sections are separated by a hairline and a lot of vertical space instead
- * of being boxed in cards, and the type scale does the work a border would
- * otherwise be asked to do. Only three things are given a real surface, and each
- * for a reason: an advisory banner, because a visitor must be able to tell it from
- * the prose it interrupts; a source-list tile, because those are a set of peers to
- * compare; and a form control, because it has to look operable.
+ * The surface is warm paper, and everything on it is printed rather than layered.
+ * One optical system sits behind the type - a glass object, the caustic it casts,
+ * and a beam ribbon joining them - and a `feTurbulence` grain sits above both the
+ * light and the ink, so the projected colour and the letterforms share one sheet
+ * instead of stacking as translucent panes.
  *
- * Colour is deliberately scarce. One accent carries links and the page's own
- * voice, and the lifecycle hues appear only as a small dot beside a word. Status
- * is never colour alone - every dot has its label next to it - so the palette can
- * stay quiet without costing anyone information.
+ * The names are the event. They are set very large in one grotesque, and the only
+ * other things on the first screen are the field that narrows them and one compact
+ * black control object. There is no card and no explanatory copy: a boundary drawn
+ * around a name would make it furniture.
  *
- * Both schemes are first-class and independently checked for contrast, because axe
- * only ever sees the one the browser asked for. Every colour that carries text
- * clears 4.5:1 on the lightest surface it can appear on, which is why the muted and
- * faint inks are darker than the ones a system palette would suggest.
+ * Colour never carries meaning. The three optical hues appear only in the light
+ * behind the page and in the chromatic split a name is given, and every lifecycle
+ * status is a word. So the palette can be as saturated as the optics need without
+ * costing anyone information.
+ *
+ * There is one scheme, not two. Paper is the design, so a dark inversion of it
+ * would be a different page, and `color-scheme: light` says so to the browser
+ * rather than leaving form controls to guess. Contrast is therefore checked once,
+ * against paper, and every colour that carries text clears 4.5:1 on the lightest
+ * surface it can land on.
  */
 
+/* Bundled, not fetched. The weight axis is all the page uses, and a runtime
+   third-party origin would put a font request between the visitor and the names. */
+@import '@fontsource-variable/instrument-sans/wght.css';
+
 :root {
-  color-scheme: light dark;
+  /* One scheme. Paper is the design, not a light variant of something else. */
+  color-scheme: light;
 
   /*
-   * `-apple-system` first, so macOS and iOS render in SF Pro. The rest of the
-   * stack is a per-platform system font rather than a webfont: there is no font to
-   * download, so the first paint is the final one and no text reflows under the
-   * reader.
+   * Instrument Sans Variable, bundled. A grotesque at weight 700 is what lets a
+   * name be 96px and still read as type rather than as a graphic, and the local
+   * fallbacks are grotesques too, so a failed font load changes the texture
+   * without moving the composition.
    */
   --font-sans:
-    -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI Variable Text', 'Segoe UI',
-    ui-sans-serif, system-ui, Roboto, 'Helvetica Neue', Arial, sans-serif;
+    'Instrument Sans Variable', 'Helvetica Neue', Helvetica, Arial, ui-sans-serif, system-ui,
+    sans-serif;
   --font-mono:
     ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;
 
@@ -39,7 +48,8 @@
    * A fixed ramp for the small sizes and a fluid one above body copy. Small text
    * that shrinks with the viewport gets unreadable on a phone long before the
    * layout runs out of room, and a display size that does not grow with the
-   * viewport looks timid on a desktop.
+   * viewport looks timid on a desktop. The name sizes are not on this ramp: they
+   * come from the hash, in `src/constellation/compose.ts`.
    */
   --step--2: 0.75rem;
   --step--1: 0.8125rem;
@@ -54,6 +64,8 @@
   --track-tight: -0.028em;
   --track-snug: -0.014em;
   --track-wide: 0.07em;
+  /* The names and the composer are set much tighter than body copy. */
+  --track-display: -0.05em;
 
   --space-1: 0.25rem;
   --space-2: 0.5rem;
@@ -73,72 +85,100 @@
   --page-max: 68rem;
   --gutter: clamp(1.25rem, 5vw, 3rem);
 
-  --canvas: #ffffff;
-  --canvas-tint: #fafafc;
-  --surface: #ffffff;
+  /* ------------------------------------------------------------------ paper -- */
 
-  --hairline: rgb(0 0 0 / 9%);
-  --hairline-strong: rgb(0 0 0 / 18%);
+  --paper: #f7f3eb;
+  --paper-2: #f2ede3;
+  /* Text drawn on the ink fill, in the control object and the ledger. */
+  --paper-on-ink: #f4f1ea;
 
-  --ink: #1d1d1f;
-  /* 7.1:1 on white and 6.8:1 on the tinted banners, so body copy stays legible
-     wherever it lands. The conventional #6e6e73 clears white and fails a tint. */
-  --ink-muted: #575760;
-  --ink-faint: #6e6e73;
-  /* Text drawn on an `--ink` fill, for the selected view pill. */
-  --on-ink: #ffffff;
-  --on-ink-muted: rgb(255 255 255 / 72%);
+  --canvas: var(--paper);
+  --canvas-tint: var(--paper-2);
+  --surface: var(--paper);
 
-  --accent: #0063cc;
-  --accent-ink: #ffffff;
-  --accent-wash: #eff5ff;
+  --hairline: rgb(11 11 12 / 12%);
+  --hairline-strong: rgb(11 11 12 / 24%);
 
-  --good: #0a7d43;
-  --warn: #b3610a;
-  --warn-wash: #fff7ec;
-  --busy: #2563c9;
-  --muted-tone: #8a8a94;
-  --danger: #c22a2a;
-  --danger-wash: #fff2f2;
+  --ink: #0b0b0c;
+  --ink-soft: #1a1a1c;
+  /* 8.9:1 on paper and 8.5:1 on the tint, so body copy stays legible wherever it
+     lands. Warm greys, because a cool grey on warm paper reads as a stain. */
+  --ink-muted: #45433d;
+  /* 6.5:1 on paper and 6.2:1 on the tint. */
+  --ink-faint: #5a574f;
+  --on-ink: var(--paper-on-ink);
+  --on-ink-muted: rgb(244 241 234 / 72%);
 
-  --shadow-1: 0 1px 2px rgb(15 23 42 / 6%);
-  --shadow-2: 0 12px 32px -8px rgb(15 23 42 / 14%);
+  /*
+   * The three optical hues. These are the light, so they are used at whatever
+   * saturation the optics need and never as text: violet is 4.8:1 on paper and
+   * 4.5:1 on the tint, and cyan is 1.8:1, which is a highlight rather than a
+   * colour anything can be written in.
+   */
+  --violet: #6b4cf6;
+  --indigo: #2b1ea8;
+  --cyan: #25cbe0;
+  /* Decorative warm greys, for the composer placeholder and the like. */
+  --graphite: #b4ada0;
+  --graphite-2: #cfc8ba;
+
+  /* A darkened violet for links and focus rings, at 6.2:1 on paper. The optical
+     violet passes AA by a hair on the tint, which is not a margin to spend on
+     every link in the page. */
+  --accent: #5c3bd6;
+  --accent-ink: var(--paper-on-ink);
+  --accent-wash: #eeeafb;
+
+  --good: #0a6b3a;
+  --warn: #8c5a00;
+  --warn-wash: #fbf0dc;
+  --busy: var(--indigo);
+  --muted-tone: var(--ink-faint);
+  --danger: #a03030;
+  --danger-wash: #fbe9e4;
+
+  --shadow-1: 0 1px 2px rgb(11 11 12 / 8%);
+  --shadow-2: 0 18px 42px -22px rgb(11 11 12 / 55%);
 
   /* One duration and one curve for every hover and state change, so the page
      feels like a single object rather than a collection of widgets. */
   --ease: cubic-bezier(0.22, 1, 0.36, 1);
   --quick: 180ms;
+
+  /* Height of the one black control object. */
+  --bar-h: 46px;
+
+  /* ----------------------------------------------------------------- optics -- */
+
+  /*
+   * The entire coupling between the layout and the light: the glass centre, where
+   * its caustic lands, the beam angle joining them, the glass rotation, and the
+   * refraction spread. `src/optics/ambient.ts` rewrites all seven every frame as a
+   * function of elapsed time and nothing else - there is no pointer, hover, focus,
+   * selection, or composer input to any of them.
+   *
+   * `--ba` is never authored by hand. The values here are the rest composition,
+   * and the loop derives the angle from the two points so the ribbon passes
+   * through both by construction rather than by agreement.
+   */
+  --lx: 1272px;
+  --ly: 178px;
+  --cx: 1090px;
+  --cy: 268px;
+  --ba: 153.69deg;
+  --cf: 212deg;
+  --sep: 1;
+  --beam-h: 300px;
 }
 
-@media (prefers-color-scheme: dark) {
+@media (max-width: 560px) {
   :root {
-    --canvas: #000000;
-    --canvas-tint: #0b0b0d;
-    --surface: #101012;
-
-    --hairline: rgb(255 255 255 / 13%);
-    --hairline-strong: rgb(255 255 255 / 26%);
-
-    --ink: #f5f5f7;
-    --ink-muted: #b9b9c0;
-    --ink-faint: #97979f;
-    --on-ink: #000000;
-    --on-ink-muted: rgb(0 0 0 / 62%);
-
-    --accent: #4da3ff;
-    --accent-ink: #04121f;
-    --accent-wash: rgb(77 163 255 / 13%);
-
-    --good: #3ddc84;
-    --warn: #ffb02e;
-    --warn-wash: rgb(255 176 46 / 11%);
-    --busy: #6ea8ff;
-    --muted-tone: #8e8e96;
-    --danger: #ff6b6b;
-    --danger-wash: rgb(255 107 107 / 12%);
-
-    --shadow-1: 0 1px 2px rgb(0 0 0 / 60%);
-    --shadow-2: 0 12px 32px -8px rgb(0 0 0 / 70%);
+    --lx: 326px;
+    --ly: 150px;
+    --cx: 254px;
+    --cy: 206px;
+    --ba: 142.13deg;
+    --beam-h: 190px;
   }
 }
 
@@ -175,6 +215,30 @@ body {
   letter-spacing: var(--track-snug);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+/*
+ * Paper tooth.
+ *
+ * Above the optics *and* above the type, which is the whole point of it: the
+ * projected light and the ink are printed through one grain, so they read as one
+ * sheet rather than as coloured panes stacked over text. `z-index: 2` puts it over
+ * both, and `multiply` is what makes it a texture in the surface instead of a haze
+ * on top of it.
+ *
+ * Generated rather than fetched. An inline `feTurbulence` is a few hundred bytes
+ * and needs no request, and at 20% through multiply it is a tooth rather than
+ * noise: the type below it loses no measurable contrast.
+ */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='120' height='120'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/></filter><rect width='120' height='120' filter='url(%23n)' opacity='0.30'/></svg>");
+  opacity: 0.2;
+  mix-blend-mode: multiply;
 }
 
 h1,
@@ -235,6 +299,358 @@ strong {
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
+  }
+}
+
+/* ------------------------------------------------------------------- optics -- */
+
+/*
+ * Four fixed siblings, each blending straight against the paper.
+ *
+ * They must not be wrapped in a positioned or isolated container. A stacking group
+ * makes `mix-blend-mode` composite against the wrapper's backdrop instead of the
+ * paper, and the whole system goes flat with no error anywhere. `#root` is part of
+ * that contract, which is why a browser test asserts it stays a plain static box.
+ *
+ * Nothing here floats independently: the beam is anchored at the glass, its angle
+ * is derived from the glass and the caustic, and both highlights ride the same two
+ * points. That is what makes it one object rather than three coloured blurs.
+ *
+ * None of the four carries a transition. The ambient loop rewrites the variables
+ * every frame, so a transition would only make each layer lag by its own amount -
+ * and `--ba` has no transition to lag by, so the ribbon would visibly come away
+ * from the glass it is supposed to be anchored to.
+ */
+
+#root {
+  /* Named for the reason rather than the effect. A transform, a filter, an opacity
+     below 1, `isolation`, `contain`, or a `z-index` on a positioned box would each
+     create a stacking context here and flatten every blend above. */
+  position: static;
+  isolation: auto;
+}
+
+/* The broad translucent ribbon the glass throws across the sheet. Anchored at the
+   glass with 14% of its length behind it, so it enters from off-canvas, passes
+   through the glass, and rakes down across the paper. */
+#beam {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 0;
+  width: 240vmax;
+  height: var(--beam-h);
+  pointer-events: none;
+  mask-image: linear-gradient(
+    90deg,
+    rgb(0 0 0 / 0%) 0%,
+    #000 11%,
+    #000 58%,
+    rgb(0 0 0 / 25%) 84%,
+    rgb(0 0 0 / 0%) 97%
+  );
+  mix-blend-mode: multiply;
+  transform: translate(var(--lx), var(--ly)) rotate(var(--ba)) translate(-14%, -50%);
+  transform-origin: 0 0;
+  will-change: transform;
+}
+
+/* Thin-film separation: colour concentrates at the two edges of the ribbon and the
+   middle stays almost clear, which is what dispersion actually looks like. */
+#beam .ribbon {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    to bottom,
+    rgb(37 203 224 / 0%) 0%,
+    rgb(37 203 224 / 17%) 5%,
+    rgb(90 196 236 / 11%) 10%,
+    rgb(130 120 250 / 5%) 20%,
+    rgb(255 247 232 / 2%) 46%,
+    rgb(255 247 232 / 2%) 56%,
+    rgb(130 120 250 / 5%) 76%,
+    rgb(43 30 168 / 11%) 88%,
+    rgb(107 76 246 / 18%) 94%,
+    rgb(107 76 246 / 0%) 100%
+  );
+  opacity: var(--sep);
+  filter: blur(12px);
+}
+
+/* Very faint striations along the beam, 4deg off its own axis so they read as
+   diffraction inside the light and never as an alignment grid. */
+#beam .striae {
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(
+    4deg,
+    rgb(43 30 168 / 5.5%) 0 1px,
+    rgb(43 30 168 / 0%) 1px 23px
+  );
+  opacity: 0.75;
+  filter: blur(0.7px);
+}
+
+/* Where the beam converges on the paper. */
+#caustic {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 0;
+  width: 470px;
+  height: 470px;
+  margin-top: -235px;
+  margin-left: -235px;
+  pointer-events: none;
+  mix-blend-mode: multiply;
+  transform: translate3d(var(--cx), var(--cy), 0);
+  will-change: transform;
+}
+
+#caustic .knot {
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(44% 42% at 42% 38%, rgb(107 76 246 / 50%) 0%, rgb(107 76 246 / 0%) 70%),
+    radial-gradient(38% 44% at 62% 50%, rgb(43 30 168 / 40%) 0%, rgb(43 30 168 / 0%) 72%),
+    radial-gradient(50% 38% at 50% 70%, rgb(37 203 224 / 42%) 0%, rgb(37 203 224 / 0%) 74%),
+    radial-gradient(30% 28% at 30% 66%, rgb(255 214 170 / 34%) 0%, rgb(255 214 170 / 0%) 72%);
+  opacity: 0.9;
+  filter: blur(24px);
+}
+
+/* Interference contours, drawn only inside the refracted light and masked away
+   before they reach clean paper. That mask is the whole reason the rings do not
+   become a background texture. Concentric, so there is depth but no grid. */
+#caustic .rings {
+  position: absolute;
+  inset: 0;
+  background: repeating-radial-gradient(
+    circle at 43% 39%,
+    rgb(43 30 168 / 16%) 0 1px,
+    rgb(43 30 168 / 0%) 1px 14px
+  );
+  /* Tied to the same spread as the ribbon, so the refraction reads as one
+     substance getting thicker and thinner rather than two layers fading apart. */
+  opacity: calc(0.62 * var(--sep));
+  mask-image: radial-gradient(
+    circle at 43% 39%,
+    #000 0%,
+    rgb(0 0 0 / 62%) 38%,
+    rgb(0 0 0 / 0%) 68%
+  );
+  filter: blur(0.6px);
+}
+
+/* The glass object itself. */
+#lens {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 0;
+  width: 340px;
+  height: 340px;
+  margin-top: -170px;
+  margin-left: -170px;
+  pointer-events: none;
+  mix-blend-mode: multiply;
+  transform: translate3d(var(--lx), var(--ly), 0);
+  will-change: transform;
+}
+
+#lens .layer {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+}
+
+/* The wide chromatic cast: the light this glass throws onto the paper. */
+#lens .cast {
+  inset: -28px;
+  background:
+    radial-gradient(46% 44% at 34% 30%, rgb(107 76 246 / 56%) 0%, rgb(107 76 246 / 0%) 68%),
+    radial-gradient(40% 46% at 70% 42%, rgb(43 30 168 / 46%) 0%, rgb(43 30 168 / 0%) 70%),
+    radial-gradient(52% 40% at 56% 76%, rgb(37 203 224 / 48%) 0%, rgb(37 203 224 / 0%) 72%),
+    radial-gradient(34% 30% at 24% 72%, rgb(255 214 170 / 40%) 0%, rgb(255 214 170 / 0%) 70%);
+  opacity: 0.8;
+  filter: blur(22px);
+}
+
+/* The body. `--cf` is the `from` angle, which is why the glass appears to turn
+   rather than to change colour. */
+#lens .body {
+  inset: 54px;
+  background: conic-gradient(
+    from var(--cf) at 52% 46%,
+    rgb(107 76 246 / 78%) 0deg,
+    rgb(43 30 168 / 70%) 74deg,
+    rgb(37 203 224 / 64%) 158deg,
+    rgb(160 140 255 / 42%) 236deg,
+    rgb(255 222 186 / 40%) 300deg,
+    rgb(107 76 246 / 78%) 360deg
+  );
+  opacity: 0.78;
+  filter: blur(9px) saturate(134%);
+}
+
+/* The rim. Without a crisp edge somewhere the glass reads as a smudge rather than
+   as an object the beam is passing through. */
+#lens .rim {
+  inset: 50px;
+  background: radial-gradient(
+    circle at 50% 50%,
+    rgb(107 76 246 / 0%) 56%,
+    rgb(107 76 246 / 46%) 70%,
+    rgb(43 30 168 / 30%) 79%,
+    rgb(37 203 224 / 16%) 87%,
+    rgb(37 203 224 / 0%) 96%
+  );
+  opacity: 0.9;
+  filter: blur(2.4px);
+}
+
+/* The only two places light gets brighter than the paper: the glass highlight and
+   the caustic's hot centre. They ride the same two ambient points, and both stay
+   in the empty top-right corner, so only the ribbon's faint mid-body ever crosses
+   the type. This is the one layer blended with `screen`. */
+#spec {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 0;
+  width: 340px;
+  height: 340px;
+  margin-top: -170px;
+  margin-left: -170px;
+  pointer-events: none;
+  mix-blend-mode: screen;
+}
+
+#spec .glass {
+  position: absolute;
+  inset: 141px;
+  background: radial-gradient(
+    circle at 42% 36%,
+    rgb(255 255 255 / 92%) 0%,
+    rgb(255 255 255 / 22%) 40%,
+    rgb(255 255 255 / 0%) 62%
+  );
+  filter: blur(5px);
+  transform: translate3d(var(--lx), var(--ly), 0);
+}
+
+#spec .hot {
+  position: absolute;
+  inset: 152px;
+  background: radial-gradient(
+    circle at 43% 39%,
+    rgb(255 252 244 / 70%) 0%,
+    rgb(255 250 238 / 14%) 40%,
+    rgb(255 255 255 / 0%) 62%
+  );
+  filter: blur(8px);
+  transform: translate3d(var(--cx), var(--cy), 0);
+}
+
+/* The system scales with the sheet. Blurs come down with the sizes, because a 22px
+   blur on a 238px object is a wash rather than a cast, and the two repeat pitches
+   come down so the striae and the rings keep their spacing relative to the light
+   they live inside. */
+@media (max-width: 560px) {
+  #lens,
+  #spec {
+    width: 238px;
+    height: 238px;
+    margin-top: -119px;
+    margin-left: -119px;
+  }
+
+  #lens .cast {
+    inset: -19px;
+    filter: blur(15px);
+  }
+
+  #lens .body {
+    inset: 38px;
+    filter: blur(6px) saturate(134%);
+  }
+
+  #lens .rim {
+    inset: 35px;
+    filter: blur(1.7px);
+  }
+
+  #spec .glass {
+    inset: 99px;
+    filter: blur(4px);
+  }
+
+  #spec .hot {
+    inset: 106px;
+    filter: blur(6px);
+  }
+
+  #caustic {
+    width: 300px;
+    height: 300px;
+    margin-top: -150px;
+    margin-left: -150px;
+  }
+
+  #caustic .knot {
+    filter: blur(17px);
+  }
+
+  #caustic .rings {
+    background: repeating-radial-gradient(
+      circle at 43% 39%,
+      rgb(43 30 168 / 16%) 0 1px,
+      rgb(43 30 168 / 0%) 1px 11px
+    );
+  }
+
+  #beam .ribbon {
+    filter: blur(9px);
+  }
+
+  #beam .striae {
+    background: repeating-linear-gradient(
+      4deg,
+      rgb(43 30 168 / 5.5%) 0 1px,
+      rgb(43 30 168 / 0%) 1px 16px
+    );
+  }
+}
+
+/*
+ * Reduced motion freezes the optics in a deliberate composition: glass upper right,
+ * beam raked down across the sheet, hot centre held clear of the type.
+ *
+ * Frozen twice over. These pins beat the inline values the ambient frame writes, so
+ * the page is static before any script runs and stays static if script runs anyway,
+ * and `src/optics/ambient.ts` refuses to schedule a frame at all. Every one of the
+ * seven is pinned, not only the two positions: a half-turned glass or a part-open
+ * refraction would read as an animation someone had stalled.
+ */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --lx: 1272px !important;
+    --ly: 178px !important;
+    --cx: 1090px !important;
+    --cy: 268px !important;
+    --ba: 153.69deg !important;
+    --cf: 212deg !important;
+    --sep: 1 !important;
+  }
+
+  @media (max-width: 560px) {
+    :root {
+      --lx: 326px !important;
+      --ly: 150px !important;
+      --cx: 254px !important;
+      --cy: 206px !important;
+      --ba: 142.13deg !important;
+    }
   }
 }
 
@@ -1155,22 +1571,17 @@ strong {
 
 /*
  * The chevron is a background image rather than a pseudo-element, because a
- * `<select>` does not reliably render one. It cannot read `currentColor`, so each
- * scheme names its own.
+ * `<select>` does not reliably render one. It cannot read `currentColor`, so the
+ * stroke is a literal copy of `--ink-muted`: 8.9:1 on paper. With one scheme there
+ * is only ever one such copy to keep in step.
  */
 .select {
   padding-inline-end: 2.25rem;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8'%3E%3Cpath d='M1 1.75 6 6.5l5-4.75' fill='none' stroke='%23575760' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8'%3E%3Cpath d='M1 1.75 6 6.5l5-4.75' fill='none' stroke='%2345433d' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
   background-repeat: no-repeat;
   background-position: right 0.8rem center;
   background-size: 0.7rem;
   cursor: pointer;
-}
-
-@media (prefers-color-scheme: dark) {
-  .select {
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8'%3E%3Cpath d='M1 1.75 6 6.5l5-4.75' fill='none' stroke='%23b9b9c0' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
-  }
 }
 
 .range {
@@ -1291,15 +1702,12 @@ strong {
 }
 
 /*
- * The tick, and why each scheme draws its own.
+ * The tick, and why its colour is argued rather than measured.
  *
  * A `<select>`'s chevron and this tick are both background images, so neither can
- * read `currentColor` and neither is visible to an automated contrast check - axe
- * sees a filled box. The colour has to be reasoned about instead. A white tick over
- * the light accent (#0063cc) is about 7.0:1, but over the dark scheme's lighter
- * accent (#4da3ff) it is about 2.6:1, under the 3:1 a non-text graphic needs. So the
- * dark scheme draws the tick in its own `--accent-ink` instead, which is the colour
- * chosen to sit on that accent.
+ * read `currentColour` and neither is visible to an automated contrast check - axe
+ * sees a filled box. The colour has to be reasoned about instead. White over the
+ * accent (#5c3bd6) is 6.9:1, comfortably past the 3:1 a non-text graphic needs.
  */
 .checkbox input:checked {
   border-color: var(--accent);
@@ -1308,12 +1716,6 @@ strong {
   background-repeat: no-repeat;
   background-position: center;
   background-size: 0.68rem;
-}
-
-@media (prefers-color-scheme: dark) {
-  .checkbox input:checked {
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 10'%3E%3Cpath d='M1 5.2 4.3 8.5 11 1.5' fill='none' stroke='%2304121f' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
-  }
 }
 
 .checkbox__count {
@@ -1470,10 +1872,9 @@ strong {
  * The chevron again, for the stage.
  *
  * The token overrides above cannot reach a colour spelled inside a data URI, so a
- * `<select>` inside the stage would keep the light scheme's dark grey chevron and
- * draw it on a near-black control. The dark scheme's own override is scoped to
- * `prefers-color-scheme`, which is the wrong condition here - the stage is dark in
- * both - so it is restated on the class.
+ * `<select>` inside the stage would keep the page's dark grey chevron and draw it on
+ * a near-black control. The condition is the class, not the visitor's scheme
+ * preference: the stage is dark whatever the paper around it is doing.
  */
 .stage .select {
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8'%3E%3Cpath d='M1 1.75 6 6.5l5-4.75' fill='none' stroke='%239fb0cf' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
