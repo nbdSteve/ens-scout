@@ -456,6 +456,11 @@ contract; these are the rules behind it.
 `infra/README.md` documents the commands, the context keys, and the trade-offs; this
 section holds only the rules that a change here could quietly break.
 
+- `infra/go.mod` exists so the Go tool prunes the directory from `./...`. `npm ci`
+  installs Go project templates inside `node_modules` whose file names the Go tool
+  rejects, which breaks `go build ./...`, `go vet ./...`, and `go test ./...` from the
+  repository root for anyone who has installed the infra dependencies. Do not delete
+  it; nothing imports or builds that module.
 - Nothing under `infra/` performs a real AWS operation, in a test or otherwise, and
   the target account and region come from CDK context rather than from ambient
   credentials. A synth that resolved the environment from whichever profile is
