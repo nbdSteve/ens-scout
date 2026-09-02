@@ -266,13 +266,27 @@ implement the snapshot contract above rather than restating it.
   above says why, and `Result.Previous` therefore names what the run superseded and
   not what it merged forward from.
   The TTL is written immediately after the pointer write and before the budgeted
-  reclaim pass, because it is the only thing that can ever bound the replaced set and
-  no later run can repeat it: that snapshot's own publisher unstaged it on success, so
-  the reclaim pass, which iterates nothing but staging markers, will never see it.
+  reclaim pass, because only this run knows what its own write replaced and no later run
+  can repeat the decision: that snapshot's own publisher unstaged it on success, so the
+  reclaim pass, which iterates nothing but staging markers, will never see it.
   Everything the reclaim pass does is driven off a durable marker and is retried on the
   next schedule, so the retryable work must not be able to spend a throttled table's
   capacity or the invocation's remaining deadline ahead of the work that gets one
   attempt.
+  That one attempt is a bounded retry rather than a single call, because a throttled
+  item write is exactly the transient failure that would otherwise leak a whole
+  snapshot, and `ExpireChunks` sets one attribute to one value on every chunk, so a
+  retry is idempotent and also finishes an expiry that stopped part way through. A
+  cancelled or expired context stops the retries at once and is never read as a settled
+  expiry.
+  When the expiry still does not land, the run puts the replaced snapshot back in the
+  staging registry. Without that the recovery the reclaim rule describes would not
+  exist on the ordinary path at all: a cleanly published snapshot has no marker, so
+  nothing would name those chunks, nothing would bound them, and nothing in the store
+  scans chunk partitions. Re-staging cannot aim retention at the live snapshot, because
+  the caller has already established the replaced snapshot is not the one it published
+  and `ExpireChunks` refuses the live ID however a reclaim reaches it. A failed
+  re-stage is logged and never returned, like every other retention failure here.
 - Abandoned chunk sets are reclaimed, which is what makes the TTL actually bound
   table growth rather than only bounding it for snapshots that were published. The
   rules are what keep a pass from destroying live data: it removes the marker and
@@ -281,11 +295,12 @@ implement the snapshot contract above rather than restating it.
   snapshot's retention settled - the expiry landed, or its chunks were already gone -
   because only then do those chunks carry the retention the rule above aimed at them
   and a reclaim would overwrite it with the far cruder abandoned window; when the expiry
-  failed the exclusion is not applied at all, because the marker is then the last thing
-  in the store that can find that chunk set and dropping it would leave the set with no
-  TTL, no pointer, and no record, so the set is reclaimed on a later schedule under the
-  abandoned window and reported as abandoned, which is accurate because the retention it
-  was owed is genuinely unknown; it otherwise
+  failed the exclusion is not applied at all, because the run has then re-staged that
+  snapshot and its marker is the last thing in the store that can find the chunk set, so
+  dropping it would leave the set with no TTL, no pointer, and no record, and instead the
+  set is reclaimed on a later schedule under the abandoned window and reported as
+  abandoned, which is accurate because the retention it was owed is genuinely unknown; it
+  otherwise
   skips its own run's snapshot ID, because a set the run publishes must not carry an
   expiry that would outlive the pointer naming it; it defers the whole pass when the
   pointer cannot be read, because then nothing proves which snapshot is live; and it
@@ -296,8 +311,14 @@ implement the snapshot contract above rather than restating it.
   the snapshot it just published, and a later run would then see a marker that is
   neither live nor its own and report a snapshot it is serving as abandoned. Excluding
   the replaced snapshot closes the one-run-later form of the same false report: an
-  abandoned set is one an earlier publication wrote and never published, so a snapshot
-  that was published and has since been superseded must never be reported as one. Every
+  abandoned set is one an earlier publication wrote and never published. What the code
+  guarantees is exactly those two exclusions, the live snapshot and the snapshot this
+  run's own pointer write replaced, and no more. A snapshot an earlier run published and
+  superseded, whose marker survived removal across two runs, is neither, so it can still
+  be reported as abandoned and have its retention shortened from its own stale-after
+  window to the abandoned one. That is an acknowledged residual, not a rule to close by
+  adding state: nothing in the store records that a staged snapshot was ever published,
+  so no pass can tell one from a set that was written and never published. Every
   failure here is logged, never returned: this is cleanup after an earlier
   invocation, so failing on it would turn one bad run into a stuck schedule.
 - The three ways a reclaim pass stops short are three distinct log events, because an

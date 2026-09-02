@@ -122,6 +122,10 @@ type fakeStore struct {
 	// is how a publisher ends up holding the marker of the snapshot it just published.
 	unstageFailures int
 
+	// expireFailures fails that many retention writes before the first success, which
+	// models a throttled item write rather than a permanently refusing table.
+	expireFailures int
+
 	// stagedSkipped makes StagedSnapshots report markers it could not interpret
 	// alongside the ones it could, which is what a real registry does with a corrupt
 	// or unknown-version item.
@@ -233,6 +237,15 @@ func (s *fakeStore) ExpireChunks(ctx context.Context, snapshotID string, expires
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	s.mu.Lock()
+	transient := s.expireFailures > 0
+	if transient {
+		s.expireFailures--
+	}
+	s.mu.Unlock()
+	if transient {
+		return errInjected
+	}
 	if s.expireErr != nil {
 		return s.expireErr
 	}
@@ -288,6 +301,7 @@ type logRecord struct {
 	Event      string `json:"event"`
 	SnapshotID string `json:"snapshot_id"`
 	PreviousID string `json:"previous_snapshot_id"`
+	Attempt    int    `json:"attempt"`
 	Staged     int    `json:"staged"`
 	Attempted  int    `json:"attempted"`
 	Reclaimed  int    `json:"reclaimed"`
@@ -1390,6 +1404,185 @@ func TestReclaimNeverReportsTheSnapshotItSupersededAsAbandoned(t *testing.T) {
 	}
 }
 
+// TestSupersededTTLSurvivesAThrottledWrite covers the failure the retention path is
+// most likely to meet: one throttled item write. A single-shot expiry would give up
+// there, and because a cleanly published snapshot has no staging marker, nothing in the
+// store could name those chunks again.
+func TestSupersededTTLSurvivesAThrottledWrite(t *testing.T) {
+	store := newFakeStore()
+	dir := defaultLists(t)
+
+	first := newTestRun(t, dir, newFakeGraph(nil), store)
+	previous, err := Run(context.Background(), first.deps, Event{Group: GroupShort})
+	if err != nil {
+		t.Fatalf("first Run: %v", err)
+	}
+	// The first run published cleanly, so nothing but this run's own expiry can bound
+	// the set it is about to replace.
+	if isStaged(t, store, previous.Latest.SnapshotID) {
+		t.Fatalf("the cleanly published snapshot kept a marker, which is not the path under test")
+	}
+
+	store.expireFailures = maxExpireAttempts - 1
+	second := newTestRun(t, dir, newFakeGraph(nil), store).at(fixedNow.Add(3 * time.Hour))
+	current, err := Run(context.Background(), second.deps, Event{Group: GroupShort})
+	if err != nil {
+		t.Fatalf("second Run: %v", err)
+	}
+
+	expiry, found := store.expiry(previous.Latest.SnapshotID)
+	if !found {
+		t.Fatalf("a transient retention failure left the superseded snapshot with no TTL: %s", second.logs.String())
+	}
+	window := time.Duration(previous.Latest.ScanAge.StaleAfterSeconds) * time.Second
+	if want := current.Latest.PublishedAt.Add(window); !expiry.Equal(want) {
+		t.Errorf("TTL %s, want the superseded snapshot's own stale-after window, %s", expiry, want)
+	}
+	if got := store.expireAttempts(previous.Latest.SnapshotID); got != maxExpireAttempts {
+		t.Errorf("the run made %d expiry calls, want the %d it needed", got, maxExpireAttempts)
+	}
+	if record := requireRecordAt(t, second, "superseded_chunks_expired", LevelInfo); record.Attempt != maxExpireAttempts {
+		t.Errorf("the retention record reports attempt %d, want %d", record.Attempt, maxExpireAttempts)
+	}
+	// A settled expiry needs no marker, so the registry must not be left holding one.
+	if isStaged(t, store, previous.Latest.SnapshotID) {
+		t.Errorf("a snapshot whose TTL landed was left staged: %v", stagedIDs(t, store))
+	}
+	if hasRecord(t, second, "superseded_chunks_expire_failed") {
+		t.Errorf("a retention write that succeeded was reported as failed: %s", second.logs.String())
+	}
+	if _, found := store.expiry(current.Latest.SnapshotID); found {
+		t.Errorf("the published snapshot was given a TTL")
+	}
+	if _, latest, err := snapshot.Read(context.Background(), store); err != nil || latest.SnapshotID != current.Latest.SnapshotID {
+		t.Errorf("readers do not see %q: %v", current.Latest.SnapshotID, err)
+	}
+}
+
+// TestSupersededSetIsRestagedWhenItsTTLNeverLands is the ordinary-path leak. A cleanly
+// published snapshot has no staging marker, so once the bounded retries are exhausted
+// the only way the chunk set stays findable is for the run to put it back in the
+// registry itself. A later pass then bounds it under the abandoned window, which is
+// cruder than the window it was owed and better than unreachable.
+func TestSupersededSetIsRestagedWhenItsTTLNeverLands(t *testing.T) {
+	store := newFakeStore()
+	dir := defaultLists(t)
+
+	first := newTestRun(t, dir, newFakeGraph(nil), store)
+	previous, err := Run(context.Background(), first.deps, Event{Group: GroupShort})
+	if err != nil {
+		t.Fatalf("first Run: %v", err)
+	}
+	if isStaged(t, store, previous.Latest.SnapshotID) {
+		t.Fatalf("the cleanly published snapshot kept a marker, which is not the path under test")
+	}
+
+	store.expireErr = errInjected
+	supersededAt := fixedNow.Add(3 * time.Hour)
+	second := newTestRun(t, dir, newFakeGraph(nil), store).at(supersededAt)
+	current, err := Run(context.Background(), second.deps, Event{Group: GroupShort})
+	if err != nil {
+		t.Fatalf("a retention failure failed the whole run: %v", err)
+	}
+	if current.Previous != previous.Latest.SnapshotID {
+		t.Fatalf("the run reports superseding %q, want the pointer it replaced, %q",
+			current.Previous, previous.Latest.SnapshotID)
+	}
+
+	if _, found := store.expiry(previous.Latest.SnapshotID); found {
+		t.Fatalf("the refused expiry was recorded anyway, so this proves nothing")
+	}
+	if got := store.expireAttempts(previous.Latest.SnapshotID); got != maxExpireAttempts {
+		t.Errorf("the run made %d expiry calls, want its cap of %d", got, maxExpireAttempts)
+	}
+	if record := requireRecordAt(t, second, "superseded_chunks_expire_failed", LevelWarn); record.Attempt != maxExpireAttempts {
+		t.Errorf("the failure record reports attempt %d, want %d", record.Attempt, maxExpireAttempts)
+	}
+	// The registry is the only thing left that can find the set, so the run has to put
+	// it there rather than assume a marker already exists.
+	requireRecordAt(t, second, "superseded_chunks_restaged", LevelInfo)
+	if !isStaged(t, store, previous.Latest.SnapshotID) {
+		t.Fatalf("the unbounded set is not discoverable through StagedSnapshots: %s", second.logs.String())
+	}
+	if !containsString(store.SnapshotIDs(), previous.Latest.SnapshotID) {
+		t.Errorf("the superseded snapshot's chunks are already gone")
+	}
+	// A marker just written is inside its grace period, so this run's own pass leaves it.
+	if hasRecord(t, second, "abandoned_chunks_expired") {
+		t.Errorf("the run reclaimed a set it had only just re-staged: %s", second.logs.String())
+	}
+	if _, latest, err := snapshot.Read(context.Background(), store); err != nil || latest.SnapshotID != current.Latest.SnapshotID {
+		t.Errorf("readers do not see %q: %v", current.Latest.SnapshotID, err)
+	}
+
+	// Once the grace period passes, the re-staged marker is what bounds the set.
+	store.expireErr = nil
+	reclaimAt := supersededAt.Add(abandonedAfter + time.Minute)
+	third := newTestRun(t, dir, newFakeGraph(nil), store).at(reclaimAt)
+	if _, err := Run(context.Background(), third.deps, Event{Group: GroupShort}); err != nil {
+		t.Fatalf("third Run: %v", err)
+	}
+	expiry, found := store.expiry(previous.Latest.SnapshotID)
+	if !found {
+		t.Fatalf("the re-staged set was never bounded: %s", third.logs.String())
+	}
+	if want := reclaimAt.Add(abandonedRetention); !expiry.Equal(want) {
+		t.Errorf("TTL %s, want the abandoned window %s", expiry, want)
+	}
+	if record := requireRecordAt(t, third, "abandoned_chunks_expired", LevelWarn); record.SnapshotID != previous.Latest.SnapshotID {
+		t.Errorf("the reclaim record names %q, want %q", record.SnapshotID, previous.Latest.SnapshotID)
+	}
+	if isStaged(t, store, previous.Latest.SnapshotID) {
+		t.Errorf("the marker of a bounded set was kept: %v", stagedIDs(t, store))
+	}
+}
+
+// TestSupersededTTLRetriesStopOnACancelledContext keeps a dead deadline from being spent
+// on retries that cannot succeed, and from being mistaken for a settled expiry. The set
+// is then genuinely unreachable - the re-stage needs the same dead context - so the run
+// has to say so rather than record a retention it does not have.
+func TestSupersededTTLRetriesStopOnACancelledContext(t *testing.T) {
+	store := newFakeStore()
+	dir := defaultLists(t)
+
+	first := newTestRun(t, dir, newFakeGraph(nil), store)
+	previous, err := Run(context.Background(), first.deps, Event{Group: GroupShort})
+	if err != nil {
+		t.Fatalf("first Run: %v", err)
+	}
+
+	second := newTestRun(t, dir, newFakeGraph(nil), store).at(fixedNow.Add(3 * time.Hour))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	store.onExpire = func(snapshotID string) {
+		if snapshotID == previous.Latest.SnapshotID {
+			cancel()
+		}
+	}
+
+	current, err := Run(ctx, second.deps, Event{Group: GroupShort})
+	if err != nil {
+		t.Fatalf("second Run: %v", err)
+	}
+
+	if got := store.expireAttempts(previous.Latest.SnapshotID); got != 1 {
+		t.Errorf("the run made %d expiry calls against a dead context, want 1", got)
+	}
+	if _, found := store.expiry(previous.Latest.SnapshotID); found {
+		t.Errorf("a cancelled expiry was recorded as applied")
+	}
+	if hasRecord(t, second, "superseded_chunks_expired") || hasRecord(t, second, "superseded_chunks_absent") {
+		t.Errorf("a cancelled expiry was reported as settled: %s", second.logs.String())
+	}
+	requireRecordAt(t, second, "superseded_chunks_expire_failed", LevelWarn)
+	// The re-stage runs on the same dead context, so it cannot record the set either.
+	// That must be reported, not silently treated as retention in place.
+	requireRecordAt(t, second, "superseded_chunks_untracked", LevelWarn)
+	if _, latest, err := snapshot.Read(context.Background(), store); err != nil || latest.SnapshotID != current.Latest.SnapshotID {
+		t.Errorf("readers do not see %q: %v", current.Latest.SnapshotID, err)
+	}
+}
+
 // TestSupersededMarkerSurvivesAFailedTTLWrite is the other half of the exclusion. The
 // reclaim pass may only skip the snapshot this run superseded once that snapshot's
 // retention has actually settled: the expiry is best effort, and a chunk set whose
@@ -1801,8 +1994,11 @@ func TestReclaimBudgetBoundsTheWorkOneRunAttempts(t *testing.T) {
 	}
 	// Nothing was expired and nothing was forgotten, so the next pass still finds
 	// every marker this one could not get to.
-	if got, want := len(stagedIDs(t, store)), len(abandoned); got != want {
-		t.Errorf("%d markers remain, want all %d", got, want)
+	remaining := stagedIDs(t, store)
+	for _, id := range abandoned {
+		if !containsString(remaining, id) {
+			t.Errorf("marker %q was dropped by a pass that expired nothing: %v", id, remaining)
+		}
 	}
 	if _, _, err := snapshot.Read(context.Background(), store); err != nil {
 		t.Errorf("the published snapshot is not readable: %v", err)

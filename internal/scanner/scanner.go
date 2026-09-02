@@ -127,6 +127,18 @@ const (
 // its chunks, so a retry is either immediately useful or not useful at all.
 const previousReadBackoff = 250 * time.Millisecond
 
+// Bounds on the superseded snapshot's TTL write.
+//
+// It is the only retention a publication can aim at the set it replaced, and no later
+// run knows what this one replaced, so a single throttled item write would otherwise
+// leak a whole snapshot. ExpireChunks sets the same attribute to the same value on
+// every chunk, so a retry is idempotent and also finishes an expiry that stopped part
+// way through.
+const (
+	maxExpireAttempts = 3
+	expireBackoff     = 250 * time.Millisecond
+)
+
 // Retention of chunk sets that were written but never published.
 //
 // A publication writes every chunk and then moves the pointer. Between those two
@@ -567,8 +579,8 @@ func Run(ctx context.Context, deps Dependencies, event Event) (Result, error) {
 	// superseded is the snapshot the pointer write replaced, and is set only once that
 	// snapshot's retention is settled. The reclaim pass is told about it so it can drop a
 	// leftover marker for it without aiming a second expiry at the same chunks. It stays
-	// empty when the expiry did not land, because then the marker is the only thing left
-	// that can find those chunks and the pass has to reclaim them like any other set.
+	// empty when the expiry did not land, because the run has then put that snapshot back
+	// in the staging registry and the pass has to reclaim it like any other set.
 	superseded := ""
 	if publishErr == nil {
 		result.Latest = latest
@@ -597,12 +609,14 @@ func Run(ctx context.Context, deps Dependencies, event Event) (Result, error) {
 		// unstaged it on success, no marker either: nothing could ever find it again.
 		//
 		// It happens here, immediately after the pointer write and before the budgeted
-		// reclaim pass. That expiry is the only thing that can ever bound the replaced
-		// set, and it is not retryable: a later run has no record of what this one
-		// replaced. The reclaim pass is the opposite - every action it takes is driven
-		// off a durable marker and is retried on the next schedule - so letting it run
-		// first would let a throttled table or an expiring deadline spend the retryable
-		// work and starve the work that has one chance.
+		// reclaim pass. Only this run knows what its own write replaced, so a later run
+		// cannot repeat the decision; the reclaim pass is the opposite, since every
+		// action it takes is driven off a durable marker and is retried on the next
+		// schedule. Letting the pass run first would let a throttled table or an
+		// expiring deadline spend the retryable work and starve the work that has one
+		// chance. When the expiry does not land the run puts the replaced snapshot back
+		// in the staging registry, which is what turns it into work a later pass can
+		// still do.
 		switch {
 		case replaced.Previous != nil:
 			result.Previous = replaced.Previous.SnapshotID
@@ -876,10 +890,19 @@ func readPrevious(ctx context.Context, deps Dependencies, logger *Logger) (*snap
 //     reclaim here would overwrite it with the far cruder abandonedRetention. Just as
 //     importantly, a snapshot that was published and has since been superseded is not an
 //     abandoned chunk set, and reporting it as one is the same false alarm as reporting
-//     the live one, a run later. When the expiry did not land the caller passes nothing,
-//     so the set falls through to the ordinary rules: its marker is the only thing left
-//     that can find those chunks, and the abandoned window is the accurate report,
-//     because the retention it was owed is genuinely unknown.
+//     the live one. When the expiry did not land the caller passes nothing, so the set
+//     falls through to the ordinary rules: restageSuperseded has put its marker back,
+//     which is the only thing left that can find those chunks, and the abandoned window
+//     is the accurate report, because the retention it was owed is genuinely unknown.
+//
+// The exclusion reaches only this run's own replacement, so the false report it closes
+// stays reachable one run further out: a snapshot an earlier run published and
+// superseded, whose marker survived removal across two runs, is neither live nor this
+// run's replacement, and once it is past the grace period it is reported as abandoned
+// and has its retention shortened to the abandoned window. That is an acknowledged
+// residual rather than a rule, because nothing in the store records that a staged
+// snapshot was ever published, so no pass can tell one from a set that was written and
+// never published.
 //   - keep is this run's own snapshot ID, which is otherwise never touched. A set
 //     this run goes on to publish must not be carrying an expiry, and a set it just
 //     abandoned is left for a later pass rather than expired by the run that lost it.
@@ -1017,13 +1040,18 @@ func unstage(ctx context.Context, deps Dependencies, logger *Logger, group Group
 // run would report a successful publication as a failure and invite a retry that
 // has nothing left to do.
 //
+// The write is retried a bounded number of times, because a throttled item write is
+// exactly the transient failure that would otherwise leak a whole snapshot, and
+// ExpireChunks is idempotent so a retry repairs a partly applied expiry as well. A
+// cancelled or expired context stops the retries at once and is never read as a
+// settled expiry.
+//
 // It reports whether the replaced set's retention is settled, which is what decides
 // whether the reclaim pass may drop a leftover marker for it. A settled set either
 // carries its window or has no chunks left to carry one, so the marker is only a
-// stale record. An unsettled one has nothing bounding it, and its marker is the last
-// thing in the store that can find it, so the pass has to leave that marker alone and
-// reclaim the set on a later schedule under the abandoned window instead. That window
-// is cruder than the one aimed here, and bounded beats unreachable.
+// stale record. An unsettled one has nothing bounding it, so restageSuperseded puts
+// it back in the registry and the pass leaves that fresh marker alone until its grace
+// period passes.
 func expireSuperseded(ctx context.Context, deps Dependencies, logger *Logger, previous, current snapshot.Latest) bool {
 	if previous.SnapshotID == current.SnapshotID {
 		// The pointer replaced a pointer naming the snapshot this run published, so
@@ -1032,7 +1060,10 @@ func expireSuperseded(ctx context.Context, deps Dependencies, logger *Logger, pr
 	}
 	window := time.Duration(previous.ScanAge.StaleAfterSeconds) * time.Second
 	if window <= 0 {
+		// No window could be derived, so no expiry was ever aimed at these chunks and
+		// they are as unbounded as ones whose write failed.
 		logger.Log(LevelWarn, "superseded_chunks_kept", Fields{PreviousID: previous.SnapshotID})
+		restageSuperseded(ctx, deps, logger, previous.SnapshotID)
 		return false
 	}
 	expiresAt := current.PublishedAt.Add(window).UTC().Truncate(time.Second)
@@ -1041,20 +1072,77 @@ func expireSuperseded(ctx context.Context, deps Dependencies, logger *Logger, pr
 		SnapshotID: current.SnapshotID,
 		ExpiresAt:  expiresAt.Format(time.RFC3339),
 	}
-	switch err := deps.Store.ExpireChunks(ctx, previous.SnapshotID, expiresAt); {
-	case err == nil:
-		logger.Log(LevelInfo, "superseded_chunks_expired", fields)
-		return true
-	case errors.Is(err, snapshot.ErrNotFound):
-		// There is nothing left to expire. The superseded snapshot's chunks are
-		// already gone, which is the state readPrevious reports as a snapshot that
-		// vanished, so a retention window is neither possible nor needed.
-		logger.Log(LevelInfo, "superseded_chunks_absent", fields)
-		return true
-	default:
-		logger.LogError(LevelWarn, "superseded_chunks_expire_failed", fields, err)
-		return false
+
+	var (
+		lastErr  error
+		attempts int
+	)
+	for attempts < maxExpireAttempts {
+		if err := ctx.Err(); err != nil {
+			lastErr = err
+			break
+		}
+		attempts++
+		attempted := fields
+		attempted.Attempt = attempts
+
+		err := deps.Store.ExpireChunks(ctx, previous.SnapshotID, expiresAt)
+		if err == nil {
+			logger.Log(LevelInfo, "superseded_chunks_expired", attempted)
+			return true
+		}
+		if errors.Is(err, snapshot.ErrNotFound) {
+			// There is nothing left to expire. The superseded snapshot's chunks are
+			// already gone, which is the state readPrevious reports as a snapshot that
+			// vanished, so a retention window is neither possible nor needed.
+			logger.Log(LevelInfo, "superseded_chunks_absent", attempted)
+			return true
+		}
+		lastErr = err
+		if attempts == maxExpireAttempts {
+			break
+		}
+		logger.LogError(LevelWarn, "superseded_chunks_expire_retried", attempted, err)
+		if sleepErr := deps.sleep(ctx, expireBackoff); sleepErr != nil {
+			lastErr = sleepErr
+			break
+		}
 	}
+
+	exhausted := fields
+	exhausted.Attempt = attempts
+	logger.LogError(LevelWarn, "superseded_chunks_expire_failed", exhausted, lastErr)
+	restageSuperseded(ctx, deps, logger, previous.SnapshotID)
+	return false
+}
+
+// restageSuperseded records the replaced snapshot in the staging registry once its
+// TTL write has not landed.
+//
+// Nothing else in the store can find that chunk set: no pointer names it, its own
+// publisher removed its marker when it succeeded, and the reclaim pass iterates
+// nothing but markers. A marker is therefore the only thing that can ever bound it,
+// and a later pass reclaims it under abandonedRetention and reports it as abandoned.
+// That window is cruder than the one aimed at it and the report is accurate, because
+// the retention it was owed is genuinely unknown; bounded beats unreachable.
+//
+// The marker cannot aim retention at what the pointer names: the caller has already
+// established that this is not the snapshot it published, and ExpireChunks refuses
+// the live ID however a reclaim reaches it.
+//
+// A failure is logged and never returned. The publication has already been written,
+// read back, and verified, and no cleanup may turn it into a reported failure.
+func restageSuperseded(ctx context.Context, deps Dependencies, logger *Logger, snapshotID string) {
+	stagedAt := deps.now().Truncate(time.Second)
+	fields := Fields{
+		PreviousID: snapshotID,
+		StagedAt:   stagedAt.Format(time.RFC3339),
+	}
+	if err := deps.Store.StageSnapshot(ctx, snapshotID, stagedAt, stagedAt.Add(stagingRetention)); err != nil {
+		logger.LogError(LevelWarn, "superseded_chunks_untracked", fields, err)
+		return
+	}
+	logger.Log(LevelInfo, "superseded_chunks_restaged", fields)
 }
 
 func millis(duration time.Duration) int64 {
