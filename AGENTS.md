@@ -294,33 +294,33 @@ implement the snapshot contract above rather than restating it.
   snapshot this run's own pointer write replaced the same way but only once that
   snapshot's retention settled - the expiry landed, or its chunks were already gone -
   because only then do those chunks carry the retention the rule above aimed at them
-  and a reclaim would overwrite it with the far cruder abandoned window; when the expiry
-  failed the exclusion is not applied at all, because the run has then re-staged that
-  snapshot and its marker is the last thing in the store that can find the chunk set, so
-  dropping it would leave the set with no TTL, no pointer, and no record, and instead the
-  set is reclaimed on a later schedule under the abandoned window and reported as
-  abandoned, which is accurate because the retention it was owed is genuinely unknown; it
-  otherwise
-  skips its own run's snapshot ID, because a set the run publishes must not carry an
-  expiry that would outlive the pointer naming it; it defers the whole pass when the
-  pointer cannot be read, because then nothing proves which snapshot is live; and it
-  leaves a marker younger than the grace period alone, because a publisher may still
-  be writing that set. The grace exceeds the longest an invocation can live. The
-  published-snapshot rule is judged before the own-run rule, because on the success
-  path they name the same snapshot: judging its own ID first would skip the marker of
-  the snapshot it just published, and a later run would then see a marker that is
-  neither live nor its own and report a snapshot it is serving as abandoned. Excluding
-  the replaced snapshot closes the one-run-later form of the same false report: an
-  abandoned set is one an earlier publication wrote and never published. What the code
-  guarantees is exactly those two exclusions, the live snapshot and the snapshot this
-  run's own pointer write replaced, and no more. A snapshot an earlier run published and
-  superseded, whose marker survived removal across two runs, is neither, so it can still
-  be reported as abandoned and have its retention shortened from its own stale-after
-  window to the abandoned one. That is an acknowledged residual, not a rule to close by
-  adding state: nothing in the store records that a staged snapshot was ever published,
-  so no pass can tell one from a set that was written and never published. Every
-  failure here is logged, never returned: this is cleanup after an earlier
-  invocation, so failing on it would turn one bad run into a stuck schedule.
+  and a reclaim would overwrite it with the far cruder abandoned window; when the
+  expiry failed the exclusion is not applied at all, because the run has then
+  re-staged that snapshot and its marker is the last thing in the store that can find
+  the chunk set, so dropping it would leave the set with no TTL, no pointer, and no
+  record, and instead the set is reclaimed on a later schedule under the abandoned
+  window and reported as abandoned, which is accurate because the retention it was
+  owed is genuinely unknown. It otherwise skips its own run's snapshot ID, because a
+  set the run publishes must not carry an expiry that would outlive the pointer naming
+  it; it defers the whole pass when the pointer cannot be read, because then nothing
+  proves which snapshot is live; and it leaves a marker younger than the grace period
+  alone, because a publisher may still be writing that set. The grace exceeds the
+  longest an invocation can live. The published-snapshot rule is judged before the
+  own-run rule, because on the success path they name the same snapshot: judging its
+  own ID first would skip the marker of the snapshot it just published, and a later
+  run would then see a marker that is neither live nor its own and report a snapshot
+  it is serving as abandoned. Excluding the replaced snapshot closes the one-run-later
+  form of the same false report: an abandoned set is one an earlier publication wrote
+  and never published. What the code guarantees is exactly those two exclusions, the
+  live snapshot and the snapshot this run's own pointer write replaced, and no more. A
+  snapshot an earlier run published and superseded, whose marker survived removal
+  across two runs, is neither, so it can still be reported as abandoned and have its
+  retention shortened from its own stale-after window to the abandoned one. That is an
+  acknowledged residual, not a rule to close by adding state: nothing in the store
+  records that a staged snapshot was ever published, so no pass can tell one from a
+  set that was written and never published. Every failure here is logged, never
+  returned: this is cleanup after an earlier invocation, so failing on it would turn
+  one bad run into a stuck schedule.
 - The three ways a reclaim pass stops short are three distinct log events, because an
   operator alarms on them. An unreadable pointer and a failed registry query
   reclaimed nothing and stay at warning level; an exhausted per-run budget is the
