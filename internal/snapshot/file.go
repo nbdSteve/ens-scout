@@ -30,8 +30,12 @@ type FileStore struct {
 }
 
 // FileStore records staged snapshots as well as published ones, so both local
-// fakes offer the same surface the real backend does.
-var _ StagingStore = (*FileStore)(nil)
+// fakes offer the same surface the real backend does, and it satisfies the
+// read-only surface a serving path takes.
+var (
+	_ StagingStore = (*FileStore)(nil)
+	_ Reader       = (*FileStore)(nil)
+)
 
 const (
 	fileStoreLatestName = "latest.json"

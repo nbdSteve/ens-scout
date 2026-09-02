@@ -618,6 +618,18 @@ type Store interface {
 	LatestStore
 }
 
+// Reader is the read half of Store: everything a reader needs to resolve the
+// published snapshot, and nothing that can change published state.
+//
+// A serving path takes this rather than Store, so it cannot write a chunk, remove
+// one, or move the pointer even by mistake. Every Store satisfies it, as do
+// MemoryStore and FileStore, so a reader is exercised against the same fakes a
+// publisher is.
+type Reader interface {
+	GetLatest(ctx context.Context) (Latest, error)
+	GetChunks(ctx context.Context, snapshotID string) ([]Chunk, error)
+}
+
 // Publish writes a snapshot and then makes it visible, in this order:
 //
 //  1. encode, compress, checksum, and chunk the snapshot;
@@ -680,7 +692,7 @@ func Publish(ctx context.Context, store Store, snapshot Snapshot, publishedAt ti
 // ErrNotFound means nothing is published. A pointer that resolves but whose chunks
 // are absent reports ChunksMissingError instead, so a caller can tell a bootstrap
 // from a published snapshot that disappeared.
-func Read(ctx context.Context, store Store) (Snapshot, Latest, error) {
+func Read(ctx context.Context, store Reader) (Snapshot, Latest, error) {
 	if store == nil {
 		return Snapshot{}, Latest{}, fmt.Errorf("snapshot store is required")
 	}
