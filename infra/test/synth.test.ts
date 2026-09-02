@@ -144,6 +144,29 @@ describe('the scanner bundle', () => {
     expect(() => bundle.selectWordLists(available, required)).toThrow(dropped);
   });
 
+  test('refuses a Lists block it can only partly read', () => {
+    // An entry whose Path is a constant rather than a string literal contributes no
+    // name. Yielding the readable subset would leave the missing-list check finding
+    // every name it was told about, so the bundle would package without that list and
+    // fail every invocation of its group - the failure the check exists to prevent,
+    // reached through a parse gap instead of a glob gap.
+    const partial = [
+      'var Lists = []ListSpec{',
+      '\t{ID: "3-letters", Path: "data/words/3-letters.txt", Cadence: c, Group: g},',
+      '\t{ID: "6-letters", Path: sixLetterPath, Cadence: c, Group: g},',
+      '}',
+    ].join('\n');
+    expect(() => bundle.requiredWordLists(partial)).toThrow(/6-letters/);
+  });
+
+  test('refuses a Lists block that declares nothing', () => {
+    expect(() => bundle.requiredWordLists('var Lists = []ListSpec{\n}')).toThrow(/declares no list/);
+  });
+
+  test('refuses a source with no Lists block at all', () => {
+    expect(() => bundle.requiredWordLists('package scanner\n')).toThrow(/Lists definition/);
+  });
+
   test('copies word lists only, never the fixtures or the historical results', () => {
     const required: string[] = bundle.requiredWordLists(goSource('internal/scanner/scanner.go'));
     const selected: string[] = bundle.selectWordLists(

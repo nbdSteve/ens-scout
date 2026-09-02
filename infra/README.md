@@ -204,17 +204,11 @@ notification is not evidence the event was handled.
 The queue is the only record of an undelivered scan, because no invocation happened,
 so the `Errors` metric never saw it and nothing reached the log group.
 
-**The missing-scan alarm needs two empty windows, not one.** It raises when two
-consecutive six-hour windows carry no invocation at all - twelve hours - and it treats
-a missing datapoint as breaching, because a schedule that stopped firing publishes no
-datapoint to alarm on.
-One window is deliberately not enough: a deploy that lands part way through an aligned
-window leaves that window empty through no fault of the schedule, and a spurious page
-on the deployment an operator is watching most closely is what trains them past the
-records that matter.
-The other three alarms stay on a single datapoint, because they treat missing data as
-not breaching and one error, one throttle, or one undelivered event is already the
-whole signal.
+**Three alarms, and each one watches an occurrence.** An invocation that errored, one
+that was throttled, and an event EventBridge could not deliver.
+All three raise on a single datapoint, because one of any of them is already the whole
+signal, and all three treat missing data as not breaching, so an empty period is
+silence rather than evidence and no first deploy can page on one.
 
 **A declared log group, not `logRetention`.** The deprecated property provisions a
 helper Lambda holding `logs:PutRetentionPolicy` on every log group in the account.
@@ -229,10 +223,29 @@ cannot run many scans at once and multiply the Graph spend.
 published snapshot.
 A scan can be repeated, but only by spending the Graph budget again.
 
-**No alarm on snapshot staleness.** It needs a metric the publisher does not emit
-yet.
-The missing-scan alarm covers the case that produces a stale snapshot - a schedule
-that stopped firing - and the real staleness signal belongs with the read path.
+**Nothing here detects scan staleness, or a schedule that silently stopped firing.**
+That is a real gap, and it is stated rather than approximated: a schedule that stops
+firing produces no invocation, so the `Errors` alarm, the `Throttles` alarm, and the
+queue alarm all see nothing at all.
+Closing it needs a signal this stack does not have.
+It has to be measured from the published snapshot's own timestamps rather than from
+missing `Invocations` datapoints, because the snapshot is the artifact that matters and
+an invocation that ran and published nothing looks identical to a healthy one on that
+metric.
+It has to be per source, because the two groups run on different cadences and one
+snapshot is fresh against one group's threshold and stale against the other's, which a
+single aggregate timestamp cannot express - `internal/snapshot` already carries the
+per-source thresholds.
+And it has to carry an explicit deployment grace period, so a first deploy or a
+redeploy does not read as staleness before the first scheduled scan has had a chance to
+publish.
+That grace period is what a Lambda-metric alarm has no way to express, which is why the
+gap is left open here instead of approximated: CloudWatch fills a missing datapoint
+according to `treatMissingData` rather than waiting for the window to fill, so an
+`Invocations` alarm that breaches on missing data pages on its own first deploy however
+wide its evaluation window is.
+The signal belongs with the operational monitoring work that owns the published-snapshot
+metric.
 
 **The chunk retention window is not configurable here.** `internal/dynamo` derives
 a superseded snapshot's TTL from that snapshot's own stale-after threshold, measured

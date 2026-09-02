@@ -78,21 +78,33 @@ function buildEnv(base = process.env) {
  * requiredWordLists is the file name of every list `internal/scanner.Lists` names.
  *
  * The names belong to Go, so they are read from the definition rather than copied.
- * A `Lists` block this cannot parse, or one that yields no path, throws: expanding
- * to nothing would turn the check below into one that passes for any bundle.
+ *
+ * Every entry has to yield a path, not just some of them. A partial parse is the more
+ * dangerous failure than an unreadable one: an entry whose `Path` is a constant or a
+ * `filepath.Join` rather than a string literal would contribute no name, the check
+ * below would then find every name it was told about, and the bundle would package
+ * without that list and fail every invocation of its group. So the entries are counted
+ * and each one must be readable, and a block that is only partly readable is refused
+ * exactly like one that cannot be found at all.
  */
 function requiredWordLists(source) {
   const block = /var\s+Lists\s*=\s*\[\]ListSpec\{([\s\S]*?)\n\}/.exec(source);
   if (!block) {
     throw new Error(`could not find the Lists definition in ${scannerSource}`);
   }
-  const names = [...block[1].matchAll(/Path:\s*"([^"]+)"/g)].map((match) =>
-    path.posix.basename(match[1]),
-  );
-  if (names.length === 0) {
-    throw new Error(`the Lists definition in ${scannerSource} names no word list path`);
+  const entries = block[1].match(/\{[^{}]*\}/g);
+  if (!entries || entries.length === 0) {
+    throw new Error(`the Lists definition in ${scannerSource} declares no list`);
   }
-  return names;
+  return entries.map((entry) => {
+    const pathLiteral = /Path:\s*"([^"]+)"/.exec(entry);
+    if (!pathLiteral) {
+      throw new Error(
+        `could not read a Path string literal from the Lists entry ${entry.trim()} in ${scannerSource}`,
+      );
+    }
+    return path.posix.basename(pathLiteral[1]);
+  });
 }
 
 /**

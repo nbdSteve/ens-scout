@@ -163,6 +163,21 @@ export function eachPolicyStatement(template: Template): Array<Record<string, un
   return statements;
 }
 
+/**
+ * environmentVariables is the scanner function's environment.
+ *
+ * The stack declares one Lambda and a test asserts that, so addressing it positionally
+ * is safe here; a second function would have to change this accessor rather than let
+ * two suites disagree about which one they were reading.
+ */
+export function environmentVariables(template: Template): Record<string, unknown> {
+  const functions = template.findResources('AWS::Lambda::Function');
+  const properties = Object.values(functions)[0].Properties as {
+    Environment?: { Variables?: Record<string, unknown> };
+  };
+  return properties.Environment?.Variables ?? {};
+}
+
 /** asList normalizes a CloudFormation field that may be a scalar or a list. */
 export function asList(value: unknown): unknown[] {
   if (value === undefined) {

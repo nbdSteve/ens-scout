@@ -1,6 +1,14 @@
 import { Template } from 'aws-cdk-lib/assertions';
 
-import { goSource, goStringConstants, requireConstant, synth, testConfig, testSecretName } from './helpers';
+import {
+  environmentVariables,
+  goSource,
+  goStringConstants,
+  requireConstant,
+  synth,
+  testConfig,
+  testSecretName,
+} from './helpers';
 
 /**
  * These assertions are the infrastructure half of the repository's standing rule
@@ -59,11 +67,3 @@ describe('the Graph API credential', () => {
     expect(occurrences).toBe(1);
   });
 });
-
-function environmentVariables(template: Template): Record<string, unknown> {
-  const functions = template.findResources('AWS::Lambda::Function');
-  const properties = Object.values(functions)[0].Properties as {
-    Environment?: { Variables?: Record<string, unknown> };
-  };
-  return properties.Environment?.Variables ?? {};
-}

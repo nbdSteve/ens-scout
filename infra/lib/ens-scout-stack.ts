@@ -287,9 +287,14 @@ export class EnsScoutStack extends Stack {
   }
 
   /**
-   * createAlarms covers the failures an operator has to know about, and stops
-   * there. A stale-snapshot alarm needs a metric the publisher does not emit yet,
-   * so it belongs with the operations phase rather than here.
+   * createAlarms covers the failures this stack can observe, and stops there.
+   *
+   * All three watch something that happened: an invocation that errored, one that was
+   * throttled, and an event EventBridge could not deliver. None of them observes a
+   * schedule that silently stopped firing, because that produces no invocation and so
+   * no datapoint on any of these metrics. Scan freshness is a published-snapshot
+   * measurement rather than a Lambda one; `infra/README.md` states that gap and where
+   * it belongs.
    */
   private createAlarms(): void {
     const action = new cloudwatchActions.SnsAction(this.alarmTopic);
@@ -302,8 +307,7 @@ export class EnsScoutStack extends Stack {
         threshold: 1,
         evaluationPeriods: 1,
         comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
-        // No datapoint means no invocation in the period, which is the missing-scan
-        // alarm's job and not this one's.
+        // No datapoint means no invocation in the period, which is not a failed scan.
         treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
       }),
       // A scan that never ran. The reserved concurrency is the bound this trips
@@ -315,31 +319,6 @@ export class EnsScoutStack extends Stack {
         evaluationPeriods: 1,
         comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
         treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
-      }),
-      // A schedule that stopped firing. The three-hourly rule fires eight times a
-      // day, so a six-hour window with no invocation at all means two consecutive
-      // scans were missed, which is past the point the site's own staleness warning
-      // appears.
-      //
-      // Two such windows are required rather than one. A single aligned window with
-      // no datapoint is not evidence a schedule stopped: a deploy that lands part way
-      // through a window leaves that window empty through no fault of the schedule,
-      // and a spurious page on the deployment an operator is watching most closely is
-      // exactly what trains them past the records that matter. Both knobs are spelled
-      // out so neither can drift back to a single period through a default.
-      new cloudwatch.Alarm(this, 'ScanMissingAlarm', {
-        alarmDescription: 'No ENS scan has run for two consecutive six-hour windows',
-        metric: this.scannerFunction.metricInvocations({
-          period: Duration.hours(6),
-          statistic: 'Sum',
-        }),
-        threshold: 1,
-        evaluationPeriods: 2,
-        datapointsToAlarm: 2,
-        comparisonOperator: cloudwatch.ComparisonOperator.LESS_THAN_THRESHOLD,
-        // A rule that stopped firing produces no datapoint at all, which is exactly
-        // the condition this alarm exists for, so missing data has to breach.
-        treatMissingData: cloudwatch.TreatMissingData.BREACHING,
       }),
       // A schedule event EventBridge could not deliver to the function at all, which
       // the Errors metric never sees because no invocation ever happened. Nothing

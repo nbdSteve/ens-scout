@@ -552,17 +552,25 @@ section holds only the rules that a change here could quietly break.
   choice here.
   The role's `sqs:SendMessage` was an implicit grant CDK added for that Function prop,
   so removing the prop must remove the grant, and a test asserts both.
-- `ScanMissingAlarm` requires two consecutive empty six-hour windows, with
-  `evaluationPeriods` and `datapointsToAlarm` both written out rather than left to the
-  default that makes them equal. One window is not evidence a schedule stopped: a
-  deploy landing part way through an aligned window empties it through no fault of the
-  schedule, and `treatMissingData: BREACHING` - which has to stay, because a schedule
-  that stopped firing publishes nothing to alarm on - would turn that into a page on
-  the deployment an operator is watching most closely. The other three alarms stay on
-  one datapoint deliberately: they treat missing data as not breaching, so an empty
-  period cannot raise them, and one error, throttle, or undelivered event is the whole
-  signal. Assert the window by evaluating CloudWatch's M-of-N rule over a modelled
-  datapoint sequence, so reverting either knob fails a test.
+- Every alarm here watches an occurrence, treats missing data as not breaching, and
+  raises on one datapoint, because one error, throttle, or undelivered event is the
+  whole signal. Nothing in this stack detects a schedule that silently stopped firing,
+  and no comment, test name, or document may imply otherwise: a schedule that stops
+  produces no invocation, so none of these metrics records it. `infra/README.md` states
+  the gap and where it belongs.
+  An `Invocations` alarm with `treatMissingData: BREACHING` is the approximation to
+  refuse. CloudWatch fills a missing datapoint per `treatMissingData` when the
+  evaluation range holds fewer real datapoints than `evaluationPeriods`; it does not
+  shrink the window to the periods that have elapsed. A brand-new function has published
+  no datapoint anywhere, so every period fills as breaching and the alarm pages on its
+  own first deploy however wide the window is - widening it to two periods does not buy
+  the quiet, it only doubles detection latency. Closing this properly needs the
+  published-snapshot timestamps, per source, plus an explicit deployment grace period,
+  which is the part a Lambda metric cannot express.
+  If a later change does reintroduce an M-of-N alarm, its test model has to implement
+  the fill rule. The previous model shrank the range instead and so certified a
+  first-deploy quiet the service does not provide; a model that contradicts CloudWatch
+  is worse than no model, because it makes the wrong behaviour look asserted.
 - The chunk recovery window is not configurable from here. `internal/dynamo` derives
   it from the superseded snapshot's own stale-after threshold, so the only TTL knob in
   context is the attribute name, which has to match `attrExpiresAt`.

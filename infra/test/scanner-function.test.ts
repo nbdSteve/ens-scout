@@ -2,7 +2,7 @@ import { Match, Template } from 'aws-cdk-lib/assertions';
 
 import { functionTimeout, defaultScanTuning } from '../lib/config';
 import { scannerHandler, wordListDirectory } from '../lib/ens-scout-stack';
-import { goSource, goStringConstants, synth, testConfig } from './helpers';
+import { environmentVariables, goSource, goStringConstants, synth, testConfig } from './helpers';
 
 describe('the scanner function', () => {
   let template: Template;
@@ -134,10 +134,3 @@ describe('the scanner function', () => {
   });
 });
 
-function environmentVariables(template: Template): Record<string, unknown> {
-  const functions = template.findResources('AWS::Lambda::Function');
-  const properties = Object.values(functions)[0].Properties as {
-    Environment?: { Variables?: Record<string, unknown> };
-  };
-  return properties.Environment?.Variables ?? {};
-}
