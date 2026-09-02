@@ -31,6 +31,7 @@ HEAD /api/snapshot          the same headers with no body
 GET  /api/snapshot/meta     the snapshot summary without its results
 HEAD /api/snapshot/meta     the same headers with no body
 GET  /health                whether a complete snapshot is being served
+HEAD /health                the same headers with no body
 OPTIONS <any path>          CORS preflight, 204 No Content
 ```
 
@@ -173,6 +174,11 @@ The first is a store with nothing in it, which is an ordinary bootstrap; the sec
 `snapshot_unavailable` says less on purpose.
 A failed read is not evidence of an empty store and not evidence of corruption, so the code claims neither.
 A cancelled or expired request context is reported the same way, because it says nothing about what is stored.
+
+A pointer that cannot be read fails closed, even when a verified snapshot is already in the in-process cache.
+The cached entry is dropped rather than served, because a reader that cannot read the pointer cannot tell a live pointer from one that has since been superseded, and every endpoint answers `snapshot_unavailable` while the store is unreachable.
+`/health` reports that outage rather than reporting `ok` from memory, so a monitor sees the read path's real dependency state instead of a healthy answer that outlives the store.
+Serving a last-known-good snapshot past a failed pointer read is a separate resilience feature, not this one: it needs its own grace bound on how long a snapshot may be served unvalidated, and its own decision about what `/health` then claims.
 
 Both the code and the message are fixed literals.
 No part of a failure response is derived from an upstream error, so no store detail, no endpoint, no candidate name, and no credential can reach a client through one, and the body is bounded by construction rather than by truncation.

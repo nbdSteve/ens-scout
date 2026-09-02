@@ -46,8 +46,12 @@ go build ./...
 Also confirm that the Lambda still cross-compiles for its runtime:
 
 ```powershell
-$env:GOOS = "linux"; $env:GOARCH = "arm64"; go build ./cmd/scan-lambda
+$env:GOOS = "linux"; $env:GOARCH = "arm64"; go build -o /dev/null ./cmd/scan-lambda
 ```
+
+The output is discarded on purpose. This is a check that the code still compiles,
+not a build of anything that gets deployed, and a plain `go build` here drops an
+18 MB binary into the working tree that the next `git add` would commit.
 
 Everything except the Lambda entrypoint and `internal/dynamo` uses only the
 standard library, and it should stay that way. Discuss a new dependency before
@@ -388,6 +392,14 @@ contract; these are the rules behind it.
   and a rolled-back pointer cannot be served from a stale entry; and the held
   lock makes a burst against a cold cache cost one snapshot read rather than one
   per request.
+- Fail closed on a pointer that cannot be read, and drop the cached entry rather
+  than serve it. A reader that cannot read the pointer cannot tell a live pointer
+  from one that has since been superseded, so a verified snapshot in memory is no
+  longer evidence of what is published, and `/health` reports the store outage
+  instead of answering `ok` while the store is unreachable. Serving a
+  last-known-good snapshot past a failed pointer read is a separate resilience
+  feature, not this one: it needs its own grace bound on how long a snapshot may
+  be served unvalidated, and its own decision about what `/health` then claims.
 - Keep every cacheable response a pure function of the snapshot ID. That is why
   `published_at` is absent from the metadata document: a retried publication
   rewrites it while pointer identity, and therefore the entity tag, does not

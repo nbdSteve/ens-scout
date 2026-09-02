@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"strconv"
 	"strings"
 	"sync"
@@ -233,6 +234,39 @@ func TestChunksMissingAgreesWithTheSnapshotContract(t *testing.T) {
 	}
 	if document.Error.Code != CodeNoSnapshot {
 		t.Errorf("empty store code = %q, want %q", document.Error.Code, CodeNoSnapshot)
+	}
+}
+
+// TestAbandonedRequestIsNotAVanishedSnapshot proves a cancelled request context
+// is never read as evidence about what is stored.
+//
+// The store here holds a complete published snapshot, and the chunk fetch fails
+// with an error wrapping snapshot.ErrNotFound only because the request went away.
+// Classifying by the error alone would answer snapshot_chunks_missing, which is
+// the operational alarm for a published snapshot that disappeared, so a client
+// hanging up would raise it about a snapshot that is still there.
+func TestAbandonedRequestIsNotAVanishedSnapshot(t *testing.T) {
+	store := snapshot.NewMemoryStore()
+	publishFixture(t, store, snapshot.FixturePreview)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	handler := newTestHandler(t, abandoningStore{inner: store, cancel: cancel}, testNow)
+
+	request := httptest.NewRequest(http.MethodGet, PathSnapshot, nil).WithContext(ctx)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want %d (body %s)", response.Code, http.StatusServiceUnavailable, response.Body)
+	}
+	var document errorDocument
+	if err := json.Unmarshal(response.Body.Bytes(), &document); err != nil {
+		t.Fatalf("decode failure body: %v", err)
+	}
+	if document.Error.Code != CodeUnavailable {
+		t.Errorf("code = %q, want %q: an abandoned request is not a snapshot that vanished",
+			document.Error.Code, CodeUnavailable)
 	}
 }
 

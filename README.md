@@ -257,7 +257,14 @@ The full contract is in [docs/read-api.md](docs/read-api.md).
 go test ./...
 go vet ./...
 gofmt -w cmd internal
+$env:GOOS = "linux"; $env:GOARCH = "arm64"; go build -o /dev/null ./cmd/scan-lambda
 ```
+
+The last line only confirms the Lambda still cross-compiles for its runtime, so
+its output is discarded. A plain `go build ./cmd/scan-lambda` would instead leave
+an 18 MB binary in the working tree, which is a build artifact and never belongs
+in a commit. The deployment build above is the one that writes a binary, and it
+names it `bootstrap` because that is what the runtime executes.
 
 No test contacts The Graph or AWS. The DynamoDB API and the storage interfaces
 are injected, so every path is exercised against local fakes.

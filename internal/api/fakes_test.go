@@ -160,6 +160,29 @@ func (s *countingStore) calls() (latest, chunks int) {
 	return s.latestCalls, s.chunksCalls
 }
 
+// abandoningStore resolves the pointer normally and then loses the request: the
+// chunk fetch cancels the request context and fails with an error that wraps
+// snapshot.ErrNotFound, which is the one combination where the two possible
+// readings of a failure disagree. Read as evidence about the store it says the
+// chunks are gone; read as evidence about the request it says nothing at all.
+//
+// A cancelled context is never evidence about what is stored, so the second
+// reading has to win. This fake proves it does: without that rule the response
+// would claim a published snapshot had vanished because a client hung up.
+type abandoningStore struct {
+	inner  snapshot.Reader
+	cancel context.CancelFunc
+}
+
+func (s abandoningStore) GetLatest(ctx context.Context) (snapshot.Latest, error) {
+	return s.inner.GetLatest(ctx)
+}
+
+func (s abandoningStore) GetChunks(ctx context.Context, snapshotID string) ([]snapshot.Chunk, error) {
+	s.cancel()
+	return nil, fmt.Errorf("get chunks for %s: %w", snapshotID, snapshot.ErrNotFound)
+}
+
 // relabellingStore answers a chunk fetch with another snapshot's chunks
 // relabelled to the requested ID, which is what a reader would see if a chunk
 // partition were mixed across two publications. A chunk checksum covers only its
