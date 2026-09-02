@@ -12,6 +12,7 @@ import { Toolbar } from './components/Toolbar'
 import { TrustLine } from './components/TrustLine'
 import { ViewTabs } from './components/ViewTabs'
 import { appConfig, type AppConfig } from './config/env'
+import { Optics } from './optics/Optics'
 import type { Status } from './snapshot/contract'
 import { deriveAttribution } from './snapshot/attribution'
 import { applyQuery, countByStatus, filterResults } from './state/filter'
@@ -99,6 +100,13 @@ export function App({ config = appConfig, deps }: AppProps): ReactNode {
 
   return (
     <>
+      {/*
+       * First, and outside every other element. The optical layers blend against
+       * the paper itself, so any wrapper between them and the body would isolate
+       * them and flatten the whole background.
+       */}
+      <Optics />
+
       <a className="skip-link" href="#results">
         Skip to the names
       </a>

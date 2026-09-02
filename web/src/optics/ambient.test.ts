@@ -185,6 +185,28 @@ describe('the loop', () => {
     expect(read('--lx')).not.toBe(later)
   })
 
+  it('composes at its own cadence, not once per animation frame', async () => {
+    const { FRAME_INTERVAL_MS, startAmbient } = await load()
+    startAmbient()
+    /*
+     * Counting the writes is the only way to see this. The composition is a pure
+     * function of elapsed time, so a loop composing eight times as often looks
+     * identical in the properties it leaves behind - and costs a core to do it,
+     * because every write invalidates four full-viewport blended layers.
+     */
+    const writes = vi.spyOn(document.documentElement.style, 'setProperty')
+    const elapsedMs = 4_000
+    vi.advanceTimersByTime(elapsedMs)
+    const composed = writes.mock.calls.filter(([property]) => property === '--lx').length
+    writes.mockRestore()
+
+    // The bound is the cadence itself, so this stays true whatever rate the animation
+    // frames arrive at. One either side allows for where the interval falls.
+    const due = elapsedMs / FRAME_INTERVAL_MS
+    expect(composed).toBeLessThanOrEqual(due + 1)
+    expect(composed).toBeGreaterThanOrEqual(due - 1)
+  })
+
   it('re-bases itself when the viewport crosses the mobile breakpoint', async () => {
     const { MOBILE_QUERY, startAmbient } = await load()
     stubMedia([MOBILE_QUERY])

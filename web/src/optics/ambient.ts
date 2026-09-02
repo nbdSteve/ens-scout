@@ -105,6 +105,19 @@ const PERIODS = {
 /** Refraction breathes between 0.86 and 1, never above it. */
 const SEPARATION_SWING = 0.07
 
+/**
+ * How often a frame is composed, in milliseconds.
+ *
+ * The cadence is deliberately far below the display's refresh rate. Every value here
+ * drifts slowly - the glass moves at most 3.1 px/s and turns at 3.7 deg/s - so each
+ * step at this interval is about a quarter of a pixel and a third of a degree, which
+ * is below noticing on shapes this soft. Composing on every animation frame would
+ * write eight times as many frames for no visible difference, and each one invalidates
+ * four full-viewport blended layers, so the page would spend a whole core standing
+ * still. It is exported because the browser tests sample against it.
+ */
+export const FRAME_INTERVAL_MS = 80
+
 function wave(seconds: number, period: number, phase: number): number {
   return Math.sin((seconds / period + phase) * Math.PI * 2)
 }
@@ -187,6 +200,8 @@ let frame = 0
 let bankedMs = 0
 /** Timestamp the current run began at, or null while no run is in flight. */
 let runOriginMs: number | null = null
+/** Banked time the last composed frame was written at, or null when the next one is due. */
+let composedAtMs: number | null = null
 
 function reducedMotion(): boolean {
   return window.matchMedia(REDUCED_MOTION_QUERY).matches
@@ -196,12 +211,22 @@ function currentBase(): OpticalBase {
   return window.matchMedia(MOBILE_QUERY).matches ? MOBILE_BASE : DESKTOP_BASE
 }
 
+/** Writes the frame for the banked elapsed time, and records when it was written. */
+function compose(): void {
+  composedAtMs = bankedMs
+  writeFrame(document.documentElement, ambientFrame(bankedMs, currentBase()))
+}
+
 function tick(now: number): void {
   frame = 0
   runOriginMs ??= now
   bankedMs += now - runOriginMs
   runOriginMs = now
-  writeFrame(document.documentElement, ambientFrame(bankedMs, currentBase()))
+  // Animation frames keep arriving at the display's rate, because that is what keeps the
+  // loop aligned to paint and stood down in a hidden tab. Only the composition is rationed.
+  if (composedAtMs === null || bankedMs - composedAtMs >= FRAME_INTERVAL_MS) {
+    compose()
+  }
   schedule()
 }
 
@@ -221,6 +246,9 @@ function cancel(): void {
   // Dropping the origin banks nothing further, so the next run resumes from the
   // elapsed time already banked rather than jumping forward by the length of the gap.
   runOriginMs = null
+  // A run that starts again composes on its first frame instead of waiting out the
+  // cadence, so returning to the tab is answered by a paint rather than by a pause.
+  composedAtMs = null
 }
 
 /** Holds the deliberate still, and cancels anything in flight. */
@@ -273,7 +301,7 @@ export function startAmbient(): void {
   } else {
     // One frame is written straight away rather than waiting for the first callback,
     // so the light is composed on the paint the visitor actually sees first.
-    writeFrame(document.documentElement, ambientFrame(bankedMs, currentBase()))
+    compose()
     schedule()
   }
 }
