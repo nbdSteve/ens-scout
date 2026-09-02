@@ -47,7 +47,7 @@ func TestPublishAndReadThroughStores(t *testing.T) {
 				t.Fatalf("Read before publication returned %v, want ErrNotFound", err)
 			}
 
-			latest, err := Publish(ctx, store, snapshot, publishedAt)
+			latest, _, err := Publish(ctx, store, snapshot, publishedAt)
 			if err != nil {
 				t.Fatalf("Publish: %v", err)
 			}
@@ -463,7 +463,7 @@ func TestPublishRecoversFromAnInterruptedChunkWrite(t *testing.T) {
 			}
 			removeStoredChunks(t, dir, store, snapshotID, 1, len(payload.Chunks))
 
-			if _, err := Publish(ctx, store, snapshot, fixedNow.Add(time.Minute)); err != nil {
+			if _, _, err := Publish(ctx, store, snapshot, fixedNow.Add(time.Minute)); err != nil {
 				t.Fatalf("Publish could not recover an interrupted chunk write: %v", err)
 			}
 			readSnapshot, _, err := Read(ctx, store)
@@ -540,14 +540,14 @@ func TestPublishRetriesAfterAFailedPointerWrite(t *testing.T) {
 
 	for name, store := range newStores(t) {
 		t.Run(name, func(t *testing.T) {
-			if _, err := Publish(ctx, failingLatestStore{Store: store}, snapshot, firstAttempt); err == nil {
+			if _, _, err := Publish(ctx, failingLatestStore{Store: store}, snapshot, firstAttempt); err == nil {
 				t.Fatal("Publish succeeded despite a failing pointer write")
 			}
 			if _, err := store.GetLatest(ctx); !errors.Is(err, ErrNotFound) {
 				t.Fatalf("GetLatest after the failed attempt returned %v, want ErrNotFound", err)
 			}
 
-			published, err := Publish(ctx, store, snapshot, retryAttempt)
+			published, _, err := Publish(ctx, store, snapshot, retryAttempt)
 			if err != nil {
 				t.Fatalf("the retry could not publish an already stored scan: %v", err)
 			}
@@ -569,7 +569,7 @@ func TestPublishRetriesAfterAFailedPointerWrite(t *testing.T) {
 			// Retrying once more, after the pointer is already published, is still
 			// accepted and leaves the published pointer alone.
 			thirdAttempt := fixedNow.Add(9 * time.Minute)
-			if _, err := Publish(ctx, store, snapshot, thirdAttempt); err != nil {
+			if _, _, err := Publish(ctx, store, snapshot, thirdAttempt); err != nil {
 				t.Fatalf("a second retry was refused: %v", err)
 			}
 			served, err := store.GetLatest(ctx)
@@ -590,7 +590,7 @@ func TestPublishRefusesInconsistentSnapshot(t *testing.T) {
 
 	for name, store := range newStores(t) {
 		t.Run(name, func(t *testing.T) {
-			if _, err := Publish(ctx, store, snapshot, fixedNow); err == nil {
+			if _, _, err := Publish(ctx, store, snapshot, fixedNow); err == nil {
 				t.Fatal("Publish accepted an inconsistent snapshot")
 			}
 			if _, err := store.GetLatest(ctx); !errors.Is(err, ErrNotFound) {
@@ -600,14 +600,23 @@ func TestPublishRefusesInconsistentSnapshot(t *testing.T) {
 	}
 }
 
+// replacedID names the snapshot a PointerReplacement reports, or "" when the write
+// replaced nothing.
+func replacedID(replaced PointerReplacement) string {
+	if replaced.Previous == nil {
+		return ""
+	}
+	return replaced.Previous.SnapshotID
+}
+
 // failingLatestStore accepts chunks but refuses to move the pointer, standing in
 // for a publication that dies between writing chunks and publishing them.
 type failingLatestStore struct {
 	Store
 }
 
-func (s failingLatestStore) PutLatest(context.Context, Latest) error {
-	return errors.New("pointer write rejected")
+func (s failingLatestStore) PutLatest(context.Context, Latest) (PointerReplacement, error) {
+	return PointerReplacement{}, errors.New("pointer write rejected")
 }
 
 // corruptingStore returns chunks that no longer match what was written.
@@ -657,11 +666,11 @@ func TestFailedPublicationKeepsThePreviousSnapshot(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			store := NewMemoryStore()
-			if _, err := Publish(ctx, store, first, fixedNow); err != nil {
+			if _, _, err := Publish(ctx, store, first, fixedNow); err != nil {
 				t.Fatalf("Publish first snapshot: %v", err)
 			}
 
-			if _, err := Publish(ctx, test.wrap(store), second, later); err == nil {
+			if _, _, err := Publish(ctx, test.wrap(store), second, later); err == nil {
 				t.Fatal("Publish succeeded despite a failure")
 			} else if !strings.Contains(err.Error(), test.want) {
 				t.Fatalf("error %q does not contain %q", err, test.want)
@@ -686,7 +695,7 @@ func TestSupersededSnapshotsAreRemovableAfterPublication(t *testing.T) {
 	store := NewMemoryStore()
 
 	first := mustBuild(t, lifecycleResults(t, fixedNow))
-	if _, err := Publish(ctx, store, first, fixedNow); err != nil {
+	if _, _, err := Publish(ctx, store, first, fixedNow); err != nil {
 		t.Fatalf("Publish first snapshot: %v", err)
 	}
 
@@ -696,7 +705,7 @@ func TestSupersededSnapshotsAreRemovableAfterPublication(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Build second snapshot: %v", err)
 	}
-	if _, err := Publish(ctx, store, second, later); err != nil {
+	if _, _, err := Publish(ctx, store, second, later); err != nil {
 		t.Fatalf("Publish second snapshot: %v", err)
 	}
 	if got := len(store.SnapshotIDs()); got != 2 {
@@ -714,6 +723,165 @@ func TestSupersededSnapshotsAreRemovableAfterPublication(t *testing.T) {
 	}
 	if readLatest.SnapshotID != second.Metadata.SnapshotID || readSnapshot.Metadata.SnapshotID != second.Metadata.SnapshotID {
 		t.Fatalf("readers see %q, want %q", readLatest.SnapshotID, second.Metadata.SnapshotID)
+	}
+}
+
+// TestReadDistinguishesABootstrapFromAVanishedSnapshot covers the one thing a
+// publisher merging a previous snapshot forward has to be able to tell apart:
+// nothing published yet, and a pointer whose snapshot is gone. Both are absences, but
+// only the second means a published snapshot disappeared.
+func TestReadDistinguishesABootstrapFromAVanishedSnapshot(t *testing.T) {
+	built := mustBuild(t, lifecycleResults(t, fixedNow))
+
+	for name, store := range newStores(t) {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+
+			if _, _, err := Read(ctx, store); !errors.Is(err, ErrNotFound) {
+				t.Fatalf("Read before publication returned %v, want ErrNotFound", err)
+			}
+
+			if _, _, err := Publish(ctx, store, built, fixedNow.Add(time.Minute)); err != nil {
+				t.Fatalf("Publish: %v", err)
+			}
+			if err := store.DeleteChunks(ctx, built.Metadata.SnapshotID); err != nil {
+				t.Fatalf("DeleteChunks: %v", err)
+			}
+
+			_, _, err := Read(ctx, store)
+			if !errors.Is(err, ErrChunksMissing) {
+				t.Fatalf("Read returned %v, want ErrChunksMissing", err)
+			}
+			if errors.Is(err, ErrNotFound) {
+				t.Errorf("a vanished snapshot is indistinguishable from an empty store: %v", err)
+			}
+			var missing *ChunksMissingError
+			if !errors.As(err, &missing) {
+				t.Fatalf("Read returned %v, which does not name the snapshot that vanished", err)
+			}
+			if missing.SnapshotID != built.Metadata.SnapshotID {
+				t.Errorf("the error names %q, want %q", missing.SnapshotID, built.Metadata.SnapshotID)
+			}
+		})
+	}
+}
+
+// TestStagingRegistryRules drives the StagingStore rules through both fakes,
+// because a reclaimer decides what to destroy from what one of them reports.
+func TestStagingRegistryRules(t *testing.T) {
+	for name, store := range newStagingStores(t) {
+		t.Run(name, func(t *testing.T) { assertStagingRules(t, store) })
+	}
+}
+
+func newStagingStores(t *testing.T) map[string]StagingStore {
+	t.Helper()
+	return map[string]StagingStore{
+		"memory": NewMemoryStore(),
+		"file":   NewFileStore(t.TempDir()),
+	}
+}
+
+func assertStagingRules(t *testing.T, store StagingStore) {
+	t.Helper()
+	ctx := context.Background()
+	expires := fixedNow.Add(30 * 24 * time.Hour)
+
+	staged, err := store.StagedSnapshots(ctx)
+	if err != nil || len(staged) != 0 {
+		t.Fatalf("StagedSnapshots on an empty store returned %v, %v", staged, err)
+	}
+
+	if err := store.StageSnapshot(ctx, "scan-second", fixedNow.Add(time.Hour), expires); err != nil {
+		t.Fatalf("StageSnapshot: %v", err)
+	}
+	if err := store.StageSnapshot(ctx, "scan-first", fixedNow, expires); err != nil {
+		t.Fatalf("StageSnapshot: %v", err)
+	}
+	if staged, err = store.StagedSnapshots(ctx); err != nil {
+		t.Fatalf("StagedSnapshots: %v", err)
+	}
+	if len(staged) != 2 || staged[0].SnapshotID != "scan-first" || staged[1].SnapshotID != "scan-second" {
+		t.Fatalf("StagedSnapshots returned %v, want both markers in id order", staged)
+	}
+
+	// Claiming an id again refreshes its staging time, which is how a publisher that
+	// is still working renews the grace period a reclaimer waits out.
+	refreshed := fixedNow.Add(5 * time.Hour)
+	if err := store.StageSnapshot(ctx, "scan-first", refreshed, expires); err != nil {
+		t.Fatalf("restaging: %v", err)
+	}
+	if staged, err = store.StagedSnapshots(ctx); err != nil {
+		t.Fatalf("StagedSnapshots: %v", err)
+	}
+	if len(staged) != 2 || !staged[0].StagedAt.Equal(refreshed) {
+		t.Fatalf("restaging left %v, want scan-first staged at %s", staged, refreshed)
+	}
+
+	if err := store.UnstageSnapshot(ctx, "scan-first"); err != nil {
+		t.Fatalf("UnstageSnapshot: %v", err)
+	}
+	if err := store.UnstageSnapshot(ctx, "scan-first"); err != nil {
+		t.Errorf("a repeated UnstageSnapshot failed: %v", err)
+	}
+	if staged, err = store.StagedSnapshots(ctx); err != nil {
+		t.Fatalf("StagedSnapshots: %v", err)
+	}
+	if len(staged) != 1 || staged[0].SnapshotID != "scan-second" {
+		t.Errorf("StagedSnapshots returned %v, want only scan-second", staged)
+	}
+
+	// A marker that expires when it was staged would vanish before any reclaim pass
+	// could act on it, which is the state staging exists to prevent.
+	if err := store.StageSnapshot(ctx, "scan-third", fixedNow, fixedNow); err == nil {
+		t.Errorf("StageSnapshot accepted a marker that expires when it was staged")
+	}
+	if err := store.StageSnapshot(ctx, "../escape", fixedNow, expires); err == nil {
+		t.Errorf("StageSnapshot accepted an unsafe snapshot id")
+	}
+
+	cancelled, cancel := context.WithCancel(ctx)
+	cancel()
+	if err := store.StageSnapshot(cancelled, "scan-third", fixedNow, expires); !errors.Is(err, context.Canceled) {
+		t.Errorf("StageSnapshot on a cancelled context returned %v", err)
+	}
+	if err := store.UnstageSnapshot(cancelled, "scan-second"); !errors.Is(err, context.Canceled) {
+		t.Errorf("UnstageSnapshot on a cancelled context returned %v", err)
+	}
+	if _, err := store.StagedSnapshots(cancelled); !errors.Is(err, context.Canceled) {
+		t.Errorf("StagedSnapshots on a cancelled context returned %v", err)
+	}
+}
+
+// TestFileStoreSkipsAStagingMarkerItCannotInterpret covers what must not happen when
+// a marker is unreadable: the whole registry becoming unreadable with it. The marker
+// file written here is one the store would never write, which is what a corrupt or
+// foreign registry entry looks like on disk.
+func TestFileStoreSkipsAStagingMarkerItCannotInterpret(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	store := NewFileStore(root)
+
+	if err := store.StageSnapshot(ctx, "scan-good", fixedNow, fixedNow.Add(time.Hour)); err != nil {
+		t.Fatalf("StageSnapshot: %v", err)
+	}
+	corrupt := filepath.Join(root, fileStoreStagingDir, "scan-bad"+fileStoreChunkExt)
+	if err := os.WriteFile(corrupt, []byte("{not a marker"), 0o600); err != nil {
+		t.Fatalf("write a corrupt marker: %v", err)
+	}
+
+	staged, err := store.StagedSnapshots(ctx)
+	var unreadable *StagingUnreadableError
+	if !errors.As(err, &unreadable) {
+		t.Fatalf("StagedSnapshots returned %v, want a StagingUnreadableError", err)
+	}
+	if unreadable.Skipped != 1 {
+		t.Errorf("reported %d skipped markers, want 1", unreadable.Skipped)
+	}
+	// The readable marker is still reported, so its chunk set stays reclaimable, and
+	// the unreadable one is not, so nothing can be expired against it.
+	if len(staged) != 1 || staged[0].SnapshotID != "scan-good" {
+		t.Fatalf("StagedSnapshots returned %v, want only scan-good", staged)
 	}
 }
 
@@ -759,6 +927,11 @@ func TestStoresKeepThePointerMonotonic(t *testing.T) {
 		write      Latest
 		wantErr    bool
 		wantServed Latest
+		// wantReplaced is the snapshot the write must report replacing, and is empty
+		// when it replaced nothing. Retention is driven off that report, so a refused
+		// write and an accepted no-op must both report nothing: neither superseded the
+		// snapshot that is still serving.
+		wantReplaced string
 	}{
 		{
 			name:       "older scan time is refused",
@@ -783,9 +956,10 @@ func TestStoresKeepThePointerMonotonic(t *testing.T) {
 			wantServed: published,
 		},
 		{
-			name:       "newer scan time moves the pointer",
-			write:      newer,
-			wantServed: newer,
+			name:         "newer scan time moves the pointer",
+			write:        newer,
+			wantServed:   newer,
+			wantReplaced: published.SnapshotID,
 		},
 	}
 
@@ -793,11 +967,11 @@ func TestStoresKeepThePointerMonotonic(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			for name, store := range newStores(t) {
 				t.Run(name, func(t *testing.T) {
-					if err := store.PutLatest(ctx, published); err != nil {
+					if _, err := store.PutLatest(ctx, published); err != nil {
 						t.Fatalf("PutLatest of the first pointer: %v", err)
 					}
 
-					err := store.PutLatest(ctx, test.write)
+					replaced, err := store.PutLatest(ctx, test.write)
 					if test.wantErr {
 						if err == nil {
 							t.Fatalf("PutLatest accepted a pointer that moves readers backwards")
@@ -807,6 +981,12 @@ func TestStoresKeepThePointerMonotonic(t *testing.T) {
 						}
 					} else if err != nil {
 						t.Fatalf("PutLatest: %v", err)
+					}
+					if got := replacedID(replaced); got != test.wantReplaced {
+						t.Errorf("PutLatest reports it replaced %q, want %q", got, test.wantReplaced)
+					}
+					if replaced.Unusable {
+						t.Errorf("a stored pointer that reads and validates was reported as unusable")
 					}
 
 					served, err := store.GetLatest(ctx)
@@ -841,11 +1021,11 @@ func TestPublishRefusesAnOutOfOrderScan(t *testing.T) {
 
 	for name, store := range newStores(t) {
 		t.Run(name, func(t *testing.T) {
-			if _, err := Publish(ctx, store, newer, fixedNow); err != nil {
+			if _, _, err := Publish(ctx, store, newer, fixedNow); err != nil {
 				t.Fatalf("Publish the newer snapshot: %v", err)
 			}
 
-			if _, err := Publish(ctx, store, older, fixedNow.Add(time.Minute)); err == nil {
+			if _, _, err := Publish(ctx, store, older, fixedNow.Add(time.Minute)); err == nil {
 				t.Fatal("Publish moved readers back to an older scan")
 			} else if !errors.Is(err, ErrPointerConflict) {
 				t.Fatalf("error %q is not an ErrPointerConflict", err)
@@ -905,7 +1085,7 @@ func TestPutLatestRejectsAnInconsistentSummary(t *testing.T) {
 			test.mutate(&latest)
 			for name, store := range newStores(t) {
 				t.Run(name, func(t *testing.T) {
-					err := store.PutLatest(ctx, latest)
+					_, err := store.PutLatest(ctx, latest)
 					if err == nil {
 						t.Fatalf("PutLatest stored an inconsistent summary")
 					}
@@ -939,7 +1119,7 @@ func TestStoresIsolateStoredPointerState(t *testing.T) {
 
 	for name, store := range newStores(t) {
 		t.Run(name, func(t *testing.T) {
-			if _, err := Publish(ctx, store, snapshot, fixedNow); err != nil {
+			if _, _, err := Publish(ctx, store, snapshot, fixedNow); err != nil {
 				t.Fatalf("Publish: %v", err)
 			}
 			wantAvailable := snapshot.Metadata.Counts[ens.StatusAvailable]
@@ -978,7 +1158,7 @@ func TestMemoryStoreCorruptionFailsClosed(t *testing.T) {
 	ctx := context.Background()
 	store := NewMemoryStore()
 	snapshot := mustBuild(t, lifecycleResults(t, fixedNow))
-	if _, err := Publish(ctx, store, snapshot, fixedNow); err != nil {
+	if _, _, err := Publish(ctx, store, snapshot, fixedNow); err != nil {
 		t.Fatalf("Publish: %v", err)
 	}
 	if err := store.CorruptChunk(snapshot.Metadata.SnapshotID, 0); err != nil {
@@ -1076,7 +1256,7 @@ func TestFileStoreDetectsTamperedFiles(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			dir := t.TempDir()
 			store := NewFileStore(dir)
-			if _, err := Publish(ctx, store, snapshot, fixedNow); err != nil {
+			if _, _, err := Publish(ctx, store, snapshot, fixedNow); err != nil {
 				t.Fatalf("Publish: %v", err)
 			}
 			test.damage(t, dir, snapshot.Metadata.SnapshotID)
@@ -1110,7 +1290,7 @@ func TestStoresRejectCancelledContext(t *testing.T) {
 
 	for name, store := range newStores(t) {
 		t.Run(name, func(t *testing.T) {
-			if _, err := Publish(ctx, store, snapshot, fixedNow); !errors.Is(err, context.Canceled) {
+			if _, _, err := Publish(ctx, store, snapshot, fixedNow); !errors.Is(err, context.Canceled) {
 				t.Fatalf("Publish returned %v, want context.Canceled", err)
 			}
 		})
@@ -1178,9 +1358,20 @@ func TestFileStorePutLatestReplacesAnUnreadablePointer(t *testing.T) {
 				t.Fatal("Read served an unreadable pointer")
 			}
 
-			// A publisher must be able to replace it.
-			if _, err := Publish(ctx, store, snapshot, publishedAt); err != nil {
+			// A publisher must be able to replace it, and must be told that it
+			// replaced a pointer it could not interpret. Reporting nothing there would
+			// read as an empty store, and the chunk set the old pointer named would be
+			// left with neither a retention window nor anything that names it.
+			_, replaced, err := Publish(ctx, store, snapshot, publishedAt)
+			if err != nil {
 				t.Fatalf("Publish could not replace an unreadable pointer: %v", err)
+			}
+			if !replaced.Unusable {
+				t.Errorf("Publish reported replacing nothing, want an unusable replacement")
+			}
+			if replaced.Previous != nil {
+				t.Errorf("Publish named snapshot %q from a pointer that failed validation",
+					replaced.Previous.SnapshotID)
 			}
 			served, err := store.GetLatest(ctx)
 			if err != nil {
@@ -1213,7 +1404,7 @@ func TestFileStorePutLatestReplacesAnUnreadablePointer(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Build the later snapshot: %v", err)
 			}
-			if _, err := Publish(ctx, store, later, publishedAt.Add(3*time.Hour)); err != nil {
+			if _, _, err := Publish(ctx, store, later, publishedAt.Add(3*time.Hour)); err != nil {
 				t.Fatalf("Publish over a valid pointer: %v", err)
 			}
 			if again := quarantinedPointers(t, dir); len(again) != 1 {
@@ -1268,7 +1459,7 @@ func TestFileStoreFailsPublicationWhenThePointerCannotBeQuarantined(t *testing.T
 		}
 	}
 
-	if _, err := Publish(ctx, store, snapshot, publishedAt); err == nil {
+	if _, _, err := Publish(ctx, store, snapshot, publishedAt); err == nil {
 		t.Fatal("Publish replaced a pointer it could not preserve")
 	} else if !strings.Contains(err.Error(), "quarantine the unreadable latest pointer") {
 		t.Fatalf("error %q does not mention quarantining", err)
@@ -1291,7 +1482,7 @@ func TestFileStorePutLatestStillRefusesAnOlderReadablePointer(t *testing.T) {
 	store := NewFileStore(dir)
 
 	newer := mustBuild(t, lifecycleResults(t, fixedNow))
-	if _, err := Publish(ctx, store, newer, fixedNow.Add(time.Minute)); err != nil {
+	if _, _, err := Publish(ctx, store, newer, fixedNow.Add(time.Minute)); err != nil {
 		t.Fatalf("Publish the newer snapshot: %v", err)
 	}
 
@@ -1301,7 +1492,7 @@ func TestFileStorePutLatestStillRefusesAnOlderReadablePointer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Build the earlier snapshot: %v", err)
 	}
-	if _, err := Publish(ctx, store, older, fixedNow.Add(2*time.Minute)); !errors.Is(err, ErrPointerConflict) {
+	if _, _, err := Publish(ctx, store, older, fixedNow.Add(2*time.Minute)); !errors.Is(err, ErrPointerConflict) {
 		t.Fatalf("Publish returned %v, want ErrPointerConflict", err)
 	}
 

@@ -5,7 +5,11 @@ import (
 	"fmt"
 	"sort"
 	"sync"
+	"time"
 )
+
+// MemoryStore records staged snapshots as well as published ones.
+var _ StagingStore = (*MemoryStore)(nil)
 
 // MemoryStore is an in-memory Store for tests and local runs. It deep copies
 // chunk bytes and pointers on the way in and out, so a caller cannot reach into
@@ -18,33 +22,37 @@ import (
 type MemoryStore struct {
 	mutex     sync.RWMutex
 	chunks    map[string][]Chunk
+	staged    map[string]StagedSnapshot
 	latest    *Latest
 	published bool
 }
 
 // NewMemoryStore returns an empty store.
 func NewMemoryStore() *MemoryStore {
-	return &MemoryStore{chunks: make(map[string][]Chunk)}
+	return &MemoryStore{
+		chunks: make(map[string][]Chunk),
+		staged: make(map[string]StagedSnapshot),
+	}
 }
 
 // PutChunks stores chunks under a snapshot ID, applying the ChunkStore rule to
 // anything already stored there. Only missing indices are added, and the stored
 // chunks keep the exact bytes they already held.
 func (s *MemoryStore) PutChunks(ctx context.Context, snapshotID string, chunks []Chunk) error {
-	if err := checkPutChunks(ctx, snapshotID, chunks); err != nil {
+	if err := ValidatePutChunks(ctx, snapshotID, chunks); err != nil {
 		return err
 	}
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 	existing := s.chunks[snapshotID]
-	decision, missing, err := decideChunkWrite(existing, chunks)
+	decision, missing, err := PlanChunkWrite(existing, chunks)
 	if err != nil {
 		return err
 	}
 	switch decision {
-	case chunkWriteSkip:
+	case ChunkWriteSkip:
 		return nil
-	case chunkWriteRefuse:
+	case ChunkWriteRefuse:
 		return errChunksImmutable(snapshotID)
 	}
 	s.chunks[snapshotID] = mergeStoredChunks(existing, missing)
@@ -96,30 +104,37 @@ func (s *MemoryStore) DeleteChunks(ctx context.Context, snapshotID string) error
 	return nil
 }
 
-// PutLatest moves the pointer forward, applying the LatestStore ordering rule.
-// Holding the write lock across the comparison and the write stands in for the
-// conditional write a real backend uses. This store only ever holds a pointer it
+// PutLatest moves the pointer forward, applying the LatestStore ordering rule, and
+// reports the pointer it replaced. Holding the write lock across the comparison, the
+// write, and the report stands in for the conditional write a real backend uses, so
+// the replacement a caller acts on is the one this write superseded and not one
+// another publisher moved on afterwards. This store only ever holds a pointer it
 // already validated, so it has no unreadable-pointer case to narrow around.
-func (s *MemoryStore) PutLatest(ctx context.Context, latest Latest) error {
+func (s *MemoryStore) PutLatest(ctx context.Context, latest Latest) (PointerReplacement, error) {
 	if err := ctx.Err(); err != nil {
-		return err
+		return PointerReplacement{}, err
 	}
 	if err := latest.Validate(); err != nil {
-		return err
+		return PointerReplacement{}, err
 	}
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
-	write, err := checkPutLatest(s.latest, latest)
+	write, err := PlanLatestWrite(s.latest, latest)
 	if err != nil {
-		return err
+		return PointerReplacement{}, err
 	}
 	if !write {
-		return nil
+		return PointerReplacement{}, nil
+	}
+	var replaced PointerReplacement
+	if s.latest != nil {
+		previous := s.latest.Clone()
+		replaced.Previous = &previous
 	}
 	stored := latest.Clone()
 	s.latest = &stored
 	s.published = true
-	return nil
+	return replaced, nil
 }
 
 // GetLatest returns the pointer, or ErrNotFound before anything is published.
@@ -133,6 +148,56 @@ func (s *MemoryStore) GetLatest(ctx context.Context) (Latest, error) {
 		return Latest{}, fmt.Errorf("latest snapshot pointer: %w", ErrNotFound)
 	}
 	return s.latest.Clone(), nil
+}
+
+// StageSnapshot records that a publisher is about to write a snapshot's chunks,
+// refreshing the staging time when the same ID is claimed again.
+//
+// The expiry is validated and then discarded: this store has no clock to expire a
+// marker against, and no test outlives one. A real backend stores it as the item's
+// TTL, which is what keeps markers from accumulating there.
+func (s *MemoryStore) StageSnapshot(ctx context.Context, snapshotID string, stagedAt, expiresAt time.Time) error {
+	if err := ValidateStaging(ctx, snapshotID, stagedAt, expiresAt); err != nil {
+		return err
+	}
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+	s.staged[snapshotID] = StagedSnapshot{SnapshotID: snapshotID, StagedAt: stagedAt.UTC()}
+	return nil
+}
+
+// UnstageSnapshot removes a staging marker. Removing one that is not there
+// succeeds, so a publisher may unstage without first checking.
+func (s *MemoryStore) UnstageSnapshot(ctx context.Context, snapshotID string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := ValidateSnapshotID(snapshotID); err != nil {
+		return err
+	}
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+	delete(s.staged, snapshotID)
+	return nil
+}
+
+// StagedSnapshots returns every staging marker, sorted by snapshot ID. A real
+// backend returns them in sort-key order, which is the same order, so a caller
+// cannot come to depend on one store's iteration order.
+func (s *MemoryStore) StagedSnapshots(ctx context.Context) ([]StagedSnapshot, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	s.mutex.RLock()
+	defer s.mutex.RUnlock()
+	staged := make([]StagedSnapshot, 0, len(s.staged))
+	for _, entry := range s.staged {
+		staged = append(staged, entry)
+	}
+	sort.Slice(staged, func(i, j int) bool {
+		return staged[i].SnapshotID < staged[j].SnapshotID
+	})
+	return staged, nil
 }
 
 // SnapshotIDs returns the stored snapshot IDs in no particular order. It exists
@@ -189,17 +254,4 @@ func (s *MemoryStore) TruncateChunks(snapshotID string, from, to int) {
 	kept = append(kept, chunks[:from]...)
 	kept = append(kept, chunks[to:]...)
 	s.chunks[snapshotID] = kept
-}
-
-func checkPutChunks(ctx context.Context, snapshotID string, chunks []Chunk) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	if err := ValidateSnapshotID(snapshotID); err != nil {
-		return err
-	}
-	if _, err := Assemble(snapshotID, chunks); err != nil {
-		return err
-	}
-	return nil
 }
