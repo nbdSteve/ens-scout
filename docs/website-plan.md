@@ -252,9 +252,16 @@ DynamoDB costs, and actual visitor demand.
 - Add the scheduled Lambda and DynamoDB publisher. Done.
 - Verify atomic publication and failure recovery with local fakes. Done.
 - Add TypeScript AWS CDK infrastructure for DynamoDB, IAM, Lambda, Scheduler,
-and secrets.
-  The two schedules must be offset from each other, for the reason recorded under
-  "Scheduling and query budget".
+and secrets. Done.
+  The two schedules are offset from each other, for the reason recorded under
+  "Scheduling and query budget", and a test proves it by expanding both cron
+  expressions into the minutes they fire.
+  The schedules are EventBridge rules rather than EventBridge Scheduler: the
+  Scheduler L2 is still an alpha module and two fixed cron schedules need nothing it
+  adds.
+  The Graph API key stays in Secrets Manager and reaches the function as a
+  CloudFormation dynamic reference, so it is in neither the repository nor the
+  synthesized template; `infra/README.md` records the trade-off that choice makes.
 - Add GitHub Actions workflows that deploy through a GitHub OIDC role.
 
 ### Phase 2: read API and frontend

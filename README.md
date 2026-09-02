@@ -117,6 +117,7 @@ internal/snapshot/    deterministic snapshot contract, storage fakes, fixtures
 internal/scanner/     one scheduled scan, from event to published pointer
 internal/dynamo/      DynamoDB snapshot storage
 internal/api/         cached HTTP read API for the published snapshot
+infra/                TypeScript AWS CDK definition of the publisher stack
 data/words/           current candidate lists
 data/fixtures/        committed fixture snapshots for local development
 data/results/         historical scan output from the original utility
@@ -205,7 +206,24 @@ $env:GOOS = "linux"; $env:GOARCH = "arm64"; $env:CGO_ENABLED = "0"
 go build -o bootstrap ./cmd/scan-lambda
 ```
 
-No infrastructure is defined in this repository yet.
+## Infrastructure
+
+`infra/` is a TypeScript AWS CDK application that defines the stack this Lambda
+runs in: the snapshot table, the function, the two schedules, the failure queue, the
+log group, the alarms, and a hand-written least-privilege role. Every CDK command
+cross-compiles the scanner first, so a synth needs the Go toolchain and no AWS
+credentials.
+
+```powershell
+cd infra
+npm ci
+npm run check
+```
+
+The Graph API key is never in the repository or the synthesized template. The stack
+references an existing Secrets Manager secret, and CloudFormation resolves it at
+deploy time. See [infra/README.md](infra/README.md) for the context keys, the
+schedule offset, and the trade-offs behind each choice.
 
 ## Read API
 
