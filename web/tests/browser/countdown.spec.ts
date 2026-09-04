@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { DAY, SCANNED_AT, visit } from './support'
+import { DAY, SCANNED_AT, SECOND, visit } from './support'
 
 /**
  * The countdown, watched while time passes.
@@ -30,9 +30,21 @@ test('the value counts down in real time without touching the status', async ({ 
 
   const row = page.getByRole('row').filter({ hasText: 'quill.eth' })
   const value = row.locator('.countdown__value')
-  const before = toSeconds((await value.textContent()) ?? '')
 
-  await page.clock.fastForward(5000)
+  /*
+   * Paused before the first sample, because `install` alone still lets time flow.
+   * The value re-renders once a second, so a real second passing between the two
+   * reads took its own second off the countdown as well, and the difference came
+   * out as six. Pausing makes the fast-forward the only thing that moves the
+   * clock. The instant comes from the page rather than from `SCANNED_AT`, because
+   * a clock may only ever be moved forward and the page is already past the
+   * instant it was installed at.
+   */
+  const loaded = await page.evaluate(() => Date.now())
+  await page.clock.pauseAt(new Date(loaded + SECOND))
+
+  const before = toSeconds((await value.textContent()) ?? '')
+  await page.clock.fastForward(5 * SECOND)
 
   const after = toSeconds((await value.textContent()) ?? '')
   expect(before - after).toBe(5)

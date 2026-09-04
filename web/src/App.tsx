@@ -107,28 +107,16 @@ export function App({ config = appConfig, deps }: AppProps): ReactNode {
        */}
       <Optics />
 
+      {/*
+       * The only thing in the top-left corner, and only while it has focus. The page
+       * carries no name, no logo, and no bar: a visitor arrived to read names, and a
+       * strip of branding above them would be the first thing they had to look past.
+       * There is deliberately no `banner` landmark, which is what the two landmark
+       * tests now assert.
+       */}
       <a className="skip-link" href="#results">
         Skip to the names
       </a>
-
-      {/*
-       * Outside `.page` on purpose. The bar is full-bleed, so keeping it out of the
-       * centred column means nothing inside that column is ever wider than it, and
-       * it stays the page's only banner landmark.
-       */}
-      <header className="topbar">
-        <div className="topbar__inner">
-          <span className="wordmark">ENS Scout</span>
-          <a
-            className="topbar__link"
-            href="https://app.ens.domains/"
-            rel="noopener noreferrer"
-            target="_blank"
-          >
-            Open the ENS app <span aria-hidden="true">&#8599;</span>
-          </a>
-        </div>
-      </header>
 
       <main id="main">
         <div className="page">

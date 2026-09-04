@@ -125,6 +125,65 @@ test.describe('with reduced motion', () => {
   })
 })
 
+/** The area no content may occupy, in CSS pixels from the top-left of the viewport. */
+const CORNER = { width: 240, height: 120 } as const
+
+test('the page keeps no brand', async ({ page }) => {
+  await visit(page)
+
+  await expect(page).toHaveTitle('Available .eth names')
+
+  /*
+   * The accessibility tree, which is where a name survives being deleted from the
+   * page: an `aria-label`, an `alt`, a `title`, or an icon's accessible name would
+   * all still read the product out to a screen reader while looking clean on screen.
+   * Snapshotting the whole body is what makes this a search rather than a checklist
+   * of the places a name used to be.
+   */
+  expect(await page.locator('body').ariaSnapshot()).not.toMatch(/scout/i)
+  expect(await page.locator('body').innerText()).not.toMatch(/scout/i)
+
+  /*
+   * And the corner is empty. Only elements that actually render something are
+   * considered: every ancestor of the page spans this area by definition, so
+   * asking about client rects alone would report the html element and prove
+   * nothing. The optics are excluded because they are the paper's own light, and
+   * the skip link because it is there only while it holds focus.
+   */
+  const inTheCorner = await page.evaluate((corner) => {
+    const optics = ['beam', 'caustic', 'lens', 'spec']
+    const rendersSomething = (element: Element): boolean => {
+      if (element.matches('img, svg, canvas, video, input, textarea, select, button, hr')) {
+        return true
+      }
+      return [...element.childNodes].some(
+        (node) => node.nodeType === Node.TEXT_NODE && (node.textContent ?? '').trim() !== '',
+      )
+    }
+    return [...document.body.querySelectorAll('*')]
+      .filter(
+        (element) =>
+          !element.closest('.skip-link') &&
+          !optics.some((id) => element.closest(`#${id}`) !== null) &&
+          rendersSomething(element),
+      )
+      .filter((element) => {
+        const box = element.getBoundingClientRect()
+        return (
+          box.width > 0 &&
+          box.height > 0 &&
+          box.left < corner.width &&
+          box.top < corner.height &&
+          box.right > 0 &&
+          box.bottom > 0
+        )
+      })
+      .map((element) => `${element.tagName.toLowerCase()}.${element.getAttribute('class') ?? ''}`)
+  }, CORNER)
+
+  expect(inTheCorner, 'something is laid out in the empty top-left corner').toEqual([])
+})
+
 test('the optics blend against the paper', async ({ page }) => {
   await visit(page)
 

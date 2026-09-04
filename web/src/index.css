@@ -84,6 +84,10 @@
   --measure: 62ch;
   --page-max: 68rem;
   --gutter: clamp(1.25rem, 5vw, 3rem);
+  /* The empty corner, in one place. It is a fixed pixel length on purpose: the area
+     it holds clear is stated in CSS pixels, so scaling it with the root font size
+     would let a larger text setting satisfy it and a smaller one break it. */
+  --corner-clear: 132px;
 
   /* ------------------------------------------------------------------ paper -- */
 
@@ -697,71 +701,6 @@ strong {
   color: var(--on-ink);
 }
 
-/* ------------------------------------------------------------------ top bar -- */
-
-.topbar {
-  position: sticky;
-  inset-block-start: 0;
-  z-index: 20;
-  /* Opaque, not frosted. A translucent bar makes the contrast of its own text
-     depend on whatever happens to be scrolling under it, and the full-bleed dark
-     list below composites through a white veil to a mid grey that fails against
-     `--ink-muted`. Nothing about the bar should change as the page moves. */
-  background: var(--canvas);
-  border-block-end: 1px solid var(--hairline);
-}
-
-.topbar__inner {
-  max-width: var(--page-max);
-  margin-inline: auto;
-  padding-inline: var(--gutter);
-  min-height: 3.25rem;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-4);
-}
-
-.wordmark {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.5rem;
-  font-size: var(--step-0);
-  font-weight: 600;
-  letter-spacing: var(--track-snug);
-}
-
-.wordmark::before {
-  content: '';
-  width: 0.5rem;
-  height: 0.5rem;
-  flex: none;
-  border-radius: 0.15rem;
-  background: var(--accent);
-  rotate: 45deg;
-}
-
-.topbar__link {
-  font-size: var(--step--1);
-  font-weight: 500;
-  color: var(--ink-muted);
-  text-decoration: none;
-  white-space: nowrap;
-}
-
-.topbar__link:hover {
-  color: var(--accent);
-}
-
-.topbar__link span {
-  display: inline-block;
-  transition: transform var(--quick) var(--ease);
-}
-
-.topbar__link:hover span {
-  transform: translate(0.1em, -0.1em);
-}
-
 /* -------------------------------------------------------------------- shell -- */
 
 .page {
@@ -782,13 +721,20 @@ strong {
  *
  * The title and the count share a baseline, so the two read as one line at any
  * width that fits them, and stack without a second gap when they do not.
+ *
+ * The lead-in above it is the empty corner, and it is a reservation rather than
+ * spacing. Nothing may be laid out in the top-left 240 by 120 pixels: no name, no
+ * logo, no eyebrow, and no control, so that the first thing on the page is paper
+ * with the light moving across it. The column starts at x = 224 at 1440 and at
+ * x = 42 at 834, so the corner cannot be cleared sideways at every width and is
+ * cleared downwards at all of them instead. `constellation.spec.ts` measures it.
  */
 .lede {
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
   gap: var(--space-2) var(--space-4);
-  padding-block: var(--space-5) var(--space-2);
+  padding-block: var(--corner-clear) var(--space-2);
 }
 
 .lede__title {

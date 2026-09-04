@@ -184,7 +184,8 @@ test('the first screen is the answer, not an introduction', async ({ page }, tes
   await visit(page, { view: 'all' })
 
   for (const [what, locator] of [
-    ['the header', page.getByRole('banner')],
+    // No header in this list any more. The corner it used to occupy is empty, and
+    // `constellation.spec.ts` is what holds it that way.
     ['the title', page.getByRole('heading', { level: 1 })],
     ['the count', page.getByRole('status')],
     ['the trust line', page.getByText(/Recorded statuses, not a live check/)],

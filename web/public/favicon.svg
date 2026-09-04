@@ -1,5 +1,25 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="ENS Scout">
-  <rect width="32" height="32" rx="7" fill="#10151f" />
-  <circle cx="14" cy="14" r="7" fill="none" stroke="#5eead4" stroke-width="2.5" />
-  <path d="M19.4 19.4 25 25" stroke="#5eead4" stroke-width="2.5" stroke-linecap="round" />
+<!--
+  A warm paper tile with the page's own caustic streak across it: the same violet
+  to cyan the background refracts, at the same angle the beam runs.
+
+  It carries no `role` and no `aria-label` on purpose. A tab icon is decoration
+  that the browser already labels with the document title, and an accessible name
+  here would be a second, competing one - which is how the product name used to
+  get read out. Nothing in the mark is a logo, a letter, or a monogram.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <defs>
+    <linearGradient id="caustic" x1="6" y1="26" x2="26" y2="6" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#6b4cf6" />
+      <stop offset="1" stop-color="#25cbe0" />
+    </linearGradient>
+  </defs>
+  <rect width="32" height="32" rx="7" fill="#f7f3eb" />
+  <path
+    d="M7 25 25 7"
+    fill="none"
+    stroke="url(#caustic)"
+    stroke-width="4.5"
+    stroke-linecap="round"
+  />
 </svg>

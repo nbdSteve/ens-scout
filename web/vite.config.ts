@@ -21,14 +21,5 @@ export default defineConfig({
     // so a production bug can be diagnosed without guessing at minified frames.
     sourcemap: true,
     target: 'es2022',
-    rollupOptions: {
-      // Two entries. `index.html` is the site; `prototype.html` is the visual
-      // prototype of the name-exploration surface, kept off the site's route so
-      // the shipped bundle carries none of it and `/` is unchanged.
-      input: {
-        index: fileURLToPath(new URL('index.html', import.meta.url)),
-        prototype: fileURLToPath(new URL('prototype.html', import.meta.url)),
-      },
-    },
   },
 })

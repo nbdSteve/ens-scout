@@ -71,7 +71,10 @@ test('the stale warning has none, and it is the alert that says so', async ({ pa
 test('the page has one of each landmark a visitor navigates by', async ({ page }) => {
   await visit(page)
 
-  await expect(page.getByRole('banner')).toHaveCount(1)
+  // No `banner`, and that is the requirement rather than an omission. The page
+  // carries no name and no bar, so there is nothing for a header landmark to hold,
+  // and announcing an empty one would send a screen-reader user to a dead stop.
+  await expect(page.getByRole('banner')).toHaveCount(0)
   await expect(page.getByRole('main')).toHaveCount(1)
   await expect(page.getByRole('contentinfo')).toHaveCount(1)
   await expect(page.getByRole('navigation', { name: 'Views' })).toHaveCount(1)
