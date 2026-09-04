@@ -202,9 +202,9 @@
 }
 
 html {
-  /* An anchor jump lands under the sticky header rather than behind it. No smooth
-     scrolling: the skip link has to arrive before the next keystroke, not after an
-     animation. */
+  /* An anchor jump leaves a little room above its target rather than pinning it to
+     the very edge of the viewport. No smooth scrolling: the skip link has to arrive
+     before the next keystroke, not after an animation. */
   scroll-padding-top: 4.5rem;
   -webkit-text-size-adjust: 100%;
 }
@@ -682,7 +682,8 @@ strong {
   position: fixed;
   inset-block-start: var(--space-3);
   inset-inline-start: var(--space-3);
-  /* Above the sticky header, which would otherwise cover it. */
+  /* Above the optical layers and everything else, so nothing can cover the one thing
+     allowed in the empty corner while it holds focus. */
   z-index: 40;
   padding: 0.7rem 1.1rem;
   border-radius: var(--radius-pill);

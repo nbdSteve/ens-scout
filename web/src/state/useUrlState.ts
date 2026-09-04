@@ -63,8 +63,9 @@ function navigate(search: string, replace: boolean): void {
 }
 
 /**
- * The link the visitor followed, as parsed before it was canonicalized. `canonical`
- * is `null` once the arrival is over, which is a state no link can be equal to.
+ * The link the screen was reached by, as parsed before it was canonicalized.
+ * `canonical` is `null` when there is nothing to say, which is a state no link can be
+ * equal to.
  */
 interface Arrival {
   readonly canonical: string | null
@@ -72,11 +73,19 @@ interface Arrival {
 }
 
 /** One shared value, so a repeated discard is `Object.is`-equal and re-renders nothing. */
-const OVER: Arrival = { canonical: null, warnings: [] }
+const NOTHING_TO_SAY: Arrival = { canonical: null, warnings: [] }
+
+/** What could not be applied about a link, or `NOTHING_TO_SAY` when all of it was. */
+function outcomeOf(search: string): Arrival {
+  const parsed = parseQuery(search)
+  return parsed.warnings.length === 0
+    ? NOTHING_TO_SAY
+    : { canonical: serializeQuery(parsed.state), warnings: parsed.warnings }
+}
 
 export interface UrlState {
   readonly query: QueryState
-  /** Parts of the incoming link that could not be applied. */
+  /** Parts of the current link that could not be applied, whether it was followed or made here. */
   readonly warnings: readonly string[]
   /** Applies a change, pushing a history entry unless `replace` is set. */
   readonly setQuery: (change: Partial<QueryState>, options?: { replace?: boolean }) => void
@@ -97,29 +106,28 @@ export function useUrlState(): UrlState {
     navigate(canonical, true)
   }, [canonical])
 
-  // The warnings describe the link that was followed, and the rewrite above erases
-  // the evidence for them: re-parsing the canonical link produces none, because
+  // The warnings describe the link the screen was reached by, and the rewrite above
+  // erases the evidence for them: re-parsing the canonical link produces none, because
   // whatever could not be applied is no longer in it. Read straight from the current
-  // location, the notice would therefore appear for one render of the arrival and
-  // then vanish, which is the same as never showing it. So the arrival is captured
-  // once, before anything has been rewritten, and its warnings are shown for as long
-  // as the screen they describe is the screen on display.
-  const [arrival, setArrival] = useState<Arrival>(() => {
-    const onArrival = parseQuery(window.location.search)
-    return { canonical: serializeQuery(onArrival.state), warnings: onArrival.warnings }
-  })
+  // location, the notice would therefore appear for one render and then vanish, which
+  // is the same as never showing it. So the outcome is captured once, before anything
+  // has been rewritten, and its warnings are shown for as long as the screen they
+  // describe is the screen on display.
+  const [arrival, setArrival] = useState<Arrival>(() => outcomeOf(window.location.search))
   const warnings = arrival.canonical === canonical ? arrival.warnings : []
 
   const setQuery = useCallback((change: Partial<QueryState>, options?: { replace?: boolean }) => {
-    // And dropped for good the moment the visitor changes something, which the
-    // comparison above cannot do on its own: clearing a filter can land back on the
-    // arrival's own link, and a notice about the link someone followed must not
-    // return once they have been somewhere else. `OVER` is the discarded state,
-    // because `null` matches no link. This is the only in-page navigation - every
-    // other control is a real `<a href="?...">`, which loads the document again and
-    // captures the new arrival on the way - so it is the only place the drop belongs.
-    setArrival(OVER)
     const next = serializeQuery(updateQuery(parseQuery(window.location.search).state, change))
+    // A change the visitor makes is captured the same way an incoming link is, because
+    // it can be unusable in exactly the same ways: typing a shortest length above the
+    // current longest one writes a range the sanitiser drops, and it must not be
+    // dropped in silence. Recapturing is also what retires the previous notice, which
+    // the comparison above cannot do on its own - clearing a filter can land back on
+    // the earlier link, and a notice about it must not return once the visitor has been
+    // somewhere else. This is the only in-page navigation; every other control is a
+    // real `<a href="?...">`, which loads the document again and captures the new link
+    // on the way.
+    setArrival(outcomeOf(next))
     navigate(next, options?.replace === true)
   }, [])
 

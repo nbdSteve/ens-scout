@@ -1,5 +1,6 @@
 import { readdir, readFile } from 'node:fs/promises'
 import { join, relative } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { expect, test } from '@playwright/test'
 
 /**
@@ -17,7 +18,13 @@ import { expect, test } from '@playwright/test'
  * project of its own instead of repeating it at every width.
  */
 
-const DIST = new URL('../../dist/', import.meta.url).pathname
+/*
+ * `fileURLToPath`, not `URL.pathname`. The latter keeps the URL's leading slash, so on
+ * Windows it yields `/C:/.../dist/`, which no filesystem call will open - and the
+ * documented workflow for this package is PowerShell. `vite.config.ts` resolves its own
+ * paths the same way.
+ */
+const DIST = fileURLToPath(new URL('../../dist/', import.meta.url))
 
 /** Every built file, as a path relative to `dist/` paired with its text. */
 async function builtFiles(): Promise<readonly (readonly [string, string])[]> {

@@ -1,5 +1,5 @@
 /**
- * Text measurement.
+ * Text measurement and ordering.
  *
  * A `.eth` label is a sequence of characters, not of UTF-16 units, and
  * `names.Normalize` deliberately accepts non-ASCII labels. Measuring with
@@ -11,4 +11,44 @@ export function codePointLength(text: string): number {
   // `Array.from` iterates a string by code point, which is the whole reason for
   // not reading `String.prototype.length`.
   return Array.from(text).length
+}
+
+/**
+ * Compares two names the way the publisher ordered them.
+ *
+ * `internal/snapshot` sorts with Go's string comparison, which is UTF-8 byte order,
+ * and JavaScript's `<` compares UTF-16 code units. The two agree on every basic-plane
+ * character and disagree the moment a label carries one outside it: a surrogate pair
+ * begins at U+D800, so the browser calls `'\u{1F680}.eth'` smaller than `'豈.eth'`
+ * while the snapshot sorts them the other way round. Left alone, that rejects a
+ * perfectly canonical snapshot as out of order, and where it does parse it presents an
+ * order the publisher never wrote.
+ *
+ * Comparing code point by code point is what restores the publisher's order, because
+ * UTF-8 byte order and code point order are the same order. Emoji labels are ordinary
+ * in ENS, so this is the difference between reading a valid snapshot and refusing one.
+ */
+export function compareNames(left: string, right: string): number {
+  if (left === right) {
+    return 0
+  }
+  // The string iterator yields whole code points, which is what makes the surrogate
+  // pair a single value rather than two units that sort below U+E000.
+  const a = left[Symbol.iterator]()
+  const b = right[Symbol.iterator]()
+  for (;;) {
+    const x = a.next()
+    const y = b.next()
+    if (x.done === true) {
+      return y.done === true ? 0 : -1
+    }
+    if (y.done === true) {
+      return 1
+    }
+    const cx = x.value.codePointAt(0) ?? 0
+    const cy = y.value.codePointAt(0) ?? 0
+    if (cx !== cy) {
+      return cx < cy ? -1 : 1
+    }
+  }
 }

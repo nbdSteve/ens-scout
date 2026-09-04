@@ -154,6 +154,26 @@ export function App({ config = appConfig, deps }: AppProps): ReactNode {
               </Notice>
             )}
 
+            {/*
+             * A list filter that could not be honoured. `filterResults` returns every
+             * row when attribution cannot be verified, so without this the page would
+             * show the whole snapshot as though the filter had applied - and the only
+             * explanation would be inside a disclosure that is closed by default.
+             */}
+            {query.list !== null && attribution !== null && !attribution.available && (
+              <Notice alert tone="warn" title="The source list filter could not be applied">
+                <p>
+                  This link asks for the list <span className="mono">{query.list}</span>, but this
+                  snapshot does not record which list each name came from, so every name is shown
+                  rather than that list alone. Reason:{' '}
+                  {attribution.reason ?? 'attribution could not be verified'}.
+                </p>
+                <p>
+                  <a href={hrefFor({ list: null })}>Show every list instead</a>
+                </p>
+              </Notice>
+            )}
+
             {store.failure !== null && store.snapshot !== null && (
               <Notice alert tone="warn" title="Showing a stored copy">
                 <p>

@@ -37,7 +37,7 @@ function Harness({
   snapshot: Snapshot
   attribution?: Attribution
 }): ReactNode {
-  const { query, setQuery, hrefFor } = useUrlState()
+  const { query, warnings, setQuery, hrefFor } = useUrlState()
   const resolved = attribution ?? deriveAttribution(snapshot.metadata.sources, snapshot.results)
   const context = { sourceIdByName: resolved.available ? resolved.sourceIdByName : null }
   const page = applyQuery(snapshot.results, query, context)
@@ -46,6 +46,17 @@ function Harness({
       <p role="status">
         {page.total} {page.total === 1 ? 'name matches' : 'names match'}
       </p>
+      {/* Rendered here for the same reason the count is: `App` puts the advisories
+          above the list, and a control that writes a link the sanitiser cannot honour
+          has to be able to say so. Without it this harness would pass on a page that
+          dropped a filter in silence. */}
+      {warnings.length > 0 && (
+        <ul role="alert">
+          {warnings.map((warning) => (
+            <li key={warning}>{warning}</li>
+          ))}
+        </ul>
+      )}
       <Toolbar
         attribution={resolved}
         query={query}
@@ -157,6 +168,43 @@ describe('Toolbar length range', () => {
   it('drops an inverted range from the link and says so', () => {
     mount('?view=all&min=9&max=4')
     expect(window.location.search).toBe('?view=all')
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'Ignored a length range in the link whose shortest was above its longest.',
+    )
+  })
+
+  it('says so when the visitor types a shortest length above the longest', async () => {
+    const user = userEvent.setup()
+    // A longest length the visitor deliberately set, so there is something for the
+    // next keystroke to contradict.
+    mount('?view=all&max=5')
+
+    await user.type(screen.getByLabelText('Shortest label length'), '9')
+
+    /*
+     * The range is dropped, the same way an incoming link's would be - but the visitor
+     * is told. This used to be the one path where the sanitiser swallowed a filter in
+     * silence: both boxes blanked themselves, the longest length they had chosen was
+     * gone, and nothing on the page said why.
+     */
+    expectCanonicalLink('?view=all')
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'Ignored a length range in the link whose shortest was above its longest.',
+    )
+  })
+
+  it('retires the explanation once the visitor types something usable', async () => {
+    const user = userEvent.setup()
+    mount('?view=all&max=5')
+
+    await user.type(screen.getByLabelText('Shortest label length'), '9')
+    expect(screen.getByRole('alert')).toBeInTheDocument()
+
+    // The box blanked itself when the range was dropped, so this is the whole value.
+    await user.type(screen.getByLabelText('Shortest label length'), '3')
+
+    expectCanonicalLink('?view=all&min=3')
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
   })
 })
 

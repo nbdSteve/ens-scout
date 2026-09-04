@@ -1,6 +1,12 @@
 import { expect, test, type Page } from '@playwright/test'
 
-import { OPTICAL_PROPERTIES } from '../../src/optics/ambient'
+import {
+  DESKTOP_BASE,
+  MOBILE_BASE,
+  MOBILE_QUERY,
+  OPTICAL_PROPERTIES,
+  staticFrame,
+} from '../../src/optics/ambient'
 import { SCANNED_AT, SECOND, visit } from './support'
 
 /**
@@ -24,6 +30,17 @@ function optics(page: Page): Promise<string[]> {
     const style = getComputedStyle(document.documentElement)
     return properties.map((property) => style.getPropertyValue(property).trim())
   }, OPTICAL_PROPERTIES)
+}
+
+/**
+ * The same seven as numbers, with their units dropped.
+ *
+ * The stylesheet's reduced-motion pins and `writeFrame` spell the same value
+ * differently - `1` against `1.000`, `212deg` against `212.0deg` - so a string
+ * comparison between them would fail on formatting rather than on geometry.
+ */
+async function opticalNumbers(page: Page): Promise<number[]> {
+  return (await optics(page)).map((value) => Number.parseFloat(value))
 }
 
 test('the background never reacts to the pointer, the hover target, or the focused name', async ({
@@ -117,11 +134,32 @@ test.describe('with reduced motion', () => {
 
     expect(await optics(page), 'the light moved for a visitor who asked for none').toEqual(before)
 
-    // The still is a deliberate composition, not a paused one: the glass is at its
-    // rest angle and the refraction is fully closed. A half-turned glass or a
-    // part-open refraction would read as an animation someone had stalled.
-    const [, , , , cf, sep] = before
-    expect({ cf, sep }).toEqual({ cf: '212deg', sep: '1' })
+    /*
+     * And it is frozen at the composition the loop itself would hold, not at some
+     * other one. The stylesheet pins all seven as `!important` literals so the page is
+     * static before any script runs, which duplicates `ambient.ts` with nothing joining
+     * the two: moving a base point would leave a reduced-motion visitor on the old
+     * geometry, with `--ba` no longer the angle between the two points, and no test
+     * would notice. Comparing against `staticFrame` is that join.
+     *
+     * The base is chosen by the query the stylesheet and the loop both use, so this
+     * holds at every width the suite runs at rather than only on the desktop.
+     */
+    const base = (await page.evaluate((query) => window.matchMedia(query).matches, MOBILE_QUERY))
+      ? MOBILE_BASE
+      : DESKTOP_BASE
+    const frame = staticFrame(base)
+    const expected = [frame.lx, frame.ly, frame.cx, frame.cy, frame.cf, frame.sep, frame.ba]
+
+    // To two decimals, which is the coarsest of the roundings `writeFrame` applies, so
+    // the comparison is of geometry rather than of how each side spells it.
+    const label = (values: readonly number[]): string[] =>
+      values.map((value, index) => `${OPTICAL_PROPERTIES[index] ?? '?'} ${value.toFixed(2)}`)
+
+    expect(
+      label(await opticalNumbers(page)),
+      'the frozen composition is not the one `staticFrame` defines',
+    ).toEqual(label(expected))
   })
 })
 

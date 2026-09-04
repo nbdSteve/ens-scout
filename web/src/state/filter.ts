@@ -1,4 +1,4 @@
-import { codePointLength } from '../format/text'
+import { codePointLength, compareNames } from '../format/text'
 import type { Status } from '../snapshot/contract'
 import type { SnapshotResult } from '../snapshot/types'
 import { PAGE_SIZE, type QueryState } from './query'
@@ -28,10 +28,11 @@ function sortKey(result: SnapshotResult, sort: SortId): Date | null {
 }
 
 /**
- * Sorts a copy. Names are compared byte-wise, matching the snapshot's own
- * canonical order, and a name with no value for the chosen sort goes last in
- * both directions: a missing expiry is not an early expiry, and burying those
- * rows under the ones the visitor asked to see is the honest placement.
+ * Sorts a copy. Names go through `compareNames`, which is the snapshot's own
+ * canonical order rather than the browser's UTF-16 one, so the list a visitor reads
+ * is the order that was published. A name with no value for the chosen sort goes
+ * last in both directions: a missing expiry is not an early expiry, and burying
+ * those rows under the ones the visitor asked to see is the honest placement.
  */
 export function sortResults(
   results: readonly SnapshotResult[],
@@ -55,10 +56,7 @@ export function sortResults(
     }
     // Name is the tie-break as well as a sort, which makes every order total and
     // therefore stable across renders.
-    if (left.name === right.name) {
-      return 0
-    }
-    return (left.name < right.name ? -1 : 1) * sign
+    return compareNames(left.name, right.name) * sign
   })
 }
 
@@ -96,8 +94,9 @@ export function filterResults(
     }
     if (query.list !== null) {
       // With no verified attribution the filter cannot be honoured. It is not
-      // silently ignored either: the caller reports that the link named a list
-      // this snapshot cannot resolve.
+      // silently ignored either: `App` raises an advisory above the list saying the
+      // link named a list this snapshot cannot resolve, so the full set of rows is
+      // never mistaken for the filtered one.
       if (context.sourceIdByName === null) {
         return true
       }

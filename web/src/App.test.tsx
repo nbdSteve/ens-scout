@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { App } from './App'
 import type { AppConfig } from './config/env'
+import type { SnapshotDocument } from './snapshot/types'
 import type { SnapshotDeps } from './state/useSnapshot'
 import { buildLatestDocument, buildSnapshotDocument, SCANNED_AT } from './test/factory'
 
@@ -122,6 +123,60 @@ describe('App default view', () => {
 
     await user.type(screen.getByLabelText('Search names'), 'a')
 
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  })
+})
+
+describe('App list filter that cannot be honoured', () => {
+  /**
+   * The same five names, but the source lists no longer state a label length, so
+   * `deriveAttribution` cannot prove which list each name came from and refuses.
+   * `filterResults` then admits every row for a `?list=` link, which is the case the
+   * advisory exists for.
+   */
+  const UNATTRIBUTABLE: SnapshotDocument = {
+    ...DOCUMENT,
+    metadata: {
+      ...DOCUMENT.metadata,
+      sources: [{ id: 'wordlist', path: 'data/words/wordlist.txt', cadence: 'daily', names: 5 }],
+    },
+  }
+
+  async function mountUnattributable(search: string): Promise<void> {
+    window.history.replaceState(null, '', `/${search}`)
+    render(
+      <App
+        config={CONFIG}
+        deps={{
+          loadFixture: () =>
+            Promise.resolve({
+              snapshot: UNATTRIBUTABLE,
+              latest: buildLatestDocument(UNATTRIBUTABLE),
+            }),
+          storage: null,
+        }}
+      />,
+    )
+    await screen.findByRole('table')
+  }
+
+  it('says the list filter was not applied, rather than showing every name as if it had', async () => {
+    await mountUnattributable(`?view=all&list=four-letters&now=${NOW.toISOString().slice(0, 19)}Z`)
+
+    const notice = screen.getByRole('alert')
+    expect(notice).toHaveTextContent('This link asks for the list four-letters')
+    expect(notice).toHaveTextContent('every name is shown rather than that list alone')
+    expect(
+      within(notice).getByRole('link', { name: 'Show every list instead' }),
+    ).toBeInTheDocument()
+
+    // And the rows really are the whole snapshot, which is what makes the advisory
+    // necessary rather than merely tidy.
+    expect(screen.getAllByRole('rowheader')).toHaveLength(5)
+  })
+
+  it('raises nothing when no list was asked for', async () => {
+    await mountUnattributable(`?view=all&now=${NOW.toISOString().slice(0, 19)}Z`)
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
   })
 })

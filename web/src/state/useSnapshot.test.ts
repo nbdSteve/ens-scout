@@ -209,6 +209,36 @@ describe('useSnapshot against a read API', () => {
     expect(result.current.snapshot?.metadata.names).toBe(4)
   })
 
+  it('keeps the stored snapshot when the API answers with one it cannot resolve', async () => {
+    /*
+     * The scan time is the wrong shape - a space where the publisher writes `T` - and
+     * no pointer route answers, so nothing else forces that string through a check.
+     * The local copy is a visitor's offline fallback: replacing it with a payload the
+     * page cannot render would leave the next offline visit on the error page instead
+     * of on the scan they already had.
+     */
+    const good = cacheEntry('"abc"')
+    const storage = memoryStorage({ [CACHE_KEY]: good })
+    const document = buildSnapshotDocument()
+    const { result } = render(API_CONFIG, {
+      storage,
+      fetchImpl: routedFetch({
+        snapshot: () =>
+          jsonResponse({
+            ...document,
+            metadata: { ...document.metadata, scanned_at: '2026-03-01 12:00:00' },
+          }),
+      }),
+    })
+
+    await waitFor(() => {
+      expect(result.current.failure).not.toBeNull()
+    })
+    expect(result.current.failure?.kind).toBe('malformed')
+    expect(result.current.origin).toBe('cache')
+    expect(storage.getItem(CACHE_KEY)).toBe(good)
+  })
+
   it('deletes a stored entry this build cannot read', async () => {
     const storage = memoryStorage({ [CACHE_KEY]: '{"stored_at":"2026-03-01T13:00:00Z"}' })
     const snapshot = buildSnapshotDocument()

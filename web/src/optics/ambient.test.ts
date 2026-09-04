@@ -12,44 +12,56 @@ import type * as Ambient from './ambient'
  * reference count need one.
  */
 
-interface FakeMediaQueryList {
+/**
+ * One media query's state, and every `MediaQueryList` handed out for it.
+ *
+ * `window.matchMedia` returns a brand-new object on every call, and each object keeps
+ * its own listener list while reporting the same `matches`. The fake reproduces that
+ * rather than sharing one listener set per query string: sharing it would make a
+ * listener removed from the wrong object look removed, which is exactly the mistake
+ * this file has to be able to catch.
+ */
+interface FakeMedia {
   matches: boolean
-  readonly media: string
-  readonly listeners: Set<() => void>
+  readonly instances: { readonly listeners: Set<() => void> }[]
 }
 
-const lists = new Map<string, FakeMediaQueryList>()
+const lists = new Map<string, FakeMedia>()
 
 /** Media queries are the loop's only input besides the clock, so they are the fake. */
 function stubMedia(matching: readonly string[]): void {
   lists.clear()
   vi.stubGlobal('matchMedia', (media: string): MediaQueryList => {
-    let list = lists.get(media)
-    if (list === undefined) {
-      list = { matches: matching.includes(media), media, listeners: new Set() }
-      lists.set(media, list)
+    let entry = lists.get(media)
+    if (entry === undefined) {
+      entry = { matches: matching.includes(media), instances: [] }
+      lists.set(media, entry)
     }
-    const found = list
+    const found = entry
+    const instance = { listeners: new Set<() => void>() }
+    found.instances.push(instance)
     return {
       get matches() {
         return found.matches
       },
       media,
-      addEventListener: (_type: string, listener: () => void) => found.listeners.add(listener),
+      addEventListener: (_type: string, listener: () => void) => instance.listeners.add(listener),
       removeEventListener: (_type: string, listener: () => void) =>
-        found.listeners.delete(listener),
+        instance.listeners.delete(listener),
     } as unknown as MediaQueryList
   })
 }
 
 function setMedia(media: string, matches: boolean): void {
-  const list = lists.get(media)
-  if (list === undefined) {
+  const entry = lists.get(media)
+  if (entry === undefined) {
     throw new Error(`nothing has asked about ${media} yet`)
   }
-  list.matches = matches
-  for (const listener of list.listeners) {
-    listener()
+  entry.matches = matches
+  for (const instance of entry.instances) {
+    for (const listener of instance.listeners) {
+      listener()
+    }
   }
 }
 
@@ -284,6 +296,22 @@ describe('the loop reference count', () => {
     expect(() => {
       stopAmbient()
     }).not.toThrow()
+  })
+
+  it('stops answering the motion preference once it has been released', async () => {
+    const { REDUCED_MOTION_QUERY, startAmbient, stopAmbient } = await load()
+    startAmbient()
+    vi.advanceTimersByTime(FRAME_MS * 120)
+    stopAmbient()
+    const stopped = OPTICAL_PROPERTIES.map((property) => read(property))
+    expect(read('--lx')).not.toBe('1272.0px')
+
+    // A loop nobody holds must write nothing at all. Turning the preference on would
+    // otherwise freeze the light into the static composition, which is a page that has
+    // been torn down still painting over whatever replaced it.
+    setMedia(REDUCED_MOTION_QUERY, true)
+
+    expect(OPTICAL_PROPERTIES.map((property) => read(property))).toEqual(stopped)
   })
 })
 

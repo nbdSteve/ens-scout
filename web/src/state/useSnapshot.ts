@@ -255,10 +255,17 @@ export function useSnapshot(config: AppConfig, deps: SnapshotDeps = {}): Snapsho
           return
         }
 
+        // Built before it is stored, never after. The cache is the offline fallback,
+        // so the rule it states - that only a snapshot which has passed the full
+        // parser is ever written - has to include this last step. Writing first would
+        // let a payload that parses but cannot be resolved replace a good local copy,
+        // and the visitor who comes back offline would get the error page instead of
+        // the scan they had.
+        const snapshot = toSnapshot(outcome.snapshot, outcome.latest)
         writeCache(storage, outcome, clock())
         settle({
           phase: 'ready',
-          snapshot: toSnapshot(outcome.snapshot, outcome.latest),
+          snapshot,
           origin: 'network',
           cachedAt: null,
           failure: null,

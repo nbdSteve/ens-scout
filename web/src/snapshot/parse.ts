@@ -1,3 +1,4 @@
+import { compareNames } from '../format/text'
 import {
   CADENCES,
   FORMAT_VERSION,
@@ -216,7 +217,8 @@ function parseSources(value: unknown, what: string): SourceListDocument[] {
     }
     // The publisher sorts source lists by id, so a client that renders them in
     // wire order gets a stable order for free. Out-of-order input is malformed.
-    if (index > 0 && id <= previousId) {
+    // Compared the publisher's way, for the reason `compareNames` documents.
+    if (index > 0 && compareNames(id, previousId) <= 0) {
       fail(
         `${what} must be sorted by id without duplicates: ${JSON.stringify(id)} follows ${JSON.stringify(previousId)}`,
       )
@@ -267,7 +269,9 @@ function parseResults(value: unknown, what: string): ResultDocument[] {
     asLabel(name, `${where}.name`)
     // Canonical order is byte-wise ascending name with no duplicates, which is
     // what lets the browser sort, filter, and page without re-deriving identity.
-    if (index > 0 && name <= previousName) {
+    // `compareNames` is that order; `<=` is UTF-16 order and would refuse a
+    // canonical snapshot the moment a label reached past the basic plane.
+    if (index > 0 && compareNames(name, previousName) <= 0) {
       fail(
         `${what} must be sorted by name without duplicates: ${JSON.stringify(name)} follows ${JSON.stringify(previousName)}`,
       )
@@ -316,6 +320,16 @@ export function parseSnapshotDocument(value: unknown): SnapshotDocument {
     throw new SnapshotVersionError(version)
   }
 
+  /*
+   * Validated here as an instant and kept as the wire string, the same way a result's
+   * expiry is. `toSnapshot` parses it again, and a document that passed this function
+   * is treated as accepted from then on - it is what gets stored locally as the offline
+   * fallback. Checking it only in `toSnapshot` left a payload that parsed but could not
+   * resolve, which is a document nothing downstream expects to have to cope with.
+   */
+  const scannedAt = asString(metadata['scanned_at'], 'snapshot.metadata.scanned_at')
+  asInstant(scannedAt, 'snapshot.metadata.scanned_at')
+
   const sources = parseSources(metadata['sources'], 'snapshot.metadata.sources')
   const scanAge = parseScanAge(
     metadata['scan_age'],
@@ -357,7 +371,7 @@ export function parseSnapshotDocument(value: unknown): SnapshotDocument {
     metadata: {
       format_version: version,
       snapshot_id: parseSnapshotId(metadata['snapshot_id'], 'snapshot.metadata.snapshot_id'),
-      scanned_at: asString(metadata['scanned_at'], 'snapshot.metadata.scanned_at'),
+      scanned_at: scannedAt,
       sources,
       scan_age: scanAge,
       names,

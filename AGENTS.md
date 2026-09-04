@@ -592,13 +592,38 @@ never the ENS availability authority.
   permanently stale against a real clock, so the simulated clock is how the page
   is demonstrated. A page that quietly used a different time than it displayed
   would be worse than a stale one.
-- The list is the page. Nothing explanatory goes above it: the first screen is a
-  header, the view's title with its count, one trust line, the view tabs, search
-  with the length pair, and then names. Provenance, per-list schedules, lifecycle
-  wording, and method all live in the one disclosure below the results. That budget
-  is measured at 1440x900 by `the first screen is the answer, not an introduction`,
-  so anything new above the list is charged against a name row. The `preview`
-  fixture holds two available names, which is why that test asks for `view=all`.
+- The list is the page. Nothing explanatory goes above it: the first screen is the
+  view's title with its count, one trust line, the view tabs, search with the length
+  pair, and then names. Provenance, per-list schedules, lifecycle wording, and method
+  all live in the one disclosure below the results. That budget is measured at 1440x900
+  by `the first screen is the answer, not an introduction`, so anything new above the
+  list is charged against a name row. The `preview` fixture holds two available names,
+  which is why that test asks for `view=all`.
+- The page carries no brand and no header, and both are tested rather than merely
+  absent. There is deliberately no `banner` landmark, so `accessibility.spec.ts` asserts
+  a count of zero: an empty header landmark would send a screen-reader user to a dead
+  stop. The favicon deliberately carries no `role` and no `aria-label`, because the
+  browser already labels the tab with the document title and an accessible name there
+  was how the product name kept being read out.
+- The top-left 240 by 120 CSS pixel area holds nothing but the skip link while it has
+  focus, and the optical layers behind the page. Clear it downwards with block-start
+  padding, never sideways with an inline indent: the content column starts at x=224 at
+  1440px and at x=42 at 834px, so an indent satisfies the rule on a desktop and
+  silently fails on a tablet. `--corner-clear` is a fixed pixel length rather than a
+  rem on purpose, so a larger root font size cannot satisfy it and a smaller one cannot
+  break it.
+- The optical background in `src/optics/` is ambient and time-driven only. It reads no
+  pointer, hover, focus, selected name, or composer coordinate, and it imports nothing
+  from `components/` or `state/`, so a coordinate is unavailable rather than merely
+  unused. Reduced motion freezes it in a deliberate static composition rather than a
+  stalled one, and `index.css` pins all seven custom properties so the page is static
+  before any script runs; `constellation.spec.ts` compares those pins numerically
+  against `staticFrame`, because nothing else joins the stylesheet to `ambient.ts`.
+- Order the names with `compareNames`, never with `<` or `localeCompare`. The publisher
+  sorts with Go's byte-wise string comparison and JavaScript compares UTF-16 code
+  units, so the two disagree the moment a label reaches past the basic plane - which
+  would refuse a canonical snapshot as out of order, and elsewhere present an order
+  that was never published.
 - Keep the 320px Playwright project a desktop context. A phone context honours
   the viewport meta tag, so Chrome answers content that is too wide by zooming
   out rather than scrolling, and a reflow check passes on a layout that really

@@ -276,9 +276,16 @@ function onVisibilityChange(): void {
   }
 }
 
-function media(): MediaQueryList[] {
-  return [window.matchMedia(REDUCED_MOTION_QUERY), window.matchMedia(MOBILE_QUERY)]
-}
+/**
+ * The two media lists the loop is currently listening to, empty while it is stopped.
+ *
+ * They are held rather than asked for twice because `window.matchMedia` returns a new
+ * `MediaQueryList` on every call, and each one keeps its own listener list. Asking
+ * again on the way out would hand back objects nothing had ever registered on, so the
+ * removal would succeed and remove nothing, and a stopped loop would keep answering
+ * preference changes for the lifetime of the document.
+ */
+let watched: MediaQueryList[] = []
 
 /**
  * Starts the loop, or joins one already running.
@@ -292,7 +299,8 @@ export function startAmbient(): void {
   if (started > 1) {
     return
   }
-  for (const query of media()) {
+  watched = [window.matchMedia(REDUCED_MOTION_QUERY), window.matchMedia(MOBILE_QUERY)]
+  for (const query of watched) {
     query.addEventListener('change', onPreferenceChange)
   }
   document.addEventListener('visibilitychange', onVisibilityChange)
@@ -315,9 +323,10 @@ export function stopAmbient(): void {
   if (started > 0) {
     return
   }
-  for (const query of media()) {
+  for (const query of watched) {
     query.removeEventListener('change', onPreferenceChange)
   }
+  watched = []
   document.removeEventListener('visibilitychange', onVisibilityChange)
   cancel()
 }
