@@ -40,7 +40,7 @@ import { VIEWS, viewOrDefault } from './state/views'
  * out of sight. A caveat nobody scrolls past the names to read is not a caveat.
  *
  * Anything that is both conditional and about trust stays in the advisories block
- * above the list: a simulated clock, a link that could not be applied in full, a
+ * above the list: a simulated clock, part of the query that could not be applied, a
  * stored copy shown because the API could not be reached, an out-of-date list. Each
  * is rare, each changes how the rows below should be read, and none of them is
  * something to find later.
@@ -144,8 +144,14 @@ export function App({ config = appConfig, deps }: AppProps): ReactNode {
               <SimulatedClockNotice now={now} realHref={hrefFor({ now: null })} />
             )}
 
+            {/*
+             * Titled without naming a link, because a keystroke reaches this block too:
+             * typing a shortest length above the longest is reported here rather than
+             * quietly dropped, and a visitor who never followed a link must not be told
+             * one was at fault.
+             */}
             {warnings.length > 0 && (
-              <Notice alert tone="warn" title="Part of that link could not be applied">
+              <Notice alert tone="warn" title="Not applied">
                 <ul className="notice__list">
                   {warnings.map((warning) => (
                     <li key={warning}>{warning}</li>

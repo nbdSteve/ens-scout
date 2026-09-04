@@ -165,46 +165,58 @@ describe('Toolbar length range', () => {
     expect(screen.getByLabelText('Shortest label length')).toHaveValue(null)
   })
 
-  it('drops an inverted range from the link and says so', () => {
+  it('keeps a range that arrived inverted in a link, and says it is not applied', () => {
     mount('?view=all&min=9&max=4')
-    expect(window.location.search).toBe('?view=all')
+
+    // What the link asked for is what the boxes and the address bar show. Repairing it
+    // to nothing would leave the visitor looking at a link that no longer says what
+    // they were sent.
+    expectCanonicalLink('?view=all&min=9&max=4')
+    expect(screen.getByLabelText('Shortest label length')).toHaveValue(9)
+    expect(screen.getByLabelText('Longest label length')).toHaveValue(4)
     expect(screen.getByRole('alert')).toHaveTextContent(
-      'Ignored a length range in the link whose shortest was above its longest.',
+      'Length range not applied: shortest 9 is above longest 4.',
     )
+    // Not applied means not applied: the four names the view holds, not none of them.
+    expect(screen.getByRole('status')).toHaveTextContent('4 names match')
   })
 
-  it('says so when the visitor types a shortest length above the longest', async () => {
+  it('keeps the longest length the visitor already set when they type a taller shortest', async () => {
     const user = userEvent.setup()
-    // A longest length the visitor deliberately set, so there is something for the
-    // next keystroke to contradict.
-    mount('?view=all&max=5')
+    // A longest length that is really filtering, so the count is evidence of whether
+    // the range is applied.
+    mount('?view=all&max=4')
+    expect(screen.getByRole('status')).toHaveTextContent('3 names match')
 
     await user.type(screen.getByLabelText('Shortest label length'), '9')
 
     /*
-     * The range is dropped, the same way an incoming link's would be - but the visitor
-     * is told. This used to be the one path where the sanitiser swallowed a filter in
-     * silence: both boxes blanked themselves, the longest length they had chosen was
-     * gone, and nothing on the page said why.
+     * Both bounds survive, in the boxes and in the link. The visitor never has to go
+     * and find the longest length again because of what they typed into the other box,
+     * and the range they have just made is reported rather than dropped in silence.
      */
-    expectCanonicalLink('?view=all')
+    expectCanonicalLink('?view=all&min=9&max=4')
+    expect(screen.getByLabelText('Shortest label length')).toHaveValue(9)
+    expect(screen.getByLabelText('Longest label length')).toHaveValue(4)
     expect(screen.getByRole('alert')).toHaveTextContent(
-      'Ignored a length range in the link whose shortest was above its longest.',
+      'Length range not applied: shortest 9 is above longest 4.',
     )
+    expect(screen.getByRole('status')).toHaveTextContent('4 names match')
   })
 
-  it('retires the explanation once the visitor types something usable', async () => {
+  it('retires the notice, and filters again, once the range reads the right way round', async () => {
     const user = userEvent.setup()
-    mount('?view=all&max=5')
+    mount('?view=all&max=4')
 
     await user.type(screen.getByLabelText('Shortest label length'), '9')
     expect(screen.getByRole('alert')).toBeInTheDocument()
 
-    // The box blanked itself when the range was dropped, so this is the whole value.
+    await user.clear(screen.getByLabelText('Shortest label length'))
     await user.type(screen.getByLabelText('Shortest label length'), '3')
 
-    expectCanonicalLink('?view=all&min=3')
+    expectCanonicalLink('?view=all&min=3&max=4')
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(screen.getByRole('status')).toHaveTextContent('3 names match')
   })
 })
 

@@ -1,7 +1,7 @@
 import { codePointLength, compareNames } from '../format/text'
 import type { Status } from '../snapshot/contract'
 import type { SnapshotResult } from '../snapshot/types'
-import { PAGE_SIZE, type QueryState } from './query'
+import { isInvertedRange, PAGE_SIZE, type QueryState } from './query'
 import { viewOrDefault, type SortDirection, type SortId } from './views'
 
 /**
@@ -74,6 +74,10 @@ export function filterResults(
   const view = viewOrDefault(query.view)
   const viewStatuses: readonly Status[] = view.statuses
   const chosen: readonly Status[] = query.statuses
+  // A range whose bounds cross is reported instead of applied. Applying it would admit
+  // no row at all, so the visitor would be shown an empty list and left to guess which
+  // of their filters emptied it; both bounds are kept so neither has to be retyped.
+  const byLength = !isInvertedRange(query.length)
 
   return results.filter((result) => {
     if (viewStatuses.length > 0 && !viewStatuses.includes(result.status)) {
@@ -85,12 +89,14 @@ export function filterResults(
     if (query.search !== '' && !result.label.includes(query.search)) {
       return false
     }
-    const length = labelLength(result)
-    if (query.length.min !== null && length < query.length.min) {
-      return false
-    }
-    if (query.length.max !== null && length > query.length.max) {
-      return false
+    if (byLength) {
+      const length = labelLength(result)
+      if (query.length.min !== null && length < query.length.min) {
+        return false
+      }
+      if (query.length.max !== null && length > query.length.max) {
+        return false
+      }
     }
     if (query.list !== null) {
       // With no verified attribution the filter cannot be honoured. It is not

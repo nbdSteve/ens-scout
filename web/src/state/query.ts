@@ -35,6 +35,29 @@ export interface LengthRange {
   readonly max: number | null
 }
 
+/** A range whose bounds cross, so no label length can satisfy both of them. */
+export interface InvertedRange extends LengthRange {
+  readonly min: number
+  readonly max: number
+}
+
+/**
+ * Whether a range names no label length at all.
+ *
+ * One predicate, because the parser reports this state and the filter has to skip
+ * it. Two copies of the condition could disagree, and either way round the visitor
+ * loses: a range reported as not applied but applied anyway empties the list, and a
+ * range applied without being reported empties it with no explanation.
+ *
+ * The bounds themselves are kept either way. A visitor who has set a longest length
+ * and then types a shortest above it must not have to go and find the first value
+ * again, so this is a state the query is allowed to hold rather than one the link
+ * sanitiser silently repairs.
+ */
+export function isInvertedRange(length: LengthRange): length is InvertedRange {
+  return length.min !== null && length.max !== null && length.min > length.max
+}
+
 export interface QueryState {
   readonly view: string
   /** Search text, already lowercased and stripped of a `.eth` suffix. */
@@ -121,9 +144,9 @@ function parseBound(raw: string | null, what: string, warnings: string[]): numbe
 export interface ParsedQuery {
   readonly state: QueryState
   /**
-   * What in the link could not be applied. Shown to the visitor, because a link
-   * that quietly returns a different view than it names is worse than a link
-   * that says which part of it was dropped.
+   * What in the query could not be applied. Shown to the visitor, because a screen
+   * that quietly returns different rows than it was asked for is worse than one that
+   * says which part of the request did not take.
    */
   readonly warnings: readonly string[]
 }
@@ -163,12 +186,17 @@ export function parseQuery(search: string): ParsedQuery {
       ? []
       : STATUSES.filter((s) => requestedStatuses.has(s))
 
-  const min = parseBound(params.get(PARAM.minLength), 'shortest length', warnings)
-  const max = parseBound(params.get(PARAM.maxLength), 'longest length', warnings)
-  let length: LengthRange = { min, max }
-  if (min !== null && max !== null && min > max) {
-    warnings.push('Ignored a length range in the link whose shortest was above its longest.')
-    length = { min: null, max: null }
+  const length: LengthRange = {
+    min: parseBound(params.get(PARAM.minLength), 'shortest length', warnings),
+    max: parseBound(params.get(PARAM.maxLength), 'longest length', warnings),
+  }
+  if (isInvertedRange(length)) {
+    // Named by its values rather than by where they came from, because a keystroke
+    // reaches this the same way a shared link does, and the numbers are what tell the
+    // visitor which of the two bounds to change.
+    warnings.push(
+      `Length range not applied: shortest ${String(length.min)} is above longest ${String(length.max)}.`,
+    )
   }
 
   const rawList = params.get(PARAM.list)

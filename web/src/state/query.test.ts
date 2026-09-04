@@ -3,6 +3,7 @@ import {
   CLEAR_FILTERS,
   DEFAULT_QUERY,
   isFiltered,
+  isInvertedRange,
   parseQuery,
   serializeQuery,
   updateQuery,
@@ -47,6 +48,10 @@ describe('query round trips', () => {
     expect(roundTrip('?view=premium&sort=name')).toBe('?view=premium&sort=name')
   })
 
+  it('round trips a length range whose bounds cross, so neither bound is lost', () => {
+    expect(roundTrip('?min=9&max=3')).toBe('?min=9&max=3')
+  })
+
   it('drops a parameter it does not know rather than carrying it along', () => {
     expect(roundTrip('?q=zap&colour=red')).toBe('?q=zap')
   })
@@ -75,10 +80,24 @@ describe('query parsing of links that cannot be honoured', () => {
     expect(warnings).toEqual([])
   })
 
-  it('drops an inverted length range instead of showing nothing', () => {
+  it('keeps an inverted length range and reports it by its numbers', () => {
     const { state, warnings } = parseQuery('?min=9&max=3')
-    expect(state.length).toEqual({ min: null, max: null })
-    expect(warnings).toEqual([expect.stringContaining('shortest was above its longest')])
+    // Kept, not repaired: the filter skips a range in this state, and a visitor who
+    // set one bound must not have to find it again because they typed the other.
+    expect(state.length).toEqual({ min: 9, max: 3 })
+    expect(isInvertedRange(state.length)).toBe(true)
+    expect(warnings).toEqual(['Length range not applied: shortest 9 is above longest 3.'])
+  })
+
+  it('reports nothing about a range that reads the right way round', () => {
+    const { state, warnings } = parseQuery('?min=3&max=9')
+    expect(isInvertedRange(state.length)).toBe(false)
+    expect(warnings).toEqual([])
+  })
+
+  it('treats a single bound as usable, whichever end it is', () => {
+    expect(isInvertedRange(parseQuery('?min=9').state.length)).toBe(false)
+    expect(isInvertedRange(parseQuery('?max=3').state.length)).toBe(false)
   })
 
   it.each([

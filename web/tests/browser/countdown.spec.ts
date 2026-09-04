@@ -38,10 +38,14 @@ test('the value counts down in real time without touching the status', async ({ 
    * out as six. Pausing makes the fast-forward the only thing that moves the
    * clock. The instant comes from the page rather than from `SCANNED_AT`, because
    * a clock may only ever be moved forward and the page is already past the
-   * instant it was installed at.
+   * instant it was installed at. It is five seconds ahead of the read, not one:
+   * `pauseAt` throws outright on a target the clock has already passed, so a round
+   * trip slower than the cushion would fail the run rather than measure the wrong
+   * number. Which instant it pauses at does not matter, because both samples below
+   * are taken after the pause.
    */
   const loaded = await page.evaluate(() => Date.now())
-  await page.clock.pauseAt(new Date(loaded + SECOND))
+  await page.clock.pauseAt(new Date(loaded + 5 * SECOND))
 
   const before = toSeconds((await value.textContent()) ?? '')
   await page.clock.fastForward(5 * SECOND)

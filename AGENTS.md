@@ -619,6 +619,13 @@ never the ENS availability authority.
   stalled one, and `index.css` pins all seven custom properties so the page is static
   before any script runs; `constellation.spec.ts` compares those pins numerically
   against `staticFrame`, because nothing else joins the stylesheet to `ambient.ts`.
+- A length range whose bounds cross is kept and reported, never repaired. `parseQuery`
+  holds it, `serializeQuery` round-trips it, `isInvertedRange` is the one predicate for
+  it, and `filterResults` skips the length filter rather than applying a range no label
+  can satisfy. Sanitising it to nothing made a visitor retype the bound they had already
+  set, and applying it emptied the list with no explanation. The advisory names the two
+  numbers rather than where they came from, because a keystroke reaches that block on
+  the same path a shared link does.
 - Order the names with `compareNames`, never with `<` or `localeCompare`. The publisher
   sorts with Go's byte-wise string comparison and JavaScript compares UTF-16 code
   units, so the two disagree the moment a label reaches past the basic plane - which
