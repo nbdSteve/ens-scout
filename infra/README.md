@@ -35,7 +35,8 @@ npm run check   # lint, test, and synth: the check to run before a commit
 The bundle is `GOOS=linux GOARCH=arm64 CGO_ENABLED=0` with `-trimpath`, a cleared
 build id, and `-buildvcs=false`, so two builds of the same source produce the same
 bytes and the same CDK asset hash.
-Without that, every `cdk diff` would report a Lambda update that is not one.
+Without that, every `cdk diff` would report a Lambda update that is not one, and a
+real change would then hide among the noise.
 The VCS stamp matters as much as the other two: it records the commit and the
 revision time, and a git worktree stamps a module version a normal clone does not,
 so the same commit built in the two places produced two different asset hashes until
@@ -249,7 +250,8 @@ That grace period is what a Lambda-metric alarm has no way to express, which is 
 gap is left open here instead of approximated: CloudWatch fills a missing datapoint
 according to `treatMissingData` rather than waiting for the window to fill, so an
 `Invocations` alarm that breaches on missing data pages on its own first deploy however
-wide its evaluation window is.
+wide its evaluation window is, and widening that window buys no quiet at all - it only
+doubles detection latency.
 The signal belongs with the operational monitoring work that owns the published-snapshot
 metric.
 

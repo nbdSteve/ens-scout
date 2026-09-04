@@ -466,21 +466,15 @@ section holds only the rules that a change here could quietly break.
   credentials. A synth that resolved the environment from whichever profile is
   logged in would silently describe a different account than the one under review.
 - Keep the scanner bundle reproducible: `-trimpath`, a cleared build id,
-  `-buildvcs=false`, and only `data/words/*.txt` alongside the binary. The CDK asset
-  hash is the content hash, so a bundle that varies between builds makes every
-  `cdk diff` report a Lambda update that is not one, and a real change then hides
-  among the noise. The VCS stamp is the part that is easy to miss, because it varies
-  with how the checkout was made rather than with what is in it: a git worktree
-  stamps the module `(devel)` and a normal clone stamps a pseudo-version, so the same
-  commit built in the two places produced two asset hashes. Any new flag added here
-  has to be judged the same way - does the output depend on the source, or on the
-  machine and checkout that built it.
-  `bundle-scanner.js` exports the argv and the environment it builds so the suite can
-  run them and assert on the values. Matching the script's text instead is worthless
-  here: its own header comment names every flag, so a grep for `-buildvcs=false`
-  passes with the flag deleted from the argv, which is the exact state the flag was
-  added to prevent. `npm test` must never compile the binary, for the fixture reason
-  below.
+  `-buildvcs=false`, and only `data/words/*.txt` alongside the binary, because the CDK
+  asset hash is the content hash. The VCS stamp is the part that is easy to miss, since
+  it varies with how the checkout was made rather than with what is in it: a git
+  worktree and a normal clone of the same commit stamp different module versions, so
+  they produced two asset hashes. Judge any flag added here the same way - does the
+  output depend on the source, or on the machine and checkout that built it.
+  Assert the flags by running the argv and environment `bundle-scanner.js` exports,
+  never by matching the script's text, and never compile the binary in `npm test`.
+  `infra/README.md` has the rest, under `Commands` and `What the tests assert`.
 - Fail the bundle when a list `internal/scanner.Lists` names is absent from
   `data/words`, reading the required names out of the Go definition. A glob that only
   refuses an empty directory packages a bundle missing one list, deploys cleanly, and
@@ -526,54 +520,34 @@ section holds only the rules that a change here could quietly break.
   The synthesized template must hold exactly one `{{resolve:secretsmanager:` and no
   secret resource, because a second reference is a second place the credential is
   materialized and those places are descriptions, tags, and alarm text.
-- Bound retention wherever the stack creates something that accumulates, and refuse
-  an unsupported log-retention day count instead of rounding it. Rounding up keeps
-  records longer than the deployment asked for and rounding down discards them early.
-  Refuse `RetentionDays.INFINITE` too, and refuse it by meaning rather than by the
-  number: CloudWatch Logs accepts 9999, so neither the positive-integer check nor the
-  enum-membership check catches it, and log volume grows with every invocation, so a
-  group that never expires is the unbounded case this rule exists to prevent. The
-  error names the context key, because that is what an operator has to change.
+- Bound retention wherever the stack creates something that accumulates, and refuse an
+  unsupported log-retention day count rather than rounding it. Refuse
+  `RetentionDays.INFINITE` by meaning rather than by the number: CloudWatch Logs accepts
+  9999, so neither a positive-integer check nor an enum-membership check catches it.
+  `infra/README.md` has the reasoning, under `Configuration`.
 - The undelivered-event queue holds events EventBridge could not deliver to the
   function, and nothing else. The scanner Function must declare no `deadLetterQueue`
-  of its own: Lambda's async `DeadLetterConfig` receives the event for any failed
-  asynchronous invocation, including a scan that ran and returned an error, and
-  nothing consumes this queue, so an ordinary Graph outage would hold
-  `ApproximateNumberOfMessagesVisible` above zero - and latch its alarm - for the
-  queue's whole retention, and a real delivery failure arriving in that window would
-  notify nobody, because an alarm notifies only on a state change. A scan that ran and
-  failed is surfaced by the `Errors` alarm and the log group; that is the accepted
-  trade. Nothing consuming the queue is deliberate for the failure it does keep, so a
-  level alarm is the right shape there. The record it keeps is bounded, not durable:
-  SQS expires the message after `ens-scout:dlqRetentionDays` whether or not anyone
-  acted, the alarm then clears and sends an OK, and that OK is not evidence the event
-  was handled. Do not write it up as persisting until an operator acts, and do not
-  raise the retention to make such a claim true - bounded retention is the deliberate
-  choice here.
-  The role's `sqs:SendMessage` was an implicit grant CDK added for that Function prop,
-  so removing the prop must remove the grant, and a test asserts both.
+  of its own: Lambda's async `DeadLetterConfig` would put a scan that ran and returned
+  an error into the same queue and latch its level alarm for the queue's whole
+  retention. The role's `sqs:SendMessage` was an implicit grant CDK added for that
+  Function prop, so removing the prop must remove the grant, and a test asserts both.
+  The record the queue keeps is bounded, not durable, so no comment or document may
+  write it up as persisting until an operator acts, and raising the retention to make
+  such a claim true is not the fix. `infra/README.md`'s design note on the queue has
+  the reasoning.
 - Every alarm here watches an occurrence, treats missing data as not breaching, and
-  raises on one datapoint, because one error, throttle, or undelivered event is the
-  whole signal. Nothing in this stack detects a schedule that silently stopped firing,
-  and no comment, test name, or document may imply otherwise: a schedule that stops
-  produces no invocation, so none of these metrics records it. `infra/README.md` states
-  the gap and where it belongs.
-  An `Invocations` alarm with `treatMissingData: BREACHING` is the approximation to
-  refuse. CloudWatch fills a missing datapoint per `treatMissingData` when the
-  evaluation range holds fewer real datapoints than `evaluationPeriods`; it does not
-  shrink the window to the periods that have elapsed. A brand-new function has published
-  no datapoint anywhere, so every period fills as breaching and the alarm pages on its
-  own first deploy however wide the window is - widening it to two periods does not buy
-  the quiet, it only doubles detection latency. Closing this properly needs the
-  published-snapshot timestamps, per source, plus an explicit deployment grace period,
-  which is the part a Lambda metric cannot express.
-  If a later change does reintroduce an M-of-N alarm, its test model has to implement
-  the fill rule. The previous model shrank the range instead and so certified a
-  first-deploy quiet the service does not provide; a model that contradicts CloudWatch
-  is worse than no model, because it makes the wrong behaviour look asserted.
-- The chunk recovery window is not configurable from here. `internal/dynamo` derives
-  it from the superseded snapshot's own stale-after threshold, so the only TTL knob in
-  context is the attribute name, which has to match `attrExpiresAt`.
+  raises on one datapoint. Nothing in this stack detects a schedule that silently
+  stopped firing, and no comment, test name, or document may imply otherwise. An
+  `Invocations` alarm with `treatMissingData: BREACHING` is the approximation to refuse,
+  because CloudWatch fills the missing datapoints instead of shrinking the evaluation
+  range to the periods that have elapsed, so the alarm pages on its own first deploy
+  however wide the window is. A test model of any M-of-N alarm has to implement that
+  fill rule; a model that contradicts CloudWatch is worse than no model, because it
+  makes the wrong behaviour look asserted. `infra/README.md`'s design notes on the
+  alarms and on the staleness gap say what closing the gap needs and where it belongs.
+- The chunk recovery window is not configurable from here, so the only TTL knob in
+  context is the attribute name. `infra/README.md`'s design note on chunk retention
+  says why.
 - The stack defines the publisher and nothing else. The read API, the frontend, the
   OIDC deployment role, and the environment protections are later phases of
   `docs/website-plan.md`, and a test asserts their resource types are absent.
