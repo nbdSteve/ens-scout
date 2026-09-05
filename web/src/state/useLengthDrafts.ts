@@ -37,11 +37,15 @@ export interface BoundBox {
    * empty string while the field visibly holds `5.`, so an empty text alone cannot tell an
    * emptied box from an unreadable one.
    *
-   * It has to be observed from the native `input` event rather than from React's
-   * `onChange`, which React dispatches only when the sanitized value changes. In this state
-   * it does not change, and both halves of that were wrong: a `.` typed into an empty box
-   * was never reported at all, and a box emptied out of that state went on claiming its
-   * bound was not applied.
+   * The visitor's own edits have to be observed from the native `input` event rather than from
+   * React's `onChange`, which React dispatches only when the sanitized value changes. In this
+   * state it does not change, and both halves of that were wrong: a `.` typed into an empty box
+   * was never reported at all, and a box emptied out of that state went on claiming its bound
+   * was not applied.
+   *
+   * An event is not the whole answer either, because React writes the field itself when the
+   * committed bound changes. The caller therefore reads the field again after every commit, so
+   * what is set here is always a description of the field and never a memory of an event.
    */
   readonly setUnreadable: (badInput: boolean) => void
   /** This box's message, or null while it is filtering. */
@@ -73,10 +77,12 @@ function useBoundBox(end: BoundEnd, committed: string): BoundBox {
   const advisory = useMemo<BoundAdvisory | null>(() => {
     const trimmed = draft.text.trim()
     /*
-     * An empty text is the only place the validity is consulted, which is what keeps it
-     * from outliving the field it described: any committed value the box follows later -
-     * from a back navigation, a reset link - fills the text and settles the question on
-     * its own.
+     * An empty text is the only place the validity is consulted, because it is the only text
+     * that cannot say for itself whether the field is readable.
+     *
+     * That alone does not keep the flag from outliving the field. A committed value the box
+     * follows later settles it only when that value is not itself empty, so the flag has to be
+     * re-read from the field after every commit rather than left to the event that set it.
      */
     const message =
       trimmed === ''

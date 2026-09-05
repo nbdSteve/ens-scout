@@ -125,9 +125,22 @@ function queryNotAppliedBand(): HTMLElement | null {
  * way. The location moves asynchronously, which is why this waits for it.
  */
 async function goBack(): Promise<void> {
+  await travel(() => {
+    window.history.back()
+  })
+}
+
+/** The forward button, the same way. */
+async function goForward(): Promise<void> {
+  await travel(() => {
+    window.history.forward()
+  })
+}
+
+async function travel(move: () => void): Promise<void> {
   const from = window.location.search
   await act(async () => {
-    window.history.back()
+    move()
     await waitFor(() => {
       expect(window.location.search).not.toBe(from)
     })
@@ -143,6 +156,39 @@ async function goBack(): Promise<void> {
  */
 function unreadable(box: HTMLElement, badInput: boolean): void {
   Object.defineProperty(box, 'validity', { configurable: true, value: { badInput } })
+}
+
+/**
+ * Puts the field in the state, and lets a write out of it the way a browser does.
+ *
+ * Both halves are modelled because both matter here. While the text cannot be read the value
+ * is the empty string and `badInput` is set; any later write to `value` replaces that text and
+ * settles it, which a real Chromium confirms for a write back to the empty string as well as
+ * to a digit. React makes exactly that write whenever the committed bound changes, and it
+ * fires no event while doing so.
+ */
+function holdsUnreadableText(box: HTMLInputElement): void {
+  let unreadableNow = true
+  Object.defineProperty(box, 'validity', {
+    configurable: true,
+    get: () => ({ badInput: unreadableNow }) as ValidityState,
+  })
+  // Whatever descriptor is in place already, which is React's own value tracker, so a write
+  // still reaches it and React still sees the value it wrote.
+  const installed =
+    Object.getOwnPropertyDescriptor(box, 'value') ??
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')
+  Object.defineProperty(box, 'value', {
+    configurable: true,
+    get: () => installed?.get?.call(box) as string,
+    set: (next: string) => {
+      unreadableNow = false
+      installed?.set?.call(box, next)
+    },
+  })
+  // `fireEvent` writes the value through the prototype, which is how it makes React notice a
+  // change - and here it is also the one write that must not settle the state it is creating.
+  fireEvent.input(box, { target: { value: '' } })
 }
 
 /** The link is canonical when parsing and re-serializing it changes nothing. */
@@ -365,6 +411,47 @@ describe('Toolbar length range', () => {
     expect(queryNotAppliedBand()).not.toBeInTheDocument()
     expect(box).toHaveAttribute('aria-invalid', 'false')
   })
+
+  it.each([
+    ['Shortest label length', 'min', 'Shortest', 5, '1 name matches'],
+    ['Longest label length', 'max', 'Longest', 4, '3 names match'],
+  ])(
+    'stops saying so once React empties the %s box itself',
+    async (label, param, end, bound, applied) => {
+      const user = userEvent.setup()
+      /*
+       * The box is emptied by a forward navigation rather than by a keystroke, and the write that
+       * empties it is React's own, which fires no event at all. Nothing below touches the field
+       * after the half-typed character: the visitor presses Back and then Forward, and React
+       * writes the box both times.
+       */
+      mount(`?view=all&${param}=${bound}`)
+      expect(screen.getByRole('status')).toHaveTextContent(applied)
+      // A second history entry to come back from, made by a control that filters nothing.
+      await openMore(user)
+      await user.selectOptions(screen.getByLabelText('Sort by'), 'expiry')
+
+      const box = screen.getByLabelText(label)
+      holdsUnreadableText(box as HTMLInputElement)
+      expect(notAppliedBand()).toHaveTextContent(
+        `${end} length not applied: this box needs a whole number from 1 to 64.`,
+      )
+
+      // Back to the entry that still carries the bound, so React writes it into the box.
+      await goBack()
+      expect(box).toHaveValue(bound)
+      expect(screen.getByRole('status')).toHaveTextContent(applied)
+
+      // And forward again to the entry the bound is gone from, so React writes the box empty.
+      await goForward()
+
+      expect(box).toHaveValue(null)
+      expect(queryNotAppliedBand(), 'the band outlived the box').not.toBeInTheDocument()
+      expect(box).toHaveAttribute('aria-invalid', 'false')
+      // Nothing is filtering by length, and the page says nothing about a box holding nothing.
+      expect(screen.getByRole('status')).toHaveTextContent('4 names match')
+    },
+  )
 
   it('describes the offending box by its own message, so the two are read together', () => {
     mount('?view=all')

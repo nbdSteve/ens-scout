@@ -1,4 +1,4 @@
-import { useEffect, useRef, type ChangeEvent, type ReactNode } from 'react'
+import { useCallback, useEffect, useRef, type ChangeEvent, type ReactNode } from 'react'
 import { STATUSES, type Status } from '../snapshot/contract'
 import { STATUS_LABEL } from '../snapshot/lifecycle'
 import type { Attribution } from '../snapshot/attribution'
@@ -115,16 +115,23 @@ export function Toolbar({
   const noteMin = min.setUnreadable
   const noteMax = max.setUnreadable
 
+  const readValidity = useCallback(() => {
+    if (minBox.current !== null) {
+      noteMin(minBox.current.validity.badInput)
+    }
+    if (maxBox.current !== null) {
+      noteMax(maxBox.current.validity.badInput)
+    }
+  }, [noteMin, noteMax])
+
   /*
-   * The validity is read from the native `input` event, not from the change above.
+   * The flag describes the field, so it is read from the field, twice over.
    *
-   * React dispatches `onChange` only when a controlled field's sanitized value changes, and
-   * a number input in bad-input state reports the empty string throughout: pressing `.` in
-   * an empty box never reached the handler at all, and emptying a box that already held `5.`
-   * never reached it either, so the notice was missed in the first case and outlived the box
-   * in the second. The native event fires on both, because the text the visitor can see did
-   * change. It feeds the same flag, so there is still one thing that decides what the band
-   * says.
+   * The visitor's own edits come through the native `input` event rather than the change
+   * above, because React dispatches `onChange` only when a controlled field's sanitized value
+   * changes and a number input in bad-input state reports the empty string throughout:
+   * pressing `.` in an empty box never reached the handler at all, and emptying a box that
+   * already held `5.` never reached it either.
    */
   useEffect(() => {
     const watched: readonly (readonly [HTMLInputElement | null, (bad: boolean) => void])[] = [
@@ -149,6 +156,20 @@ export function Toolbar({
       }
     }
   }, [noteMin, noteMax])
+
+  /*
+   * And every commit that could have re-driven a box is read again here, after the DOM has
+   * been written. React writes `node.value` itself whenever the committed bound changes - a
+   * back or forward navigation, a reset link - and a write clears the field's bad-input state
+   * without firing any event, so an event is not enough to keep the flag honest: a forward
+   * navigation back to an empty bound left the band claiming a bound was not applied over a
+   * box the visitor could see was empty.
+   *
+   * Reading the field after the commit is also what removes the ordering question between the
+   * two channels that write the box. Whichever of them moved last, this runs afterwards and
+   * the flag ends up describing what is on screen.
+   */
+  useEffect(readValidity, [readValidity, min.text, max.text])
 
   const onStatus = (status: Status, checked: boolean): void => {
     const next = checked
