@@ -17,6 +17,7 @@ import type { Status } from './snapshot/contract'
 import { deriveAttribution } from './snapshot/attribution'
 import { applyQuery, countByStatus, filterResults } from './state/filter'
 import { CLEAR_FILTERS, isFiltered } from './state/query'
+import { useLengthDrafts } from './state/useLengthDrafts'
 import { useNow } from './state/useNow'
 import { useSnapshot, type SnapshotDeps } from './state/useSnapshot'
 import { useUrlState } from './state/useUrlState'
@@ -98,6 +99,36 @@ export function App({ config = appConfig, deps }: AppProps): ReactNode {
   const filtered = isFiltered(query)
   const resetHref = hrefFor(CLEAR_FILTERS)
 
+  /*
+   * The two length boxes are held here, not in the toolbar, because the advisory below
+   * has to read the same boxes the visitor is typing into. A bound the parser refused is
+   * not in the URL, so nothing derived from the URL can report it for longer than the one
+   * render it was written on.
+   */
+  const lengthDrafts = useLengthDrafts(query.length)
+  const notApplied = useMemo(
+    () => [...warnings, ...lengthDrafts.advisories],
+    [warnings, lengthDrafts.advisories],
+  )
+
+  /**
+   * What is wrong with the chosen source list, or null when nothing is.
+   *
+   * Two different things can be, and they leave the page looking opposite ways: a
+   * snapshot that cannot attribute any name to a list shows every row, and a snapshot
+   * that simply has no such list shows none. Both are settled here rather than in
+   * `parseQuery`, which never sees a snapshot and so cannot know which ids exist.
+   */
+  const listProblem = useMemo<'unattributable' | 'unknown' | null>(() => {
+    if (query.list === null || snapshot === null || attribution === null) {
+      return null
+    }
+    if (!attribution.available) {
+      return 'unattributable'
+    }
+    return snapshot.metadata.sources.some((source) => source.id === query.list) ? null : 'unknown'
+  }, [query.list, snapshot, attribution])
+
   return (
     <>
       {/*
@@ -145,16 +176,17 @@ export function App({ config = appConfig, deps }: AppProps): ReactNode {
             )}
 
             {/*
-             * Titled without naming a link, because a keystroke reaches this block too:
-             * typing a shortest length above the longest is reported here rather than
-             * quietly dropped, and a visitor who never followed a link must not be told
-             * one was at fault.
+             * One band for everything the page was asked for and is not doing, whether it
+             * came from a link, a keystroke, or a box still holding a value that names no
+             * length. Titled without naming a link, because a visitor who followed none
+             * must not be told one was at fault, and kept to a single notice so a second
+             * band is never charged against a name row.
              */}
-            {warnings.length > 0 && (
+            {notApplied.length > 0 && (
               <Notice alert tone="warn" title="Not applied">
                 <ul className="notice__list">
-                  {warnings.map((warning) => (
-                    <li key={warning}>{warning}</li>
+                  {notApplied.map((advisory) => (
+                    <li key={advisory}>{advisory}</li>
                   ))}
                 </ul>
               </Notice>
@@ -170,12 +202,30 @@ export function App({ config = appConfig, deps }: AppProps): ReactNode {
              * the usual route, but a visitor who chose a list against a cached snapshot
              * and then received an unattributable one lands here having followed nothing.
              */}
-            {query.list !== null && attribution !== null && !attribution.available && (
+            {listProblem === 'unattributable' && attribution !== null && (
               <Notice alert tone="warn" title="List filter not applied">
                 <p>
                   This snapshot does not say which names are on{' '}
                   <span className="mono">{query.list}</span>, so every name is shown. Reason:{' '}
                   {attribution.reason ?? 'attribution could not be verified'}.
+                </p>
+                <p>
+                  <a href={hrefFor({ list: null })}>Show every list instead</a>
+                </p>
+              </Notice>
+            )}
+
+            {/*
+             * The opposite case, and the one that would otherwise render an empty page with
+             * no explanation: the filter applied perfectly well and matched nothing, because
+             * the snapshot carries no list under that id. A renamed word list is enough to
+             * do it to a link that used to work.
+             */}
+            {listProblem === 'unknown' && (
+              <Notice alert tone="warn" title="Unknown list">
+                <p>
+                  This snapshot has no list named <span className="mono">{query.list}</span>, so no
+                  name matches.
                 </p>
                 <p>
                   <a href={hrefFor({ list: null })}>Show every list instead</a>
@@ -230,6 +280,7 @@ export function App({ config = appConfig, deps }: AppProps): ReactNode {
                 />
                 <Toolbar
                   attribution={attribution}
+                  lengthDrafts={lengthDrafts}
                   query={query}
                   resetHref={resetHref}
                   setQuery={setQuery}

@@ -183,6 +183,37 @@ describe('App list filter that cannot be honoured', () => {
   })
 })
 
+describe('App list filter naming a list that is not there', () => {
+  /** The list matches nothing, so the table never arrives and the empty state settles. */
+  async function mountEmpty(search: string): Promise<void> {
+    window.history.replaceState(null, '', `/${search}`)
+    render(<App config={CONFIG} deps={DEPS} />)
+    await screen.findByRole('heading', { name: 'No names to show' })
+  }
+
+  it('says the list is unknown rather than showing an unexplained empty page', async () => {
+    // Attribution is available here, so the filter applies perfectly well and matches
+    // nothing. A renamed word list does this to a link that used to work.
+    await mountEmpty(`?view=all&list=six-letters&now=${NOW.toISOString().slice(0, 19)}Z`)
+
+    const notice = screen.getByRole('alert')
+    expect(notice).toHaveTextContent('This snapshot has no list named six-letters')
+    expect(notice).toHaveTextContent('so no name matches')
+    expect(
+      within(notice).getByRole('link', { name: 'Show every list instead' }),
+    ).toBeInTheDocument()
+
+    // The page really is empty, which is what the notice is there to explain.
+    expect(screen.queryAllByRole('rowheader')).toHaveLength(0)
+  })
+
+  it('says nothing about a list the snapshot does carry', async () => {
+    await mount(`?view=all&list=three-letters&now=${NOW.toISOString().slice(0, 19)}Z`)
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(screen.getAllByRole('rowheader')).toHaveLength(3)
+  })
+})
+
 describe('App order', () => {
   it('renders the names before any of the long-form detail', async () => {
     await mount()

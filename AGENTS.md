@@ -632,13 +632,22 @@ never the ENS availability authority.
   arrival capture is refreshed only by `setQuery`, never by `popstate`. Anything else
   that describes the state rather than the link goes in `describeQueryState` for the same
   reason.
-- `parseQuery` is the only judge of whether a filter value is usable, and the toolbar
-  forwards what was typed rather than deciding first. `readBound` settles only whether
-  the box holds digits; `isLengthBound` and the two exported bounds are the one span both
-  sides read. A control that sanitised a value on its way to the URL made that value
-  unreportable, because the parser never saw it: a typed 100 vanished with no advisory
-  while the same number in a link warned. Reject the value, keep the other bound, and let
-  the parser say so.
+- `readLengthBound` and `boundNotApplied` are the one reader and the one wording for a
+  length bound, shared by `parseQuery` and by the boxes. A value typed into a box and the
+  same value in a link must reach the same words, and the wording names the requirement
+  rather than the span: 3.5 sits between 1 and 64 and is still not a label length.
+- A box holding a value that names no length is reported from the box, never from the URL.
+  `useLengthDrafts` lives above the toolbar because the advisory renders above the list and
+  both have to read the same draft. A refused bound is not in the URL at all, so anything
+  derived from the URL reports it for one render and then loses it while the box carries on
+  showing a number that filters nothing. The notice therefore lasts exactly as long as the
+  mismatch, across a keystroke elsewhere, a sort change, and a back navigation.
+- Everything the page was asked for and is not doing goes in the one `Not applied` notice.
+  A second band above the list is charged against a name row by `the first screen is the
+answer, not an introduction`.
+- Whether a named source list exists is decided in `App`, not in `parseQuery`, which never
+  sees a snapshot. Two opposite things go wrong and the visitor has to be told which: an
+  unattributable snapshot shows every row, and a snapshot with no such list shows none.
 - One axe pass per page state, not one per colour scheme. There is a single palette and
   `:root` pins `color-scheme: light`, so a dark browser context selects no different rule
   and leaves the UA widgets alone; a second run under it asserted the same rendering

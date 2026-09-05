@@ -125,15 +125,41 @@ const MAX_SEARCH_LENGTH = 128
 export const MIN_LENGTH_BOUND = 1
 export const MAX_LENGTH_BOUND = 64
 
+/** Which end of the range a bound is, and what a reader calls it. */
+export const BOUND_LABEL = { min: 'Shortest length', max: 'Longest length' } as const
+
+export type BoundEnd = keyof typeof BOUND_LABEL
+
+/** How much of an unusable bound is quoted back, since a link can carry anything. */
+const MAX_BOUND_ECHO = 8
+
 /**
- * Whether a number names a label length a bound may hold.
+ * The bound a string names, or null when it names none.
  *
- * One predicate, so the parser and the toolbar cannot disagree about it. The toolbar
- * needs the same answer the parser will give, because it decides from that whether the
- * box it is showing holds a value the URL is about to keep.
+ * The one reader. A value typed into a box and the same value carried in a link are
+ * judged by this and reported in the words below, so the two paths cannot come to
+ * different conclusions about the same characters.
  */
-export function isLengthBound(value: number): boolean {
+export function readLengthBound(raw: string): number | null {
+  if (!/^[0-9]+$/.test(raw)) {
+    return null
+  }
+  const value = Number.parseInt(raw, 10)
   return Number.isSafeInteger(value) && value >= MIN_LENGTH_BOUND && value <= MAX_LENGTH_BOUND
+    ? value
+    : null
+}
+
+/**
+ * Why a bound was not applied.
+ *
+ * The requirement rather than the span, because a span is a false explanation for a
+ * value already inside it: 3.5 sits between 1 and 64 and is still not a label length.
+ * The value is quoted so the visitor knows which of the two boxes to change, and it is
+ * quoted short because a link can carry any amount of text.
+ */
+export function boundNotApplied(end: BoundEnd, raw: string): string {
+  return `${BOUND_LABEL[end]} not applied: ${raw.slice(0, MAX_BOUND_ECHO)} is not a whole number from ${String(MIN_LENGTH_BOUND)} to ${String(MAX_LENGTH_BOUND)}.`
 }
 
 export const PARAM = {
@@ -170,22 +196,13 @@ export function normalizeSearch(raw: string): string {
   return withoutSuffix.slice(0, MAX_SEARCH_LENGTH)
 }
 
-/** How much of an unusable bound is quoted back, since a link can carry anything. */
-const MAX_BOUND_ECHO = 8
-
-function parseBound(raw: string | null, what: string, warnings: string[]): number | null {
+function parseBound(raw: string | null, end: BoundEnd, warnings: string[]): number | null {
   if (raw === null || raw === '') {
     return null
   }
-  const value = Number.parseInt(raw, 10)
-  if (!/^[0-9]+$/.test(raw) || !isLengthBound(value)) {
-    // Named by its value and the span that would have worked, not by where it came
-    // from: the toolbar forwards what was typed rather than sanitising it, so a
-    // keystroke reaches this on the same path a shared link does.
-    warnings.push(
-      `${what} not applied: ${raw.slice(0, MAX_BOUND_ECHO)} is not between ${String(MIN_LENGTH_BOUND)} and ${String(MAX_LENGTH_BOUND)}.`,
-    )
-    return null
+  const value = readLengthBound(raw)
+  if (value === null) {
+    warnings.push(boundNotApplied(end, raw))
   }
   return value
 }
@@ -236,8 +253,8 @@ export function parseQuery(search: string): ParsedQuery {
       : STATUSES.filter((s) => requestedStatuses.has(s))
 
   const length: LengthRange = {
-    min: parseBound(params.get(PARAM.minLength), 'Shortest length', warnings),
-    max: parseBound(params.get(PARAM.maxLength), 'Longest length', warnings),
+    min: parseBound(params.get(PARAM.minLength), 'min', warnings),
+    max: parseBound(params.get(PARAM.maxLength), 'max', warnings),
   }
 
   const rawList = params.get(PARAM.list)

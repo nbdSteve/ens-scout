@@ -100,16 +100,19 @@ describe('query parsing of links that cannot be honoured', () => {
     expect(isInvertedRange(parseQuery('?max=3').state.length)).toBe(false)
   })
 
-  // The message names the value and the span that would have worked, and never where
-  // the value came from: the toolbar forwards a typed bound to this same check, so a
-  // keystroke and a shared link reach one wording.
+  /*
+   * The message names the value and the requirement, never the span and never where the
+   * value came from. A span is a false explanation for a value already inside it: 3.5 is
+   * between 1 and 64 and is still not a label length. The same words report a value typed
+   * into a box, which is why `boundNotApplied` is shared rather than restated.
+   */
   it.each([
-    ['?min=0', 'Shortest length not applied: 0 is not between 1 and 64.'],
-    ['?max=999', 'Longest length not applied: 999 is not between 1 and 64.'],
-    ['?min=65', 'Shortest length not applied: 65 is not between 1 and 64.'],
-    ['?min=100', 'Shortest length not applied: 100 is not between 1 and 64.'],
-    ['?min=-3', 'Shortest length not applied: -3 is not between 1 and 64.'],
-    ['?min=3.5', 'Shortest length not applied: 3.5 is not between 1 and 64.'],
+    ['?min=0', 'Shortest length not applied: 0 is not a whole number from 1 to 64.'],
+    ['?max=999', 'Longest length not applied: 999 is not a whole number from 1 to 64.'],
+    ['?min=65', 'Shortest length not applied: 65 is not a whole number from 1 to 64.'],
+    ['?min=100', 'Shortest length not applied: 100 is not a whole number from 1 to 64.'],
+    ['?min=-3', 'Shortest length not applied: -3 is not a whole number from 1 to 64.'],
+    ['?min=3.5', 'Shortest length not applied: 3.5 is not a whole number from 1 to 64.'],
   ])('refuses a length bound that names no label, and says which: %s', (search, message) => {
     const { state, warnings } = parseQuery(search)
     expect(state.length).toEqual({ min: null, max: null })
@@ -119,7 +122,9 @@ describe('query parsing of links that cannot be honoured', () => {
   it('quotes back only a short head of an absurd bound, so a link cannot fill the notice', () => {
     const { state, warnings } = parseQuery(`?min=${'9'.repeat(400)}`)
     expect(state.length).toEqual({ min: null, max: null })
-    expect(warnings).toEqual(['Shortest length not applied: 99999999 is not between 1 and 64.'])
+    expect(warnings).toEqual([
+      'Shortest length not applied: 99999999 is not a whole number from 1 to 64.',
+    ])
   })
 
   it('accepts both ends of the span it advertises', () => {

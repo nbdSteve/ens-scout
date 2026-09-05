@@ -5,13 +5,15 @@ import type { Attribution } from '../snapshot/attribution'
 import type { SourceList } from '../snapshot/types'
 import {
   isFiltered,
-  isLengthBound,
   MAX_LENGTH_BOUND,
   MIN_LENGTH_BOUND,
   normalizeSearch,
+  readLengthBound,
+  type BoundEnd,
   type QueryState,
 } from '../state/query'
 import { useDraft } from '../state/useDraft'
+import { boundText, type LengthDrafts } from '../state/useLengthDrafts'
 import { SORT_IDS, SORT_LABEL, isSortId, viewOrDefault, type SortId } from '../state/views'
 
 /**
@@ -46,26 +48,11 @@ export interface ToolbarProps {
   readonly attribution: Attribution
   /** Link back to the unfiltered view, preserving any simulated clock. */
   readonly resetHref: string
-}
-
-/**
- * Reads a length bound out of an input.
- *
- * Two outcomes are decided here and no more: an empty box means no bound, and anything
- * that is not a run of digits is not a number at all. Whether a number names a label
- * length is `parseQuery`'s judgement, and forwarding it there is what makes a typed 100
- * reported the same way a linked one is instead of disappearing on the way to the URL.
- */
-function readBound(raw: string): number | null {
-  const trimmed = raw.trim()
-  if (!/^[0-9]+$/.test(trimmed)) {
-    return null
-  }
-  return Number.parseInt(trimmed, 10)
-}
-
-function boundText(value: number | null): string {
-  return value === null ? '' : String(value)
+  /**
+   * The two length boxes. Held above this component because the advisory that reports an
+   * unusable one renders above the list, and both have to be reading the same box.
+   */
+  readonly lengthDrafts: LengthDrafts
 }
 
 /**
@@ -87,13 +74,13 @@ export function Toolbar({
   sources,
   attribution,
   resetHref,
+  lengthDrafts,
 }: ToolbarProps): ReactNode {
   const view = viewOrDefault(query.view)
   const statuses: readonly Status[] = view.statuses.length === 0 ? STATUSES : view.statuses
 
   const search = useDraft(query.search)
-  const min = useDraft(boundText(query.length.min))
-  const max = useDraft(boundText(query.length.max))
+  const { min, max } = lengthDrafts
 
   const onSearch = (event: ChangeEvent<HTMLInputElement>): void => {
     const typed = event.target.value
@@ -103,25 +90,24 @@ export function Toolbar({
   }
 
   const onBound =
-    (which: 'min' | 'max') =>
+    (end: BoundEnd) =>
     (event: ChangeEvent<HTMLInputElement>): void => {
       const typed = event.target.value
-      const requested = readBound(typed)
       /*
-       * The number is forwarded whatever it is, and the draft follows what the URL will
-       * hold rather than what was asked for: a bound outside the accepted span settles as
-       * no bound, so the box keeps the keystrokes while the advisory says why they are
-       * not filtering. Only the bound being edited is touched, so a rejected number
-       * cannot take the other one down with it.
+       * The keystroke is never refused and never rewritten: the box keeps what was typed
+       * and the URL takes the bound it names, which is nothing at all when it names no
+       * label length. `useLengthDrafts` is then the one thing that reports the gap, for
+       * as long as the box still holds it. Only the end being edited is touched, so a
+       * value this rejects cannot take the other bound down with it.
        */
-      const settled = requested !== null && isLengthBound(requested) ? requested : null
-      if (which === 'min') {
-        min.setText(typed, boundText(settled))
-        setQuery({ length: { ...query.length, min: requested } }, { replace: true })
+      const bound = readLengthBound(typed.trim())
+      if (end === 'min') {
+        min.setText(typed, boundText(bound))
+        setQuery({ length: { ...query.length, min: bound } }, { replace: true })
         return
       }
-      max.setText(typed, boundText(settled))
-      setQuery({ length: { ...query.length, max: requested } }, { replace: true })
+      max.setText(typed, boundText(bound))
+      setQuery({ length: { ...query.length, max: bound } }, { replace: true })
     }
 
   const onStatus = (status: Status, checked: boolean): void => {

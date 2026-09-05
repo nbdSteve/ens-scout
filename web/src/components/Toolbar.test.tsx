@@ -1,10 +1,11 @@
-import { act, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import type { ReactNode } from 'react'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { deriveAttribution, type Attribution } from '../snapshot/attribution'
 import { applyQuery, countByStatus } from '../state/filter'
 import { parseQuery, serializeQuery } from '../state/query'
+import { useLengthDrafts } from '../state/useLengthDrafts'
 import { useUrlState } from '../state/useUrlState'
 import { buildSnapshot } from '../test/factory'
 import type { Snapshot } from '../snapshot/types'
@@ -38,27 +39,30 @@ function Harness({
   attribution?: Attribution
 }): ReactNode {
   const { query, warnings, setQuery, hrefFor } = useUrlState()
+  const lengthDrafts = useLengthDrafts(query.length)
   const resolved = attribution ?? deriveAttribution(snapshot.metadata.sources, snapshot.results)
   const context = { sourceIdByName: resolved.available ? resolved.sourceIdByName : null }
   const page = applyQuery(snapshot.results, query, context)
+  const notApplied = [...warnings, ...lengthDrafts.advisories]
   return (
     <>
       <p role="status">
         {page.total} {page.total === 1 ? 'name matches' : 'names match'}
       </p>
-      {/* Rendered here for the same reason the count is: `App` puts the advisories
-          above the list, and a control that writes a link the sanitiser cannot honour
-          has to be able to say so. Without it this harness would pass on a page that
-          dropped a filter in silence. */}
-      {warnings.length > 0 && (
+      {/* Rendered here for the same reason the count is: `App` puts the advisories above
+          the list, in one band, and holds the length drafts above the toolbar so this
+          block and the boxes read the same thing. Without it this harness would pass on a
+          page that dropped a filter in silence. */}
+      {notApplied.length > 0 && (
         <ul role="alert">
-          {warnings.map((warning) => (
-            <li key={warning}>{warning}</li>
+          {notApplied.map((advisory) => (
+            <li key={advisory}>{advisory}</li>
           ))}
         </ul>
       )}
       <Toolbar
         attribution={resolved}
+        lengthDrafts={lengthDrafts}
         query={query}
         resetHref={hrefFor({
           search: '',
@@ -194,7 +198,7 @@ describe('Toolbar length range', () => {
     await user.type(screen.getByLabelText('Shortest label length'), '100')
 
     expect(screen.getByRole('alert')).toHaveTextContent(
-      'Shortest length not applied: 100 is not between 1 and 64.',
+      'Shortest length not applied: 100 is not a whole number from 1 to 64.',
     )
     // The keystrokes stay on screen, the bound the visitor already had still filters,
     // and the shortest bound is simply not one.
@@ -204,18 +208,69 @@ describe('Toolbar length range', () => {
     expect(screen.getByRole('status')).toHaveTextContent('3 names match')
   })
 
-  it.each(['0', '65', '99', '100'])(
+  it('keeps saying so through a keystroke elsewhere, a sort change, and the back button', async () => {
+    const user = userEvent.setup()
+    mount('?view=all&max=4')
+    await user.type(screen.getByLabelText('Shortest label length'), '100')
+    const said = 'Shortest length not applied: 100 is not a whole number from 1 to 64.'
+    expect(screen.getByRole('alert')).toHaveTextContent(said)
+
+    /*
+     * The value is not in the URL - it names no length, so nothing wrote it there - which
+     * is why the notice cannot be read back out of one. Each of these used to erase it
+     * while the box carried on showing 100 and filtering nothing.
+     */
+    await user.type(screen.getByLabelText('Search names'), 'a')
+    expect(screen.getByRole('alert'), 'a search keystroke erased it').toHaveTextContent(said)
+
+    await openMore(user)
+    await user.selectOptions(screen.getByLabelText('Sort by'), 'expiry')
+    expect(screen.getByRole('alert'), 'a sort change erased it').toHaveTextContent(said)
+
+    await goBack()
+    expect(screen.getByRole('alert'), 'the back button erased it').toHaveTextContent(said)
+    expect(screen.getByLabelText('Shortest label length')).toHaveValue(100)
+  })
+
+  /*
+   * `fireEvent.change` rather than `user.type` for the last two: a number input reports
+   * `value` as the empty string while the text is not yet a valid number, so `3.` and `-`
+   * are not values any handler ever sees and the intermediate keystrokes cannot build
+   * them here. What the browser does hand over, once the text is a valid number, is
+   * exactly this - which is the whole reason these two used to slip through unreported.
+   */
+  it.each(['0', '65', '99', '100', '3.5', '-3'])(
     'reports a typed %s the same way the same value in a link is reported',
-    async (typed) => {
-      const user = userEvent.setup()
+    (typed) => {
       mount('?view=all')
-      await user.type(screen.getByLabelText('Shortest label length'), typed)
+      fireEvent.change(screen.getByLabelText('Shortest label length'), {
+        target: { value: typed },
+      })
 
       const fromLink = parseQuery(`?view=all&min=${typed}`).warnings
-      expect(fromLink).toHaveLength(1)
+      expect(fromLink).toEqual([
+        `Shortest length not applied: ${typed} is not a whole number from 1 to 64.`,
+      ])
       expect(screen.getByRole('alert')).toHaveTextContent(fromLink[0] ?? '')
+      // And the box still holds it, so there is something for the notice to be about.
+      expect(screen.getByLabelText('Shortest label length')).toHaveValue(Number(typed))
     },
   )
+
+  it.each([
+    ['corrected', '4', '?view=all&min=4'],
+    ['emptied', '', '?view=all'],
+  ])('stops saying so once the box is %s', (_what, replacement, link) => {
+    mount('?view=all')
+    const box = screen.getByLabelText('Shortest label length')
+    fireEvent.change(box, { target: { value: '3.5' } })
+    expect(screen.getByRole('alert')).toBeInTheDocument()
+
+    fireEvent.change(box, { target: { value: replacement } })
+
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expectCanonicalLink(link)
+  })
 
   it('keeps a range that arrived inverted in a link, and says it is not applied', () => {
     mount('?view=all&min=9&max=4')
