@@ -665,6 +665,12 @@ never the ENS availability authority.
   into an empty box changed no value and was never reported, and a box emptied out of that
   state changed no value either and went on claiming its bound was not applied. Both halves
   matter, and the second is the page stating something it has not established.
+  The flag describes the field rather than remembering an event, so the validity is read again
+  after every commit that could have re-driven a box.
+  React writes `node.value` itself when the committed bound changes, and a programmatic write
+  clears bad-input state silently with no event of any kind.
+  Removing that post-commit read puts a `Not applied` line and `aria-invalid` back over a box
+  the visitor can see is empty, so it is not duplication of the listener.
 - The page never states something it has not established. The stored-copy band is worded
   from the failure kind, because an unreachable API, a payload this build refused, and a
   format it does not know are three different things and one sentence for all three was
