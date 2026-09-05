@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react'
+import { act, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import type { ReactNode } from 'react'
 import { beforeEach, describe, expect, it } from 'vitest'
@@ -89,6 +89,23 @@ function mount(search = '?view=all', attribution?: Attribution): void {
 /** Opens the disclosure the way a visitor does, so what it holds becomes usable. */
 async function openMore(user: ReturnType<typeof userEvent.setup>): Promise<void> {
   await user.click(screen.getByText('More filters'))
+}
+
+/**
+ * The back button, through the event the browser actually raises.
+ *
+ * `popstate` is the one navigation the hook's own `setQuery` never runs, so anything
+ * that only refreshes on a change the visitor made is invisible until a test comes this
+ * way. The location moves asynchronously, which is why this waits for it.
+ */
+async function goBack(): Promise<void> {
+  const from = window.location.search
+  await act(async () => {
+    window.history.back()
+    await waitFor(() => {
+      expect(window.location.search).not.toBe(from)
+    })
+  })
 }
 
 /** The link is canonical when parsing and re-serializing it changes nothing. */
@@ -217,6 +234,54 @@ describe('Toolbar length range', () => {
     expectCanonicalLink('?view=all&min=3&max=4')
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
     expect(screen.getByRole('status')).toHaveTextContent('3 names match')
+  })
+
+  it('still says the range is not applied after a change somewhere else', async () => {
+    const user = userEvent.setup()
+    mount('?view=all&min=9&max=4')
+    await openMore(user)
+
+    // A push navigation, and nothing to do with the length range. The notice describes
+    // the state, which this change carries forward, so it has to survive.
+    await user.selectOptions(screen.getByLabelText('Sort by'), 'expiry')
+
+    expectCanonicalLink('?view=all&min=9&max=4&sort=expiry')
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'Length range not applied: shortest 9 is above longest 4.',
+    )
+  })
+
+  it('still says the range is not applied after the back button', async () => {
+    const user = userEvent.setup()
+    mount('?view=all&min=9&max=4')
+    await openMore(user)
+    await user.selectOptions(screen.getByLabelText('Sort by'), 'expiry')
+
+    /*
+     * `popstate` is the one navigation `setQuery` never sees, so a notice delivered only
+     * by the arrival capture would vanish here - leaving a screen whose two bounds are
+     * set, whose length filter is doing nothing, and which says so nowhere.
+     */
+    await goBack()
+
+    expect(window.location.search).toBe('?view=all&min=9&max=4')
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'Length range not applied: shortest 9 is above longest 4.',
+    )
+  })
+
+  it('drops an arrival-only notice on the way back, because the link no longer says it', async () => {
+    const user = userEvent.setup()
+    // `nope` is dropped from the link on arrival, so unlike the range it is not in any
+    // history entry and there is nothing left for a later screen to report.
+    mount('?view=nope&min=3&max=4')
+    expect(screen.getByRole('alert')).toHaveTextContent('unknown view')
+
+    await openMore(user)
+    await user.selectOptions(screen.getByLabelText('Sort by'), 'expiry')
+    await goBack()
+
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
   })
 })
 

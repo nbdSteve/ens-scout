@@ -626,6 +626,12 @@ never the ENS availability authority.
   set, and applying it emptied the list with no explanation. The advisory names the two
   numbers rather than where they came from, because a keystroke reaches that block on
   the same path a shared link does.
+  It is also the one warning `useUrlState` re-derives rather than captures. Everything
+  else `parseQuery` reports is about the text of a link the canonical rewrite has already
+  erased, so it belongs to the one-shot arrival; a range survives that rewrite, and the
+  arrival capture is refreshed only by `setQuery`, never by `popstate`. Anything else
+  that describes the state rather than the link goes in `describeQueryState` for the same
+  reason.
 - Order the names with `compareNames`, never with `<` or `localeCompare`. The publisher
   sorts with Go's byte-wise string comparison and JavaScript compares UTF-16 code
   units, so the two disagree the moment a label reaches past the basic plane - which

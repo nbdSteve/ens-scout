@@ -164,8 +164,10 @@ describe('App list filter that cannot be honoured', () => {
     await mountUnattributable(`?view=all&list=four-letters&now=${NOW.toISOString().slice(0, 19)}Z`)
 
     const notice = screen.getByRole('alert')
-    expect(notice).toHaveTextContent('This link asks for the list four-letters')
-    expect(notice).toHaveTextContent('every name is shown rather than that list alone')
+    // Named by the list, not by how the list was asked for: a visitor who chose it from
+    // the toolbar against an earlier snapshot reaches this having followed no link.
+    expect(notice).toHaveTextContent('This snapshot does not say which names are on four-letters')
+    expect(notice).toHaveTextContent('so every name is shown')
     expect(
       within(notice).getByRole('link', { name: 'Show every list instead' }),
     ).toBeInTheDocument()

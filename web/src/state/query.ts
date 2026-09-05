@@ -58,6 +58,34 @@ export function isInvertedRange(length: LengthRange): length is InvertedRange {
   return length.min !== null && length.max !== null && length.min > length.max
 }
 
+/**
+ * What could not be applied about a state, as opposed to about the text it was read
+ * from.
+ *
+ * The difference decides how long the notice lives. An unknown view or an unusable
+ * page number exists only in the link that named it: the canonical rewrite drops it,
+ * so it can only ever be reported about the arrival. An inverted range survives
+ * serialization, so it is still in the URL after that rewrite, after an unrelated
+ * filter change, and after a back navigation - and it is still not being applied.
+ * Reporting it on the arrival path alone would leave a visitor on a screen whose two
+ * bounds are set, whose length filter is silently doing nothing, and which says so
+ * nowhere.
+ *
+ * Derived rather than carried, so any caller holding a state can ask.
+ */
+export function describeQueryState(state: QueryState): string[] {
+  const warnings: string[] = []
+  if (isInvertedRange(state.length)) {
+    // Named by its values rather than by where they came from, because a keystroke
+    // reaches this the same way a shared link does, and the numbers are what tell the
+    // visitor which of the two bounds to change.
+    warnings.push(
+      `Length range not applied: shortest ${String(state.length.min)} is above longest ${String(state.length.max)}.`,
+    )
+  }
+  return warnings
+}
+
 export interface QueryState {
   readonly view: string
   /** Search text, already lowercased and stripped of a `.eth` suffix. */
@@ -190,14 +218,6 @@ export function parseQuery(search: string): ParsedQuery {
     min: parseBound(params.get(PARAM.minLength), 'shortest length', warnings),
     max: parseBound(params.get(PARAM.maxLength), 'longest length', warnings),
   }
-  if (isInvertedRange(length)) {
-    // Named by its values rather than by where they came from, because a keystroke
-    // reaches this the same way a shared link does, and the numbers are what tell the
-    // visitor which of the two bounds to change.
-    warnings.push(
-      `Length range not applied: shortest ${String(length.min)} is above longest ${String(length.max)}.`,
-    )
-  }
 
   const rawList = params.get(PARAM.list)
   const list = rawList === null || rawList.trim() === '' ? null : rawList.trim()
@@ -236,20 +256,20 @@ export function parseQuery(search: string): ParsedQuery {
     }
   }
 
-  return {
-    state: {
-      view: view.id,
-      search: normalizeSearch(params.get(PARAM.search) ?? ''),
-      statuses,
-      length,
-      list,
-      sort,
-      direction,
-      page,
-      now,
-    },
-    warnings,
+  const state: QueryState = {
+    view: view.id,
+    search: normalizeSearch(params.get(PARAM.search) ?? ''),
+    statuses,
+    length,
+    list,
+    sort,
+    direction,
+    page,
+    now,
   }
+  // The state's own warnings come last, and are the only ones any caller can re-derive:
+  // they outlive the link they were read from.
+  return { state, warnings: [...warnings, ...describeQueryState(state)] }
 }
 
 /** Writes state as a canonical query string, including the leading `?`, or `''`. */

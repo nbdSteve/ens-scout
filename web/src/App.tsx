@@ -165,13 +165,16 @@ export function App({ config = appConfig, deps }: AppProps): ReactNode {
              * row when attribution cannot be verified, so without this the page would
              * show the whole snapshot as though the filter had applied - and the only
              * explanation would be inside a disclosure that is closed by default.
+             *
+             * Worded about the list and not about where it came from. A followed link is
+             * the usual route, but a visitor who chose a list against a cached snapshot
+             * and then received an unattributable one lands here having followed nothing.
              */}
             {query.list !== null && attribution !== null && !attribution.available && (
-              <Notice alert tone="warn" title="The source list filter could not be applied">
+              <Notice alert tone="warn" title="List filter not applied">
                 <p>
-                  This link asks for the list <span className="mono">{query.list}</span>, but this
-                  snapshot does not record which list each name came from, so every name is shown
-                  rather than that list alone. Reason:{' '}
+                  This snapshot does not say which names are on{' '}
+                  <span className="mono">{query.list}</span>, so every name is shown. Reason:{' '}
                   {attribution.reason ?? 'attribution could not be verified'}.
                 </p>
                 <p>

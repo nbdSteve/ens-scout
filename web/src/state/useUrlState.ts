@@ -1,5 +1,11 @@
 import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react'
-import { parseQuery, serializeQuery, updateQuery, type QueryState } from './query'
+import {
+  describeQueryState,
+  parseQuery,
+  serializeQuery,
+  updateQuery,
+  type QueryState,
+} from './query'
 
 /**
  * Binds the query string to React.
@@ -75,7 +81,7 @@ interface Arrival {
 /** One shared value, so a repeated discard is `Object.is`-equal and re-renders nothing. */
 const NOTHING_TO_SAY: Arrival = { canonical: null, warnings: [] }
 
-/** What could not be applied about a link, or `NOTHING_TO_SAY` when all of it was. */
+/** What could not be applied about a link, or `NOTHING_TO_SAY` when all of it could. */
 function outcomeOf(search: string): Arrival {
   const parsed = parseQuery(search)
   return parsed.warnings.length === 0
@@ -106,15 +112,21 @@ export function useUrlState(): UrlState {
     navigate(canonical, true)
   }, [canonical])
 
-  // The warnings describe the link the screen was reached by, and the rewrite above
+  // Some warnings describe the link the screen was reached by, and the rewrite above
   // erases the evidence for them: re-parsing the canonical link produces none, because
   // whatever could not be applied is no longer in it. Read straight from the current
-  // location, the notice would therefore appear for one render and then vanish, which
-  // is the same as never showing it. So the outcome is captured once, before anything
-  // has been rewritten, and its warnings are shown for as long as the screen they
-  // describe is the screen on display.
+  // location, that notice would appear for one render and then vanish, which is the
+  // same as never showing it. So the outcome is captured once, before anything has been
+  // rewritten, and its warnings are shown for as long as the screen they describe is
+  // the screen on display.
   const [arrival, setArrival] = useState<Arrival>(() => outcomeOf(window.location.search))
-  const warnings = arrival.canonical === canonical ? arrival.warnings : []
+  // And the rest describe the state, which the rewrite keeps. Those are re-derived from
+  // whatever the location now holds, because the capture above is one-shot and only
+  // `setQuery` refreshes it: `popstate` does not, so a back or forward navigation would
+  // otherwise land on a screen still holding an inverted range with nothing saying it
+  // is not being applied.
+  const stateWarnings = useMemo(() => describeQueryState(parsed.state), [parsed.state])
+  const warnings = arrival.canonical === canonical ? arrival.warnings : stateWarnings
 
   const setQuery = useCallback((change: Partial<QueryState>, options?: { replace?: boolean }) => {
     const next = serializeQuery(updateQuery(parseQuery(window.location.search).state, change))

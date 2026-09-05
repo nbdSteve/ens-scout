@@ -103,6 +103,29 @@ test('a sort choice reorders the rows and is written down', async ({ page }) => 
   expect([...byExpiry].sort()).toEqual([...byName].sort())
 })
 
+test('a length range that is not applied keeps saying so through the back button', async ({
+  page,
+}) => {
+  // The bounds are kept rather than repaired, so every history entry below still holds
+  // them and the length filter is still doing nothing on every one of them.
+  await visit(page, { view: 'all', min: '9', max: '5' })
+  const advisory = page.getByRole('alert')
+  await expect(advisory).toContainText('Length range not applied: shortest 9 is above longest 5.')
+
+  // A same-document history entry, which is what makes going back a `popstate` rather
+  // than a fresh document. A real browser is the only place that distinction exists.
+  await openMore(page)
+  await page.getByRole('combobox', { name: 'Sort by' }).selectOption({ label: 'Expiry' })
+  expect(searchOf(page)).toContain('sort=expiry')
+  await expect(advisory).toContainText('Length range not applied')
+
+  await page.goBack()
+
+  expect(searchOf(page)).toContain('min=9')
+  expect(searchOf(page)).toContain('max=5')
+  await expect(advisory).toContainText('Length range not applied: shortest 9 is above longest 5.')
+})
+
 test('the simulated clock can be given up, and says so on the way out', async ({ page }) => {
   await visit(page)
   await expect(page.getByRole('region', { name: 'Showing a simulated time' })).toBeVisible()
