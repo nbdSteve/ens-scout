@@ -31,6 +31,8 @@ and correct ENS lifecycle classification are core requirements.
 - `data/results/`: historical output from the original utility; treat as
   reference data, not golden test fixtures.
 - `data/archive/`: superseded input lists retained for provenance.
+- `infra/`: the TypeScript AWS CDK application that defines the publisher stack.
+  It is a separate npm project with its own README; the Go module ignores it.
 
 ## Development workflow
 
@@ -69,6 +71,16 @@ and fixed timestamps so tests remain fast and deterministic.
 No test may reach AWS either. `internal/dynamo` tests inject the DynamoDB API,
 and `internal/scanner` and `cmd/scan-lambda` tests use `snapshot.MemoryStore` and
 local fakes.
+
+Run this after changing anything under `infra/`:
+
+```powershell
+cd infra; npm run check
+```
+
+That is `tsc --noEmit`, the assertion suite, and a synth. It needs the Go toolchain,
+because every CDK command cross-compiles the scanner first, and it needs no AWS
+credentials.
 
 ## Behavioral invariants
 
@@ -350,7 +362,7 @@ implement the snapshot contract above rather than restating it.
   nothing is live. Refusing then would leave a set abandoned before the first
   successful publication unreclaimable, which is exactly the case where a bootstrap
   that keeps failing would grow the table on every attempt.
-- Issue #4 owns the schedules, and it must offset the daily schedule from the
+- `infra/` owns the schedules, and it offsets the daily schedule from the
   three-hourly one so they cannot fire in the same second. When they collide, the
   short run finishes first and publishes, and the monotonic pointer then refuses the
   daily run because its scan time is the older of the two, throwing away a whole
@@ -437,6 +449,108 @@ contract; these are the rules behind it.
   is set even on a response with no grant.
 - Never widen the surface by prefix. An unknown path is a 404, so no future
   endpoint can be reached before it exists.
+
+## Infrastructure invariants
+
+`infra/` is the TypeScript AWS CDK definition of the stack the publisher runs in.
+`infra/README.md` documents the commands, the context keys, and the trade-offs; this
+section holds only the rules that a change here could quietly break.
+
+- `infra/go.mod` exists so the Go tool prunes the directory from `./...`. `npm ci`
+  installs Go project templates inside `node_modules` whose file names the Go tool
+  rejects, which breaks `go build ./...`, `go vet ./...`, and `go test ./...` from the
+  repository root for anyone who has installed the infra dependencies. Do not delete
+  it; nothing imports or builds that module.
+- Nothing under `infra/` performs a real AWS operation, in a test or otherwise, and
+  the target account and region come from CDK context rather than from ambient
+  credentials. A synth that resolved the environment from whichever profile is
+  logged in would silently describe a different account than the one under review.
+- Keep the scanner bundle reproducible: `-trimpath`, a cleared build id,
+  `-buildvcs=false`, and only `data/words/*.txt` alongside the binary, because the CDK
+  asset hash is the content hash. The VCS stamp is the part that is easy to miss, since
+  it varies with how the checkout was made rather than with what is in it: a git
+  worktree and a normal clone of the same commit stamp different module versions, so
+  they produced two asset hashes. Judge any flag added here the same way - does the
+  output depend on the source, or on the machine and checkout that built it.
+  Assert the flags by running the argv and environment `bundle-scanner.js` exports,
+  never by matching the script's text, and never compile the binary in `npm test`.
+  `infra/README.md` has the rest, under `Commands` and `What the tests assert`.
+- Fail the bundle when a list `internal/scanner.Lists` names is absent from
+  `data/words`, reading the required names out of the Go definition. A glob that only
+  refuses an empty directory packages a bundle missing one list, deploys cleanly, and
+  then fails every invocation in `loadLists`. The parse has to reject a `Lists` block
+  it cannot read rather than yield nothing, or the check passes for any bundle.
+- Inject the Lambda code as a stack prop and let the tests supply the committed
+  fixture in `test/fixtures/scan-lambda/`. A freshly built binary hashes differently
+  per machine, so a test that packaged the real bundle would assert on whoever ran it.
+- Assertions that involve a name Go owns must read the Go source, not copy the
+  string: the table's key and TTL attributes from `internal/dynamo/item.go`, the
+  scanner role's DynamoDB action set from the method names on `internal/dynamo`'s
+  `API` interface, and the `Env*` variables and the two group strings from
+  `internal/scanner/scanner.go`. A copied name deploys cleanly and then fails on the
+  first read or write. Derive the assertion, never the grant: the stack must not read
+  Go source at synth time, and an added `API` method is a decision to widen the policy
+  deliberately, not to make a test pass.
+- `ens-scout:snapshotTtlAttribute` is checked against `attrExpiresAt` at the committed
+  context, not at the test configuration. It is the only Go-owned name that lives in
+  context, so it is the only one a wrong value in `cdk.json` alone can break, and
+  comparing a test literal against the Go constant passes while `cdk.json` says
+  something else. The mismatch is silent in every direction - every call succeeds, no
+  alarm fires, and the superseded chunk sets that carry an `expires_at` DynamoDB never
+  looks at are unreachable, because their publisher unstaged them on success and
+  nothing scans chunk partitions.
+- Keep the Lambda timeout above `ScanTuning.scanBudget` and below
+  `internal/scanner.abandonedAfter`. Below the budget it kills a scan that has
+  already been paid for; above the reclaim window a later run could expire the chunk
+  set a live invocation is still writing.
+- Prove the schedule offset by expanding both cron expressions into the minutes they
+  fire and asserting the intersection is empty. Comparing the two cron strings would
+  pass for two different expressions that describe the same instant, and the cron
+  field expansion must reject a form it does not understand rather than expand to
+  nothing, which would make the offset assertion vacuous.
+- The scanner's role is hand-written and must stay that way. `grantReadWriteData`
+  adds DeleteItem, Scan, the stream actions, and an index wildcard for a table with
+  no index; the managed basic-execution policy adds `logs:CreateLogGroup` on every
+  group in the account. The five DynamoDB actions are exactly what `internal/dynamo`
+  calls, and a superseded snapshot is expired with an UpdateItem rather than deleted.
+- The role has no `secretsmanager:GetSecretValue`, deliberately. The key reaches the
+  function as a CloudFormation dynamic reference that the deployment resolves, so the
+  grant would be privilege nothing uses; the cost is that rotating the secret needs a
+  deployment, which is the cheaper side of the trade for one long-lived credential.
+  The synthesized template must hold exactly one `{{resolve:secretsmanager:` and no
+  secret resource, because a second reference is a second place the credential is
+  materialized and those places are descriptions, tags, and alarm text.
+- Bound retention wherever the stack creates something that accumulates, and refuse an
+  unsupported log-retention day count rather than rounding it. Refuse
+  `RetentionDays.INFINITE` by meaning rather than by the number: CloudWatch Logs accepts
+  9999, so neither a positive-integer check nor an enum-membership check catches it.
+  `infra/README.md` has the reasoning, under `Configuration`.
+- The undelivered-event queue holds events EventBridge could not deliver to the
+  function, and nothing else. The scanner Function must declare no `deadLetterQueue`
+  of its own: Lambda's async `DeadLetterConfig` would put a scan that ran and returned
+  an error into the same queue and latch its level alarm for the queue's whole
+  retention. The role's `sqs:SendMessage` was an implicit grant CDK added for that
+  Function prop, so removing the prop must remove the grant, and a test asserts both.
+  The record the queue keeps is bounded, not durable, so no comment or document may
+  write it up as persisting until an operator acts, and raising the retention to make
+  such a claim true is not the fix. `infra/README.md`'s design note on the queue has
+  the reasoning.
+- Every alarm here watches an occurrence, treats missing data as not breaching, and
+  raises on one datapoint. Nothing in this stack detects a schedule that silently
+  stopped firing, and no comment, test name, or document may imply otherwise. An
+  `Invocations` alarm with `treatMissingData: BREACHING` is the approximation to refuse,
+  because CloudWatch fills the missing datapoints instead of shrinking the evaluation
+  range to the periods that have elapsed, so the alarm pages on its own first deploy
+  however wide the window is. A test model of any M-of-N alarm has to implement that
+  fill rule; a model that contradicts CloudWatch is worse than no model, because it
+  makes the wrong behaviour look asserted. `infra/README.md`'s design notes on the
+  alarms and on the staleness gap say what closing the gap needs and where it belongs.
+- The chunk recovery window is not configurable from here, so the only TTL knob in
+  context is the attribute name. `infra/README.md`'s design note on chunk retention
+  says why.
+- The stack defines the publisher and nothing else. The read API, the frontend, the
+  OIDC deployment role, and the environment protections are later phases of
+  `docs/website-plan.md`, and a test asserts their resource types are absent.
 
 ## ENS lifecycle rules
 

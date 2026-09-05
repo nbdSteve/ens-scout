@@ -31,7 +31,7 @@ long-term history store in the first release.
 preloads in the background without blocking the first render.
 
 ```text
-EventBridge Scheduler
+EventBridge rules
         |
         v
 Scanner Lambda -----> ENS subgraph
@@ -52,13 +52,13 @@ An optional lookup endpoint will recheck a small set of names on demand.
 
 `README.md` records what the repository holds today, including the
 `cmd/scan-lambda/`, `internal/scanner/`, and `internal/dynamo/` packages the
-publisher work added, and the `internal/api/` package the read API work added.
+publisher work added, the `internal/api/` package the read API work added, and
+the `infra/` CDK application that defines the stack they run in.
 The directories still to be created are:
 
 ```text
 cmd/api-lambda/       the entrypoint that wires internal/api and live checks
 web/                  React, TypeScript, and Vite frontend application
-infra/                TypeScript AWS CDK application
 ```
 
 The Lambda binaries will target Linux on the AWS `provided.al2023` runtime.
@@ -252,9 +252,16 @@ DynamoDB costs, and actual visitor demand.
 - Add the scheduled Lambda and DynamoDB publisher. Done.
 - Verify atomic publication and failure recovery with local fakes. Done.
 - Add TypeScript AWS CDK infrastructure for DynamoDB, IAM, Lambda, Scheduler,
-and secrets.
-  The two schedules must be offset from each other, for the reason recorded under
-  "Scheduling and query budget".
+and secrets. Done.
+  The two schedules are offset from each other, for the reason recorded under
+  "Scheduling and query budget", and a test proves it by expanding both cron
+  expressions into the minutes they fire.
+  The schedules are EventBridge rules rather than EventBridge Scheduler: the
+  Scheduler L2 is still an alpha module and two fixed cron schedules need nothing it
+  adds.
+  The Graph API key stays in Secrets Manager and reaches the function as a
+  CloudFormation dynamic reference, so it is in neither the repository nor the
+  synthesized template; `infra/README.md` records the trade-off that choice makes.
 - Add GitHub Actions workflows that deploy through a GitHub OIDC role.
 
 ### Phase 2: read API and frontend
@@ -295,5 +302,7 @@ and secrets.
 - Confirm the public product and repository name; `ens-scout` is the current
   recommendation while the existing CLI remains `ens-scrape`.
 - Choose the visual direction within the React, TypeScript, and Vite stack.
-- Choose a deployment region and public domain.
+- Choose the public domain.
+  The deployment account and region are settled and recorded as CDK context in
+  `infra/cdk.json`.
 - Choose the WebLLM model and its download budget.
