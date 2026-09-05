@@ -128,8 +128,8 @@ data/archive/         superseded candidate lists
 ## Snapshot contract
 
 `internal/snapshot` defines the deterministic, storage-neutral snapshot the
-planned website publishes and reads. The same logical scan always serializes to
-the same bytes and the same checksum, whatever order the input arrives in and
+publisher writes and the website reads. The same logical scan always serializes
+to the same bytes and the same checksum, whatever order the input arrives in and
 whatever order the workers finish in. Snapshots are compressed, checksummed, and
 split into immutable chunks, and a reader rejects a snapshot whose chunks are
 missing, duplicated, reordered, or corrupt.

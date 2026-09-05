@@ -115,8 +115,8 @@ Playwright suite, in that order. The browser tests need Chromium once:
 
 ## Snapshot contract invariants
 
-`internal/snapshot` is the shared contract for the planned website, so the
-scanner, the read API, the local preview, and the browser all agree.
+`internal/snapshot` is the shared contract for the website, so the scanner, the
+planned read API, the local preview, and the browser all agree.
 
 - Reuse `ens.Classify` and `ens.Result`. Never add a second classifier.
 - Store the fully-qualified name, `zap.eth`, which is what `ens.Client`,

@@ -7,10 +7,12 @@
  * light and the ink, so the projected colour and the letterforms share one sheet
  * instead of stacking as translucent panes.
  *
- * The names are the event. They are set very large in one grotesque, and the only
- * other things on the first screen are the field that narrows them and one compact
- * black control object. There is no card and no explanatory copy: a boundary drawn
- * around a name would make it furniture.
+ * The names are the event. The approved composition sets them very large in one
+ * grotesque, with nothing else on the first screen but the field that narrows them and
+ * one compact black control object: no card and no explanatory copy, because a boundary
+ * drawn around a name would make it furniture. That composition arrives in later
+ * slices, so the tokens it needs are defined here while the page still renders the
+ * previous list markup under the optical background.
  *
  * Colour never carries meaning. The three optical hues appear only in the light
  * behind the page and in the chromatic split a name is given, and every lifecycle
@@ -48,8 +50,8 @@
    * A fixed ramp for the small sizes and a fluid one above body copy. Small text
    * that shrinks with the viewport gets unreadable on a phone long before the
    * layout runs out of room, and a display size that does not grow with the
-   * viewport looks timid on a desktop. The name sizes are not on this ramp: they
-   * come from the hash, in `src/constellation/compose.ts`.
+   * viewport looks timid on a desktop. The name sizes will not be on this ramp: they
+   * come from the hash, in `src/constellation/compose.ts`, which nothing mounts yet.
    */
   --step--2: 0.75rem;
   --step--1: 0.8125rem;

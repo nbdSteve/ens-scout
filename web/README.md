@@ -19,8 +19,8 @@ npm ci
 npm run dev
 ```
 
-That serves the committed `preview` fixture from `data/fixtures/`, which carries one
-name in every lifecycle status across three source lists.
+That serves the committed `preview` fixture from `data/fixtures/`, whose ten names
+cover every lifecycle status across three source lists.
 
 ## Configuration
 
@@ -107,13 +107,18 @@ That is exactly how a 320px overflow went unnoticed here once.
 ## Structure
 
 ```text
-src/snapshot/     the browser's half of the snapshot contract, and its parser
-src/data/         fixture loading, the read API client, and the local cache
-src/state/        URL state, filtering, sorting, paging, and the clock
-src/format/       time and text formatting
-src/components/   presentation
-tests/browser/    Playwright specs
+src/snapshot/      the browser's half of the snapshot contract, and its parser
+src/data/          fixture loading, the read API client, and the local cache
+src/state/         URL state, filtering, sorting, paging, and the clock
+src/format/        time and text formatting
+src/components/    presentation
+src/optics/        the ambient optical background, mounted behind the page
+src/constellation/ the deterministic name composition
+tests/browser/     Playwright specs
 ```
+
+`src/constellation/` composes the name arrangement that replaces the results table in a
+later visual slice, so it is unit-tested and nothing renders it yet.
 
 `src/snapshot/contract.ts` restates the few constants a reader cannot derive from the
 payload it is handed: the format version it accepts, the cadence intervals, and the

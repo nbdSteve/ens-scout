@@ -169,6 +169,60 @@ test('a half-typed length is reported, and the report goes when the box is empti
   await expect(rows).toHaveCount(10)
 })
 
+test('the report goes when React empties the box itself, with no event to read', async ({
+  page,
+}) => {
+  /*
+   * The other half of the same rule, and the half no event can carry. The box is emptied by a
+   * forward navigation, so React writes `node.value` and Chromium settles the field's bad-input
+   * state silently: nothing fires, so a flag that only remembered the last `input` event went on
+   * describing a box the visitor could see was empty. `Toolbar.test.tsx` covers this with a
+   * hand-modelled field, which has to assert the browser semantics rather than exercise them;
+   * this is the same walk through real history against a real number input.
+   */
+  await visit(page, { view: 'all', min: '5' })
+  const box = page.getByRole('spinbutton', { name: 'Shortest label length' })
+  const advisory = page.getByRole('region', { name: 'Not applied' })
+  const count = page.getByRole('status').first()
+
+  await expect(box).toHaveValue('5')
+  // Three of the fixture's ten labels are five characters or longer.
+  await expect(count).toContainText('3 names match')
+
+  // A second history entry to come forward to, made by a control that filters nothing.
+  await openMore(page)
+  await page.getByRole('combobox', { name: 'Sort by' }).selectOption({ label: 'Expiry' })
+  expect(searchOf(page)).toContain('sort=expiry')
+
+  // Half-typing over the bound leaves the field unreadable, so the bound leaves the link.
+  await box.fill('')
+  await box.press('e')
+  expect(
+    await box.evaluate((node: HTMLInputElement) => ({
+      value: node.value,
+      badInput: node.validity.badInput,
+    })),
+    'Chromium no longer reports a half-typed number this way',
+  ).toEqual({ value: '', badInput: true })
+  await expect(advisory).toContainText(
+    'Shortest length not applied: this box needs a whole number from 1 to 64.',
+  )
+  await expect.poll(() => searchOf(page)).not.toContain('min=')
+
+  // Back to the entry that still carries the bound, so React writes `5` into the box.
+  await page.goBack()
+  await expect(box).toHaveValue('5')
+  await expect(count).toContainText('3 names match')
+
+  // And forward again to the entry the bound is gone from, so React writes the box empty.
+  await page.goForward()
+
+  await expect(box).toHaveValue('')
+  await expect(advisory, 'the report outlived the box it describes').toHaveCount(0)
+  await expect(box).toHaveAttribute('aria-invalid', 'false')
+  await expect(count).toContainText('10 names match')
+})
+
 test('the simulated clock can be given up, and says so on the way out', async ({ page }) => {
   await visit(page)
   await expect(page.getByRole('region', { name: 'Showing a simulated time' })).toBeVisible()
