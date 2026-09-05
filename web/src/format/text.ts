@@ -28,9 +28,23 @@ export function codePointLength(text: string): number {
  * UTF-8 byte order and code point order are the same order. Emoji labels are ordinary
  * in ENS, so this is the difference between reading a valid snapshot and refusing one.
  */
+const SURROGATE = /[\uD800-\uDFFF]/
+
 export function compareNames(left: string, right: string): number {
   if (left === right) {
     return 0
+  }
+  /*
+   * A surrogate code unit is the only thing that can make the two orders disagree, so
+   * without one the built-in comparison is already the publisher's order and is used as
+   * it stands. That is every label in the committed word lists. This comparator runs on
+   * the order of n log n times each time the list is re-sorted, which is once per
+   * keystroke in the search box, and the walk below allocates an iterator result per
+   * code point; the two scans that decide this cost far less than paying that for
+   * strings where it can make no difference.
+   */
+  if (!SURROGATE.test(left) && !SURROGATE.test(right)) {
+    return left < right ? -1 : 1
   }
   // The string iterator yields whole code points, which is what makes the surrogate
   // pair a single value rather than two units that sort below U+E000.

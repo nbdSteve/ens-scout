@@ -100,9 +100,9 @@ export function filterResults(
     }
     if (query.list !== null) {
       // With no verified attribution the filter cannot be honoured. It is not
-      // silently ignored either: `App` raises an advisory above the list saying the
-      // link named a list this snapshot cannot resolve, so the full set of rows is
-      // never mistaken for the filtered one.
+      // silently ignored either: `App` raises an advisory above the list saying this
+      // snapshot does not record which names are on the chosen list, so the full set
+      // of rows is never mistaken for the filtered one.
       if (context.sourceIdByName === null) {
         return true
       }

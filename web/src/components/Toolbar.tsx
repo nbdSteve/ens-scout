@@ -3,7 +3,14 @@ import { STATUSES, type Status } from '../snapshot/contract'
 import { STATUS_LABEL } from '../snapshot/lifecycle'
 import type { Attribution } from '../snapshot/attribution'
 import type { SourceList } from '../snapshot/types'
-import { isFiltered, normalizeSearch, type QueryState } from '../state/query'
+import {
+  isFiltered,
+  isLengthBound,
+  MAX_LENGTH_BOUND,
+  MIN_LENGTH_BOUND,
+  normalizeSearch,
+  type QueryState,
+} from '../state/query'
 import { useDraft } from '../state/useDraft'
 import { SORT_IDS, SORT_LABEL, isSortId, viewOrDefault, type SortId } from '../state/views'
 
@@ -41,18 +48,20 @@ export interface ToolbarProps {
   readonly resetHref: string
 }
 
-/** Shortest and longest label length a bound may name. Mirrors `parseQuery`. */
-const MIN_BOUND = 1
-const MAX_BOUND = 64
-
-/** Reads a length bound out of an input. Anything unusable clears the bound. */
+/**
+ * Reads a length bound out of an input.
+ *
+ * Two outcomes are decided here and no more: an empty box means no bound, and anything
+ * that is not a run of digits is not a number at all. Whether a number names a label
+ * length is `parseQuery`'s judgement, and forwarding it there is what makes a typed 100
+ * reported the same way a linked one is instead of disappearing on the way to the URL.
+ */
 function readBound(raw: string): number | null {
   const trimmed = raw.trim()
-  if (!/^[0-9]{1,2}$/.test(trimmed)) {
+  if (!/^[0-9]+$/.test(trimmed)) {
     return null
   }
-  const value = Number.parseInt(trimmed, 10)
-  return value >= MIN_BOUND && value <= MAX_BOUND ? value : null
+  return Number.parseInt(trimmed, 10)
 }
 
 function boundText(value: number | null): string {
@@ -97,14 +106,22 @@ export function Toolbar({
     (which: 'min' | 'max') =>
     (event: ChangeEvent<HTMLInputElement>): void => {
       const typed = event.target.value
-      const committed = readBound(typed)
+      const requested = readBound(typed)
+      /*
+       * The number is forwarded whatever it is, and the draft follows what the URL will
+       * hold rather than what was asked for: a bound outside the accepted span settles as
+       * no bound, so the box keeps the keystrokes while the advisory says why they are
+       * not filtering. Only the bound being edited is touched, so a rejected number
+       * cannot take the other one down with it.
+       */
+      const settled = requested !== null && isLengthBound(requested) ? requested : null
       if (which === 'min') {
-        min.setText(typed, boundText(committed))
-        setQuery({ length: { ...query.length, min: committed } }, { replace: true })
+        min.setText(typed, boundText(settled))
+        setQuery({ length: { ...query.length, min: requested } }, { replace: true })
         return
       }
-      max.setText(typed, boundText(committed))
-      setQuery({ length: { ...query.length, max: committed } }, { replace: true })
+      max.setText(typed, boundText(settled))
+      setQuery({ length: { ...query.length, max: requested } }, { replace: true })
     }
 
   const onStatus = (status: Status, checked: boolean): void => {
@@ -158,8 +175,8 @@ export function Toolbar({
               className="input input--bound mono"
               id="control-min"
               inputMode="numeric"
-              max={MAX_BOUND}
-              min={MIN_BOUND}
+              max={MAX_LENGTH_BOUND}
+              min={MIN_LENGTH_BOUND}
               onChange={onBound('min')}
               placeholder="any"
               type="number"
@@ -175,8 +192,8 @@ export function Toolbar({
               className="input input--bound mono"
               id="control-max"
               inputMode="numeric"
-              max={MAX_BOUND}
-              min={MIN_BOUND}
+              max={MAX_LENGTH_BOUND}
+              min={MIN_LENGTH_BOUND}
               onChange={onBound('max')}
               placeholder="any"
               type="number"

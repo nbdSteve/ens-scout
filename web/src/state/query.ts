@@ -115,8 +115,26 @@ export interface QueryState {
 /** Longest search text accepted, so a hostile URL cannot make the page do work. */
 const MAX_SEARCH_LENGTH = 128
 
-/** Longest label length a range bound may name. */
-const MAX_LENGTH_BOUND = 64
+/**
+ * Shortest and longest label length a range bound may name.
+ *
+ * Exported because the toolbar's two spinbuttons advertise the same span, and a toolbar
+ * that offered a wider one than the parser accepts would let a visitor type a number
+ * that is then reported back to them as unusable.
+ */
+export const MIN_LENGTH_BOUND = 1
+export const MAX_LENGTH_BOUND = 64
+
+/**
+ * Whether a number names a label length a bound may hold.
+ *
+ * One predicate, so the parser and the toolbar cannot disagree about it. The toolbar
+ * needs the same answer the parser will give, because it decides from that whether the
+ * box it is showing holds a value the URL is about to keep.
+ */
+export function isLengthBound(value: number): boolean {
+  return Number.isSafeInteger(value) && value >= MIN_LENGTH_BOUND && value <= MAX_LENGTH_BOUND
+}
 
 export const PARAM = {
   view: 'view',
@@ -152,18 +170,21 @@ export function normalizeSearch(raw: string): string {
   return withoutSuffix.slice(0, MAX_SEARCH_LENGTH)
 }
 
+/** How much of an unusable bound is quoted back, since a link can carry anything. */
+const MAX_BOUND_ECHO = 8
+
 function parseBound(raw: string | null, what: string, warnings: string[]): number | null {
   if (raw === null || raw === '') {
     return null
   }
   const value = Number.parseInt(raw, 10)
-  if (
-    !/^[0-9]+$/.test(raw) ||
-    !Number.isSafeInteger(value) ||
-    value < 1 ||
-    value > MAX_LENGTH_BOUND
-  ) {
-    warnings.push(`Ignored an unusable ${what} in the link.`)
+  if (!/^[0-9]+$/.test(raw) || !isLengthBound(value)) {
+    // Named by its value and the span that would have worked, not by where it came
+    // from: the toolbar forwards what was typed rather than sanitising it, so a
+    // keystroke reaches this on the same path a shared link does.
+    warnings.push(
+      `${what} not applied: ${raw.slice(0, MAX_BOUND_ECHO)} is not between ${String(MIN_LENGTH_BOUND)} and ${String(MAX_LENGTH_BOUND)}.`,
+    )
     return null
   }
   return value
@@ -215,8 +236,8 @@ export function parseQuery(search: string): ParsedQuery {
       : STATUSES.filter((s) => requestedStatuses.has(s))
 
   const length: LengthRange = {
-    min: parseBound(params.get(PARAM.minLength), 'shortest length', warnings),
-    max: parseBound(params.get(PARAM.maxLength), 'longest length', warnings),
+    min: parseBound(params.get(PARAM.minLength), 'Shortest length', warnings),
+    max: parseBound(params.get(PARAM.maxLength), 'Longest length', warnings),
   }
 
   const rawList = params.get(PARAM.list)

@@ -15,38 +15,33 @@ import { DAY, expectAccessible, openDetails, openMore, since, visit } from './su
 const VIEWS = ['all', 'available', 'premium', 'expiring', 'grace'] as const
 
 /*
- * Both colour schemes, because the palettes are independent and axe only ever sees
- * the one the browser asked for. A contrast failure was found this way: the light
- * palette's link colour cleared 4.5:1 on white and missed it on the tinted banner
- * backgrounds, which the default light-only run would have gone on passing.
+ * One pass per state, not one per colour scheme. `index.css` declares a single palette
+ * and pins `color-scheme: light` on `:root`, so a dark browser context selects no
+ * different rule and leaves the UA widgets light: a second run under it asserted the
+ * same rendering twice, at every viewport. What the contrast checks actually need is
+ * every background the ink is set on, which is what the states below cover - the tinted
+ * banners a link sits on are in the filtered, empty, and stale cases.
  */
-for (const colorScheme of ['light', 'dark'] as const) {
-  test.describe(`in the ${colorScheme} palette`, () => {
-    test.use({ colorScheme })
-
-    for (const view of VIEWS) {
-      test(`the ${view} view has no automated accessibility violations`, async ({ page }) => {
-        await visit(page, { view })
-        await expect(page.getByRole('table')).toBeVisible()
-        await expectAccessible(page)
-      })
-    }
-
-    test('and neither has anything behind a disclosure', async ({ page }) => {
-      /*
-       * axe examines what is rendered, and a closed `<details>` renders nothing, so
-       * the two disclosures would otherwise never be checked in either palette.
-       * Between them they hold every select, every checkbox, the source-list
-       * schedules, the counts, and the lifecycle rules - which is most of the
-       * page's text and most of its controls.
-       */
-      await visit(page, { view: 'all' })
-      await openMore(page)
-      await openDetails(page)
-      await expectAccessible(page)
-    })
+for (const view of VIEWS) {
+  test(`the ${view} view has no automated accessibility violations`, async ({ page }) => {
+    await visit(page, { view })
+    await expect(page.getByRole('table')).toBeVisible()
+    await expectAccessible(page)
   })
 }
+
+test('and neither has anything behind a disclosure', async ({ page }) => {
+  /*
+   * axe examines what is rendered, and a closed `<details>` renders nothing, so the two
+   * disclosures would otherwise never be checked at all. Between them they hold every
+   * select, every checkbox, the source-list schedules, the counts, and the lifecycle
+   * rules - which is most of the page's text and most of its controls.
+   */
+  await visit(page, { view: 'all' })
+  await openMore(page)
+  await openDetails(page)
+  await expectAccessible(page)
+})
 
 test('a filtered view has none either', async ({ page }) => {
   await visit(page, { q: 'a', status: 'available', min: '3', max: '5', dir: 'desc' })

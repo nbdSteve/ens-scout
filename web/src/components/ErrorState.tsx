@@ -17,6 +17,15 @@ import type { LoadFailure } from '../state/useSnapshot'
 export interface ErrorStateProps {
   readonly failure: LoadFailure
   readonly onRetry: () => void
+  /**
+   * How a document reload is performed. Injected for tests, since the real one would
+   * take the test runner's page with it.
+   */
+  readonly onReload?: () => void
+}
+
+function reloadDocument(): void {
+  window.location.reload()
 }
 
 const EXPLANATION: Readonly<Record<LoadFailure['kind'], string>> = {
@@ -34,7 +43,20 @@ const RETRY_LABEL: Readonly<Record<LoadFailure['kind'], string>> = {
   unavailable: 'Try again',
 }
 
-export function ErrorState({ failure, onRetry }: ErrorStateProps): ReactNode {
+export function ErrorState({
+  failure,
+  onRetry,
+  onReload = reloadDocument,
+}: ErrorStateProps): ReactNode {
+  /*
+   * A version mismatch is the one failure retrying cannot fix. The payload is newer than
+   * this bundle, so fetching it again from the same bundle lands on the same error, and
+   * only a document load can pick up a newer one. The button says it reloads the page, so
+   * it reloads the page: a button that claimed an action it had not taken would be the
+   * same failure of trust as a status this page had not really read.
+   */
+  const press = failure.kind === 'version' ? onReload : onRetry
+
   return (
     <div className="card state" role="alert">
       <h2 className="state__title">The snapshot could not be shown</h2>
@@ -42,7 +64,7 @@ export function ErrorState({ failure, onRetry }: ErrorStateProps): ReactNode {
       <p className="prose">
         Reported reason: <span className="mono">{failure.message}</span>
       </p>
-      <button className="button" onClick={onRetry} type="button">
+      <button className="button" onClick={press} type="button">
         {RETRY_LABEL[failure.kind]}
       </button>
       <p className="prose">

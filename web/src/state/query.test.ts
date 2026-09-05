@@ -100,15 +100,31 @@ describe('query parsing of links that cannot be honoured', () => {
     expect(isInvertedRange(parseQuery('?max=3').state.length)).toBe(false)
   })
 
+  // The message names the value and the span that would have worked, and never where
+  // the value came from: the toolbar forwards a typed bound to this same check, so a
+  // keystroke and a shared link reach one wording.
   it.each([
-    ['?min=0', 'shortest length'],
-    ['?max=999', 'longest length'],
-    ['?min=-3', 'shortest length'],
-    ['?min=3.5', 'shortest length'],
-  ])('refuses a length bound that names no label: %s', (search, what) => {
+    ['?min=0', 'Shortest length not applied: 0 is not between 1 and 64.'],
+    ['?max=999', 'Longest length not applied: 999 is not between 1 and 64.'],
+    ['?min=65', 'Shortest length not applied: 65 is not between 1 and 64.'],
+    ['?min=100', 'Shortest length not applied: 100 is not between 1 and 64.'],
+    ['?min=-3', 'Shortest length not applied: -3 is not between 1 and 64.'],
+    ['?min=3.5', 'Shortest length not applied: 3.5 is not between 1 and 64.'],
+  ])('refuses a length bound that names no label, and says which: %s', (search, message) => {
     const { state, warnings } = parseQuery(search)
     expect(state.length).toEqual({ min: null, max: null })
-    expect(warnings).toEqual([expect.stringContaining(what)])
+    expect(warnings).toEqual([message])
+  })
+
+  it('quotes back only a short head of an absurd bound, so a link cannot fill the notice', () => {
+    const { state, warnings } = parseQuery(`?min=${'9'.repeat(400)}`)
+    expect(state.length).toEqual({ min: null, max: null })
+    expect(warnings).toEqual(['Shortest length not applied: 99999999 is not between 1 and 64.'])
+  })
+
+  it('accepts both ends of the span it advertises', () => {
+    expect(parseQuery('?min=1&max=64').state.length).toEqual({ min: 1, max: 64 })
+    expect(parseQuery('?min=1&max=64').warnings).toEqual([])
   })
 
   it.each(['?page=0', '?page=-2', '?page=two', '?page=1.5'])(

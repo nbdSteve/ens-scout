@@ -182,6 +182,41 @@ describe('Toolbar length range', () => {
     expect(screen.getByLabelText('Shortest label length')).toHaveValue(null)
   })
 
+  it('says so when a typed bound names no label length, and keeps the other one', async () => {
+    const user = userEvent.setup()
+    // A longest length that is really filtering, so the count shows whether the other
+    // bound survived the rejected keystroke.
+    mount('?view=all&max=4')
+    expect(screen.getByRole('status')).toHaveTextContent('3 names match')
+
+    // A third digit on a two-digit bound, which is how a visitor reaches this: 100 is
+    // not a label length, and it used to take `max=4` down with it in silence.
+    await user.type(screen.getByLabelText('Shortest label length'), '100')
+
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'Shortest length not applied: 100 is not between 1 and 64.',
+    )
+    // The keystrokes stay on screen, the bound the visitor already had still filters,
+    // and the shortest bound is simply not one.
+    expect(screen.getByLabelText('Shortest label length')).toHaveValue(100)
+    expect(screen.getByLabelText('Longest label length')).toHaveValue(4)
+    expectCanonicalLink('?view=all&max=4')
+    expect(screen.getByRole('status')).toHaveTextContent('3 names match')
+  })
+
+  it.each(['0', '65', '99', '100'])(
+    'reports a typed %s the same way the same value in a link is reported',
+    async (typed) => {
+      const user = userEvent.setup()
+      mount('?view=all')
+      await user.type(screen.getByLabelText('Shortest label length'), typed)
+
+      const fromLink = parseQuery(`?view=all&min=${typed}`).warnings
+      expect(fromLink).toHaveLength(1)
+      expect(screen.getByRole('alert')).toHaveTextContent(fromLink[0] ?? '')
+    },
+  )
+
   it('keeps a range that arrived inverted in a link, and says it is not applied', () => {
     mount('?view=all&min=9&max=4')
 
