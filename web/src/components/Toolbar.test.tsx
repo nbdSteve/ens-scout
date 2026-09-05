@@ -134,6 +134,17 @@ async function goBack(): Promise<void> {
   })
 }
 
+/**
+ * Says whether the field can read its own contents.
+ *
+ * jsdom models no bad-input state, so the test states it. In a browser this is what a
+ * number input reports for `5.`, `-`, or a lone `e`: the field shows the text, `value` is
+ * the empty string, and `validity.badInput` is the only thing that tells the two apart.
+ */
+function unreadable(box: HTMLElement, badInput: boolean): void {
+  Object.defineProperty(box, 'validity', { configurable: true, value: { badInput } })
+}
+
 /** The link is canonical when parsing and re-serializing it changes nothing. */
 function expectCanonicalLink(expected: string): void {
   expect(window.location.search).toBe(expected)
@@ -304,10 +315,8 @@ describe('Toolbar length range', () => {
     expect(screen.getByRole('status')).toHaveTextContent('1 name matches')
 
     const box = screen.getByLabelText('Shortest label length')
-    // jsdom does not model the state, so the test states it: this is what a browser hands
-    // a change handler for `5.`, `-`, or a lone `e`.
-    Object.defineProperty(box, 'validity', { configurable: true, value: { badInput: true } })
-    fireEvent.change(box, { target: { value: '' } })
+    unreadable(box, true)
+    fireEvent.input(box, { target: { value: '' } })
 
     expect(notAppliedBand()).toHaveTextContent(
       'Shortest length not applied: this box needs a whole number from 1 to 64.',
@@ -316,6 +325,45 @@ describe('Toolbar length range', () => {
     // The bound really is gone, which is what the notice is there to explain.
     expectCanonicalLink('?view=all')
     expect(screen.getByRole('status')).toHaveTextContent('4 names match')
+  })
+
+  it('says so for the first character typed into an empty box, which changes no value', () => {
+    /*
+     * The box is empty and no bound is applied, so a `.` leaves the reported value exactly
+     * where it was. React dispatches no change for that, which is why the validity is read
+     * from the native `input` event instead: the field visibly holds a character, and a
+     * character that filters nothing has to be reported like any other.
+     */
+    mount('?view=all')
+    const box = screen.getByLabelText('Shortest label length')
+
+    unreadable(box, true)
+    fireEvent.input(box, { target: { value: '' } })
+
+    expect(notAppliedBand()).toHaveTextContent(
+      'Shortest length not applied: this box needs a whole number from 1 to 64.',
+    )
+    expect(box).toHaveAttribute('aria-invalid', 'true')
+  })
+
+  it('stops saying so once the box is emptied out of that state', () => {
+    /*
+     * Select all and delete over a field showing `5.`. The reported value was already the
+     * empty string and still is, so again React dispatches nothing - and the band went on
+     * claiming a bound was not applied over a box the visitor had emptied, which is the page
+     * stating something it has not established.
+     */
+    mount('?view=all&min=5')
+    const box = screen.getByLabelText('Shortest label length')
+    unreadable(box, true)
+    fireEvent.input(box, { target: { value: '' } })
+    expect(notAppliedBand()).toBeInTheDocument()
+
+    unreadable(box, false)
+    fireEvent.input(box, { target: { value: '' } })
+
+    expect(queryNotAppliedBand()).not.toBeInTheDocument()
+    expect(box).toHaveAttribute('aria-invalid', 'false')
   })
 
   it('describes the offending box by its own message, so the two are read together', () => {

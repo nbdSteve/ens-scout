@@ -647,12 +647,24 @@ never the ENS availability authority.
   row by `the first screen is the answer, not an introduction`. A list problem gets a band of
   its own: it needs a recovery link rather than a line, and the two list cases are mutually
   exclusive, so it never costs more than one.
-  That band announces politely, and only on a line appearing. Its length lines are derived
-  from the boxes and so change while the visitor types, which an assertive region would read
-  over them on every digit, and `role="status"` would re-read the whole band because it is
-  atomic. Each length line carries the id its box points `aria-describedby` at and is keyed
-  by the box rather than by its wording, so correcting a rejected value rewrites the text in
-  place instead of removing a line and adding a new one to announce.
+  The advisories block, not the band, is the polite live region, and it is mounted from the
+  first paint even when it holds nothing. A region rendered only when it has something to say
+  enters the DOM together with its first line, and a live region created with its content is
+  announced by nothing - which was the common case here, because one line is usually all
+  there is. Keep it mounted and keep it collapsed while empty; do not move the region back
+  onto the band. An assertive region is wrong for the same block, because its length lines
+  change while the visitor types and would be read over them on every digit. Each length line
+  carries the id its box points `aria-describedby` at and is keyed by the box rather than by
+  its wording, so correcting a rejected value rewrites the text in place instead of removing
+  a line and adding a new one. A visitor editing a rejected value quickly may still hear the
+  rewritten line again; `aria-relevant` is the only attribute that would suppress that and
+  NVDA does not implement it, so that one is left as a known limitation rather than claimed.
+- A length box reports its validity from the native `input` event, never from React's
+  `onChange`. React dispatches `onChange` only when a controlled field's sanitized value
+  changes, and a number input holding `5.` reports the empty string throughout: a `.` typed
+  into an empty box changed no value and was never reported, and a box emptied out of that
+  state changed no value either and went on claiming its bound was not applied. Both halves
+  matter, and the second is the page stating something it has not established.
 - The page never states something it has not established. The stored-copy band is worded
   from the failure kind, because an unreachable API, a payload this build refused, and a
   format it does not know are three different things and one sentence for all three was

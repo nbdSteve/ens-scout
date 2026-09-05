@@ -128,6 +128,47 @@ test('a length range that is not applied keeps saying so through the back button
   await expect(advisory).toContainText('Length range not applied: shortest 9 is above longest 5.')
 })
 
+test('a half-typed length is reported, and the report goes when the box is emptied', async ({
+  page,
+}) => {
+  /*
+   * Only a real browser has the state this is about, and every unit test of it has to say so
+   * by hand. Here Chromium says it: a lone `e` is the exponent of a number the visitor has
+   * not finished, so the field shows the character and reports its value as the empty string.
+   *
+   * That is also the harder half. Nothing the page can see changes - the value was empty and
+   * still is, so React dispatches no change at all - which is why the validity is read from
+   * the native `input` event instead.
+   */
+  await visit(page, { view: 'all' })
+  const box = page.getByRole('spinbutton', { name: 'Shortest label length' })
+  const advisory = page.getByRole('region', { name: 'Not applied' })
+  const rows = page.getByRole('table').getByRole('rowheader')
+
+  await box.press('e')
+
+  expect(
+    await box.evaluate((node: HTMLInputElement) => ({
+      value: node.value,
+      badInput: node.validity.badInput,
+    })),
+    'Chromium no longer reports a half-typed number this way',
+  ).toEqual({ value: '', badInput: true })
+  await expect(advisory).toContainText(
+    'Shortest length not applied: this box needs a whole number from 1 to 64.',
+  )
+  await expect(box).toHaveAttribute('aria-invalid', 'true')
+  // Nothing is filtering by length, which is what the notice is there to explain.
+  await expect(rows).toHaveCount(10)
+
+  await box.fill('')
+
+  // The box is empty and nothing is wrong, so the page has nothing to say about it.
+  await expect(advisory).toHaveCount(0)
+  await expect(box).toHaveAttribute('aria-invalid', 'false')
+  await expect(rows).toHaveCount(10)
+})
+
 test('the simulated clock can be given up, and says so on the way out', async ({ page }) => {
   await visit(page)
   await expect(page.getByRole('region', { name: 'Showing a simulated time' })).toBeVisible()

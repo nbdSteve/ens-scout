@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { boundNotApplied, readLengthBound, type BoundEnd, type LengthRange } from './query'
 import { useDraft } from './useDraft'
 
@@ -28,16 +28,22 @@ export interface BoundAdvisory {
 export interface BoundBox {
   /** What to show in the input. */
   readonly text: string
+  /** Records what was typed and the bound it named. */
+  readonly setText: (typed: string, committed: string) => void
   /**
-   * Records what was typed, the bound it named, and whether the browser could read the
-   * field at all.
+   * Records whether the browser could read the field at all.
    *
-   * `badInput` is the one state the text cannot carry. A number input reports its value as
-   * the empty string while the field visibly holds `3.`, which is indistinguishable from an
-   * emptied box unless the validity is passed along - and without it an applied bound came
-   * down with nothing on screen to explain why.
+   * This is the one state the text cannot carry: a number input reports its value as the
+   * empty string while the field visibly holds `5.`, so an empty text alone cannot tell an
+   * emptied box from an unreadable one.
+   *
+   * It has to be observed from the native `input` event rather than from React's
+   * `onChange`, which React dispatches only when the sanitized value changes. In this state
+   * it does not change, and both halves of that were wrong: a `.` typed into an empty box
+   * was never reported at all, and a box emptied out of that state went on claiming its
+   * bound was not applied.
    */
-  readonly setText: (typed: string, committed: string, badInput: boolean) => void
+  readonly setUnreadable: (badInput: boolean) => void
   /** This box's message, or null while it is filtering. */
   readonly advisory: BoundAdvisory | null
 }
@@ -63,15 +69,6 @@ export function boundText(value: number | null): string {
 function useBoundBox(end: BoundEnd, committed: string): BoundBox {
   const draft = useDraft(committed)
   const [unreadable, setUnreadable] = useState(false)
-  const record = draft.setText
-
-  const setText = useCallback(
-    (typed: string, next: string, badInput: boolean) => {
-      record(typed, next)
-      setUnreadable(badInput)
-    },
-    [record],
-  )
 
   const advisory = useMemo<BoundAdvisory | null>(() => {
     const trimmed = draft.text.trim()
@@ -92,7 +89,7 @@ function useBoundBox(end: BoundEnd, committed: string): BoundBox {
     return message === null ? null : { end, id: ADVISORY_ID[end], text: message }
   }, [end, draft.text, unreadable])
 
-  return { text: draft.text, setText, advisory }
+  return { text: draft.text, setText: draft.setText, setUnreadable, advisory }
 }
 
 export function useLengthDrafts(length: LengthRange): LengthDrafts {

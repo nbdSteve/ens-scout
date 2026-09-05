@@ -168,7 +168,21 @@ export function App({ config = appConfig, deps }: AppProps): ReactNode {
 
           {snapshot !== null && <TrustLine now={now} snapshot={snapshot} />}
 
-          <div className="advisories">
+          {/*
+           * The block is the polite region, and it is always mounted even when it holds
+           * nothing. A region that is rendered only when it has something to say enters the
+           * DOM together with its first line, and a live region created with its content is
+           * the case where a screen reader announces nothing at all - which is the common
+           * case here, since one line is usually all there is. Mounted from the first paint,
+           * a line appearing is a mutation inside a region that already exists, so it is
+           * announced without depending on `aria-relevant`, which NVDA does not implement.
+           * It is styled to collapse while empty, so it costs no space above the names.
+           *
+           * Every banner inside that appears later than the first paint declares its own
+           * `role="alert"`, which governs its own subtree, so this changes how one thing is
+           * announced: the `Not applied` band, which is the one fed by a text box.
+           */}
+          <div aria-live="polite" className="advisories">
             {query.now !== null && (
               <SimulatedClockNotice now={now} realHref={hrefFor({ now: null })} />
             )}
@@ -179,14 +193,15 @@ export function App({ config = appConfig, deps }: AppProps): ReactNode {
              * that names no length. Titled without naming a link, because a visitor who
              * followed none must not be told one was at fault.
              *
-             * Announced politely and only on a line appearing, because the length lines
-             * change while the visitor types. Each of those carries the id its box points
-             * `aria-describedby` at, and is keyed by the box rather than by its wording, so
-             * editing a rejected value rewrites the text in place instead of removing the
-             * line and adding it back as something new to announce.
+             * Announced by the block above rather than by a region of its own, because the
+             * length lines change while the visitor types and a band that appears with its
+             * first line already inside it is never announced at all. Each line carries the
+             * id its box points `aria-describedby` at, and is keyed by the box rather than by
+             * its wording, so editing a rejected value rewrites the text in place instead of
+             * removing the line and adding it back.
              */}
             {notApplied > 0 && (
-              <Notice tone="warn" title="Not applied" voice="additions">
+              <Notice tone="warn" title="Not applied">
                 <ul className="notice__list">
                   {warnings.map((warning) => (
                     <li key={warning}>{warning}</li>

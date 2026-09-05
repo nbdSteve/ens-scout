@@ -13,15 +13,16 @@ export type NoticeTone = 'info' | 'warn' | 'danger'
  * How the banner reaches a screen reader.
  *
  * `silent` is reached in document order, which is all that text present from the first
- * render needs. `alert` interrupts, and is for something that appeared later and changes
- * what the rows below mean.
+ * render needs, and all a banner needs when something around it is already a live region.
+ * `alert` interrupts, and is for something that appeared later and changes what the rows
+ * below mean.
  *
- * `additions` announces a line that appears, politely, and says nothing when the wording
- * of a line already there changes. A band fed by a text box needs exactly that: `alert`
- * would interrupt the visitor on every digit they type, and `role="status"` is atomic, so
- * it would re-read the whole band each time a number inside it moved.
+ * A banner cannot carry a polite region of its own: one that is rendered only when it has
+ * something to say enters the DOM together with its first line, and a live region created
+ * with its content is the case where nothing is announced. The polite region therefore
+ * lives on the advisories block, which is always mounted.
  */
-export type NoticeVoice = 'silent' | 'alert' | 'additions'
+export type NoticeVoice = 'silent' | 'alert'
 
 export interface NoticeProps {
   readonly tone: NoticeTone
@@ -31,18 +32,7 @@ export interface NoticeProps {
 }
 
 function voiceProps(voice: NoticeVoice, title: string): HTMLAttributes<HTMLElement> {
-  if (voice === 'alert') {
-    return { role: 'alert' }
-  }
-  if (voice === 'additions') {
-    return {
-      'aria-label': title,
-      'aria-live': 'polite',
-      'aria-atomic': false,
-      'aria-relevant': 'additions',
-    }
-  }
-  return { 'aria-label': title }
+  return voice === 'alert' ? { role: 'alert' } : { 'aria-label': title }
 }
 
 export function Notice({ tone, title, children, voice = 'silent' }: NoticeProps): ReactNode {

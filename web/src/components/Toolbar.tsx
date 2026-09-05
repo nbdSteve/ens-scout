@@ -1,4 +1,4 @@
-import type { ChangeEvent, ReactNode } from 'react'
+import { useEffect, useRef, type ChangeEvent, type ReactNode } from 'react'
 import { STATUSES, type Status } from '../snapshot/contract'
 import { STATUS_LABEL } from '../snapshot/lifecycle'
 import type { Attribution } from '../snapshot/attribution'
@@ -99,20 +99,56 @@ export function Toolbar({
        * label length. `useLengthDrafts` is then the one thing that reports the gap, for
        * as long as the box still holds it. Only the end being edited is touched, so a
        * value this rejects cannot take the other bound down with it.
-       *
-       * The validity travels with the text because the text alone cannot say that a `.`
-       * or a lone `-` is on screen: for those the field reports no value at all.
        */
-      const badInput = event.target.validity.badInput
       const bound = readLengthBound(typed.trim())
       if (end === 'min') {
-        min.setText(typed, boundText(bound), badInput)
+        min.setText(typed, boundText(bound))
         setQuery({ length: { ...query.length, min: bound } }, { replace: true })
         return
       }
-      max.setText(typed, boundText(bound), badInput)
+      max.setText(typed, boundText(bound))
       setQuery({ length: { ...query.length, max: bound } }, { replace: true })
     }
+
+  const minBox = useRef<HTMLInputElement>(null)
+  const maxBox = useRef<HTMLInputElement>(null)
+  const noteMin = min.setUnreadable
+  const noteMax = max.setUnreadable
+
+  /*
+   * The validity is read from the native `input` event, not from the change above.
+   *
+   * React dispatches `onChange` only when a controlled field's sanitized value changes, and
+   * a number input in bad-input state reports the empty string throughout: pressing `.` in
+   * an empty box never reached the handler at all, and emptying a box that already held `5.`
+   * never reached it either, so the notice was missed in the first case and outlived the box
+   * in the second. The native event fires on both, because the text the visitor can see did
+   * change. It feeds the same flag, so there is still one thing that decides what the band
+   * says.
+   */
+  useEffect(() => {
+    const watched: readonly (readonly [HTMLInputElement | null, (bad: boolean) => void])[] = [
+      [minBox.current, noteMin],
+      [maxBox.current, noteMax],
+    ]
+    const stop = watched.map(([node, note]) => {
+      if (node === null) {
+        return () => undefined
+      }
+      const onInput = (): void => {
+        note(node.validity.badInput)
+      }
+      node.addEventListener('input', onInput)
+      return () => {
+        node.removeEventListener('input', onInput)
+      }
+    })
+    return () => {
+      for (const off of stop) {
+        off()
+      }
+    }
+  }, [noteMin, noteMax])
 
   const onStatus = (status: Status, checked: boolean): void => {
     const next = checked
@@ -174,6 +210,7 @@ export function Toolbar({
               min={MIN_LENGTH_BOUND}
               onChange={onBound('min')}
               placeholder="any"
+              ref={minBox}
               type="number"
               value={min.text}
             />
@@ -193,6 +230,7 @@ export function Toolbar({
               min={MIN_LENGTH_BOUND}
               onChange={onBound('max')}
               placeholder="any"
+              ref={maxBox}
               type="number"
               value={max.text}
             />

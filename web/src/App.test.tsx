@@ -119,6 +119,24 @@ describe('App default view', () => {
     expect(new URLSearchParams(window.location.search).get('view')).toBeNull()
   })
 
+  it('holds the polite region open before there is anything to announce', async () => {
+    await mount()
+
+    /*
+     * A live region has to exist before the mutation it should announce. Rendered only when
+     * it has something to say, it would enter the DOM together with its first line and a
+     * screen reader would announce nothing at all - so the block is mounted from the first
+     * paint and the band appears inside it.
+     */
+    const region = document.querySelector('[aria-live="polite"]')
+    expect(region).not.toBeNull()
+    expect(screen.queryByRole('region', { name: 'Not applied' })).not.toBeInTheDocument()
+
+    await userEvent.setup().type(screen.getByLabelText('Shortest label length'), '100')
+
+    expect(region).toContainElement(screen.getByRole('region', { name: 'Not applied' }))
+  })
+
   it('drops the explanation once the visitor changes something', async () => {
     const user = userEvent.setup()
     await mount(`?view=nope&now=${NOW.toISOString().slice(0, 19)}Z`)
