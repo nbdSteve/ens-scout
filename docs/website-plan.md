@@ -52,11 +52,11 @@ An optional lookup endpoint will recheck a small set of names on demand.
 
 `README.md` records what the repository holds today, including the
 `cmd/scan-lambda/`, `internal/scanner/`, and `internal/dynamo/` packages the
-publisher work added.
+publisher work added, and the `internal/api/` package the read API work added.
 The directories still to be created are:
 
 ```text
-cmd/api-lambda/       snapshot reads and live verification
+cmd/api-lambda/       the entrypoint that wires internal/api and live checks
 web/                  React, TypeScript, and Vite frontend application
 infra/                TypeScript AWS CDK application
 ```
@@ -148,6 +148,11 @@ when the ID changes.
 The live-check endpoint must normalize and deduplicate labels, limit request
 size, use bounded concurrency, and apply rate limiting. It must never expose
 the Graph API key or upstream endpoint.
+
+`internal/api` now implements the snapshot, metadata, and health endpoints, and
+[read-api.md](read-api.md) is the delivered contract. The live-check endpoint is
+not in that package: it queries The Graph, so it arrives with live verification
+in phase 3.
 
 ## Frontend scope
 

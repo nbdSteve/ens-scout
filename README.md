@@ -116,6 +116,7 @@ internal/report/      text, JSON Lines, and CSV output
 internal/snapshot/    deterministic snapshot contract, storage fakes, fixtures
 internal/scanner/     one scheduled scan, from event to published pointer
 internal/dynamo/      DynamoDB snapshot storage
+internal/api/         cached HTTP read API for the published snapshot
 data/words/           current candidate lists
 data/fixtures/        committed fixture snapshots for local development
 data/results/         historical scan output from the original utility
@@ -206,13 +207,64 @@ go build -o bootstrap ./cmd/scan-lambda
 
 No infrastructure is defined in this repository yet.
 
+## Read API
+
+`internal/api` serves the published snapshot over HTTP. It is the read half of
+the website: a browser fetches one snapshot, keeps it locally, and does every
+filter, sort, and countdown itself, so ordinary browsing never reaches DynamoDB
+or The Graph.
+
+```text
+GET /api/snapshot        the published snapshot, byte for byte
+GET /api/snapshot/meta   scan time, counts, sources, and staleness thresholds
+GET /health              whether a complete snapshot is being served
+```
+
+Only a complete, checksum-verified snapshot is served. Nothing is repaired and
+nothing partial is returned, so a store with nothing published, a snapshot whose
+chunks have gone, and a payload that failed verification are three distinct
+responses rather than one.
+
+The `/api/snapshot` body is the canonical JSON that was published, unchanged, so
+its SHA-256 is the checksum the latest pointer carries. The snapshot ID is the
+`ETag` and the scan time is `Last-Modified`, so a client that already holds the
+snapshot revalidates with `If-None-Match` and gets `304 Not Modified` instead of
+a retransmission.
+
+Staleness is published as thresholds rather than as a flag, per contributing
+word list as well as for the snapshot, so a client resolves it against its own
+clock. `/health` is the one endpoint that resolves an age itself, and it is the
+one endpoint that is never cacheable.
+
+Configuration is environment only:
+
+```text
+ENS_API_ALLOWED_ORIGINS       comma-separated exact browser origins
+ENS_API_MAX_BODY_BYTES        bound on the snapshot body
+ENS_API_CACHE_SECONDS         max-age on a cacheable response
+ENS_API_RETRY_AFTER_SECONDS   Retry-After when nothing valid is published
+```
+
+Neither this API nor the subgraph is the registration authority, so every
+response carries the scan time and an advisory to confirm availability and price
+with ENS before registering.
+
+The full contract is in [docs/read-api.md](docs/read-api.md).
+
 ## Development
 
 ```powershell
 go test ./...
 go vet ./...
 gofmt -w cmd internal
+$env:GOOS = "linux"; $env:GOARCH = "arm64"; go build -o /dev/null ./cmd/scan-lambda
 ```
+
+The last line only confirms the Lambda still cross-compiles for its runtime, so
+its output is discarded. A plain `go build ./cmd/scan-lambda` would instead leave
+an 18 MB binary in the working tree, which is a build artifact and never belongs
+in a commit. The deployment build above is the one that writes a binary, and it
+names it `bootstrap` because that is what the runtime executes.
 
 No test contacts The Graph or AWS. The DynamoDB API and the storage interfaces
 are injected, so every path is exercised against local fakes.

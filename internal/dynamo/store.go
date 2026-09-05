@@ -134,6 +134,7 @@ func New(api API, options Options) (*Store, error) {
 var (
 	_ snapshot.Store        = (*Store)(nil)
 	_ snapshot.StagingStore = (*Store)(nil)
+	_ snapshot.Reader       = (*Store)(nil)
 )
 
 // PutChunks writes the chunks of one snapshot, applying the ChunkStore rule to
