@@ -8,8 +8,12 @@ import (
 	"time"
 )
 
-// MemoryStore records staged snapshots as well as published ones.
-var _ StagingStore = (*MemoryStore)(nil)
+// MemoryStore records staged snapshots as well as published ones, and satisfies
+// the read-only surface a serving path takes.
+var (
+	_ StagingStore = (*MemoryStore)(nil)
+	_ Reader       = (*MemoryStore)(nil)
+)
 
 // MemoryStore is an in-memory Store for tests and local runs. It deep copies
 // chunk bytes and pointers on the way in and out, so a caller cannot reach into

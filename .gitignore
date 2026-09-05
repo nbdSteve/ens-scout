@@ -9,5 +9,10 @@
 *.test
 coverage.out
 
+# Compiled command binaries, which `go build ./cmd/...` writes here by default
+/ens-scrape
+/scan-lambda
+/bootstrap
+
 # Local scan output
 /results/
