@@ -34,8 +34,8 @@ export function StaleWarning({ metadata, now }: StaleWarningProps): ReactNode {
 
   return (
     <Notice
-      alert
       tone="warn"
+      voice="alert"
       title={
         stale.length === 1
           ? 'One source list is out of date'

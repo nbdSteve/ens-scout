@@ -43,7 +43,7 @@ function Harness({
   const resolved = attribution ?? deriveAttribution(snapshot.metadata.sources, snapshot.results)
   const context = { sourceIdByName: resolved.available ? resolved.sourceIdByName : null }
   const page = applyQuery(snapshot.results, query, context)
-  const notApplied = [...warnings, ...lengthDrafts.advisories]
+  const notApplied = warnings.length + lengthDrafts.advisories.length
   return (
     <>
       <p role="status">
@@ -51,12 +51,19 @@ function Harness({
       </p>
       {/* Rendered here for the same reason the count is: `App` puts the advisories above
           the list, in one band, and holds the length drafts above the toolbar so this
-          block and the boxes read the same thing. Without it this harness would pass on a
-          page that dropped a filter in silence. */}
-      {notApplied.length > 0 && (
-        <ul role="alert">
-          {notApplied.map((advisory) => (
-            <li key={advisory}>{advisory}</li>
+          block and the boxes read the same thing. The ids match `App`'s, because each box
+          points `aria-describedby` at its own line and a dangling reference would prove
+          nothing. Without this the harness would pass on a page that dropped a filter in
+          silence. */}
+      {notApplied > 0 && (
+        <ul aria-label="Not applied">
+          {warnings.map((warning) => (
+            <li key={warning}>{warning}</li>
+          ))}
+          {lengthDrafts.advisories.map((advisory) => (
+            <li id={advisory.id} key={advisory.end}>
+              {advisory.text}
+            </li>
           ))}
         </ul>
       )}
@@ -93,6 +100,21 @@ function mount(search = '?view=all', attribution?: Attribution): void {
 /** Opens the disclosure the way a visitor does, so what it holds becomes usable. */
 async function openMore(user: ReturnType<typeof userEvent.setup>): Promise<void> {
   await user.click(screen.getByText('More filters'))
+}
+
+/**
+ * The band that lists what the page is not applying.
+ *
+ * Queried by its name rather than by `role="alert"`: the band is polite, because its length
+ * lines change while the visitor types and an assertive region would interrupt them on
+ * every digit.
+ */
+function notAppliedBand(): HTMLElement {
+  return screen.getByRole('list', { name: 'Not applied' })
+}
+
+function queryNotAppliedBand(): HTMLElement | null {
+  return screen.queryByRole('list', { name: 'Not applied' })
 }
 
 /**
@@ -197,7 +219,7 @@ describe('Toolbar length range', () => {
     // not a label length, and it used to take `max=4` down with it in silence.
     await user.type(screen.getByLabelText('Shortest label length'), '100')
 
-    expect(screen.getByRole('alert')).toHaveTextContent(
+    expect(notAppliedBand()).toHaveTextContent(
       'Shortest length not applied: 100 is not a whole number from 1 to 64.',
     )
     // The keystrokes stay on screen, the bound the visitor already had still filters,
@@ -213,7 +235,7 @@ describe('Toolbar length range', () => {
     mount('?view=all&max=4')
     await user.type(screen.getByLabelText('Shortest label length'), '100')
     const said = 'Shortest length not applied: 100 is not a whole number from 1 to 64.'
-    expect(screen.getByRole('alert')).toHaveTextContent(said)
+    expect(notAppliedBand()).toHaveTextContent(said)
 
     /*
      * The value is not in the URL - it names no length, so nothing wrote it there - which
@@ -221,23 +243,24 @@ describe('Toolbar length range', () => {
      * while the box carried on showing 100 and filtering nothing.
      */
     await user.type(screen.getByLabelText('Search names'), 'a')
-    expect(screen.getByRole('alert'), 'a search keystroke erased it').toHaveTextContent(said)
+    expect(notAppliedBand(), 'a search keystroke erased it').toHaveTextContent(said)
 
     await openMore(user)
     await user.selectOptions(screen.getByLabelText('Sort by'), 'expiry')
-    expect(screen.getByRole('alert'), 'a sort change erased it').toHaveTextContent(said)
+    expect(notAppliedBand(), 'a sort change erased it').toHaveTextContent(said)
 
     await goBack()
-    expect(screen.getByRole('alert'), 'the back button erased it').toHaveTextContent(said)
+    expect(notAppliedBand(), 'the back button erased it').toHaveTextContent(said)
     expect(screen.getByLabelText('Shortest label length')).toHaveValue(100)
   })
 
   /*
-   * `fireEvent.change` rather than `user.type` for the last two: a number input reports
-   * `value` as the empty string while the text is not yet a valid number, so `3.` and `-`
-   * are not values any handler ever sees and the intermediate keystrokes cannot build
-   * them here. What the browser does hand over, once the text is a valid number, is
-   * exactly this - which is the whole reason these two used to slip through unreported.
+   * `fireEvent.change` rather than `user.type` for the last two, because a number input
+   * reports `value` as the empty string until the text is a valid number, so the
+   * intermediate keystrokes of `3.5` and `-3` cannot build them one at a time. What the
+   * browser hands over once the text does parse is exactly this. The half-typed states
+   * those keystrokes pass through are reported too, from the field's validity rather than
+   * from its value; the test below covers them.
    */
   it.each(['0', '65', '99', '100', '3.5', '-3'])(
     'reports a typed %s the same way the same value in a link is reported',
@@ -251,7 +274,7 @@ describe('Toolbar length range', () => {
       expect(fromLink).toEqual([
         `Shortest length not applied: ${typed} is not a whole number from 1 to 64.`,
       ])
-      expect(screen.getByRole('alert')).toHaveTextContent(fromLink[0] ?? '')
+      expect(notAppliedBand()).toHaveTextContent(fromLink[0] ?? '')
       // And the box still holds it, so there is something for the notice to be about.
       expect(screen.getByLabelText('Shortest label length')).toHaveValue(Number(typed))
     },
@@ -264,12 +287,52 @@ describe('Toolbar length range', () => {
     mount('?view=all')
     const box = screen.getByLabelText('Shortest label length')
     fireEvent.change(box, { target: { value: '3.5' } })
-    expect(screen.getByRole('alert')).toBeInTheDocument()
+    expect(notAppliedBand()).toBeInTheDocument()
 
     fireEvent.change(box, { target: { value: replacement } })
 
-    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(queryNotAppliedBand()).not.toBeInTheDocument()
     expectCanonicalLink(link)
+  })
+
+  it('says so for text the field cannot read at all, which reports no value', () => {
+    // `?view=all&min=5` with the filter really applying, then a `.` on the end. The field
+    // shows `5.`, reports its value as the empty string, and sets `badInput`; the value
+    // alone is indistinguishable from an emptied box, which is how this used to take an
+    // applied bound down with nothing on screen saying why.
+    mount('?view=all&min=5')
+    expect(screen.getByRole('status')).toHaveTextContent('1 name matches')
+
+    const box = screen.getByLabelText('Shortest label length')
+    // jsdom does not model the state, so the test states it: this is what a browser hands
+    // a change handler for `5.`, `-`, or a lone `e`.
+    Object.defineProperty(box, 'validity', { configurable: true, value: { badInput: true } })
+    fireEvent.change(box, { target: { value: '' } })
+
+    expect(notAppliedBand()).toHaveTextContent(
+      'Shortest length not applied: this box needs a whole number from 1 to 64.',
+    )
+    expect(box).toHaveAttribute('aria-invalid', 'true')
+    // The bound really is gone, which is what the notice is there to explain.
+    expectCanonicalLink('?view=all')
+    expect(screen.getByRole('status')).toHaveTextContent('4 names match')
+  })
+
+  it('describes the offending box by its own message, so the two are read together', () => {
+    mount('?view=all')
+    const shortest = screen.getByLabelText('Shortest label length')
+    const longest = screen.getByLabelText('Longest label length')
+
+    fireEvent.change(shortest, { target: { value: '100' } })
+
+    const describedBy = shortest.getAttribute('aria-describedby')
+    expect(describedBy).not.toBeNull()
+    expect(document.getElementById(describedBy ?? '')).toHaveTextContent(
+      'Shortest length not applied: 100 is not a whole number from 1 to 64.',
+    )
+    // The other box is filtering nothing and claims nothing.
+    expect(longest).toHaveAttribute('aria-invalid', 'false')
+    expect(longest).not.toHaveAttribute('aria-describedby')
   })
 
   it('keeps a range that arrived inverted in a link, and says it is not applied', () => {
@@ -281,7 +344,7 @@ describe('Toolbar length range', () => {
     expectCanonicalLink('?view=all&min=9&max=4')
     expect(screen.getByLabelText('Shortest label length')).toHaveValue(9)
     expect(screen.getByLabelText('Longest label length')).toHaveValue(4)
-    expect(screen.getByRole('alert')).toHaveTextContent(
+    expect(notAppliedBand()).toHaveTextContent(
       'Length range not applied: shortest 9 is above longest 4.',
     )
     // Not applied means not applied: the four names the view holds, not none of them.
@@ -305,7 +368,7 @@ describe('Toolbar length range', () => {
     expectCanonicalLink('?view=all&min=9&max=4')
     expect(screen.getByLabelText('Shortest label length')).toHaveValue(9)
     expect(screen.getByLabelText('Longest label length')).toHaveValue(4)
-    expect(screen.getByRole('alert')).toHaveTextContent(
+    expect(notAppliedBand()).toHaveTextContent(
       'Length range not applied: shortest 9 is above longest 4.',
     )
     expect(screen.getByRole('status')).toHaveTextContent('4 names match')
@@ -316,13 +379,13 @@ describe('Toolbar length range', () => {
     mount('?view=all&max=4')
 
     await user.type(screen.getByLabelText('Shortest label length'), '9')
-    expect(screen.getByRole('alert')).toBeInTheDocument()
+    expect(notAppliedBand()).toBeInTheDocument()
 
     await user.clear(screen.getByLabelText('Shortest label length'))
     await user.type(screen.getByLabelText('Shortest label length'), '3')
 
     expectCanonicalLink('?view=all&min=3&max=4')
-    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(queryNotAppliedBand()).not.toBeInTheDocument()
     expect(screen.getByRole('status')).toHaveTextContent('3 names match')
   })
 
@@ -336,7 +399,7 @@ describe('Toolbar length range', () => {
     await user.selectOptions(screen.getByLabelText('Sort by'), 'expiry')
 
     expectCanonicalLink('?view=all&min=9&max=4&sort=expiry')
-    expect(screen.getByRole('alert')).toHaveTextContent(
+    expect(notAppliedBand()).toHaveTextContent(
       'Length range not applied: shortest 9 is above longest 4.',
     )
   })
@@ -355,7 +418,7 @@ describe('Toolbar length range', () => {
     await goBack()
 
     expect(window.location.search).toBe('?view=all&min=9&max=4')
-    expect(screen.getByRole('alert')).toHaveTextContent(
+    expect(notAppliedBand()).toHaveTextContent(
       'Length range not applied: shortest 9 is above longest 4.',
     )
   })
@@ -365,13 +428,13 @@ describe('Toolbar length range', () => {
     // `nope` is dropped from the link on arrival, so unlike the range it is not in any
     // history entry and there is nothing left for a later screen to report.
     mount('?view=nope&min=3&max=4')
-    expect(screen.getByRole('alert')).toHaveTextContent('unknown view')
+    expect(notAppliedBand()).toHaveTextContent('unknown view')
 
     await openMore(user)
     await user.selectOptions(screen.getByLabelText('Sort by'), 'expiry')
     await goBack()
 
-    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(queryNotAppliedBand()).not.toBeInTheDocument()
   })
 })
 

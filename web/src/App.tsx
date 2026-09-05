@@ -8,6 +8,7 @@ import { ResultsTable } from './components/ResultsTable'
 import { SimulatedClockNotice } from './components/SimulatedClockNotice'
 import { SnapshotDetails } from './components/SnapshotDetails'
 import { StaleWarning } from './components/StaleWarning'
+import { StoredCopyNotice } from './components/StoredCopyNotice'
 import { Toolbar } from './components/Toolbar'
 import { TrustLine } from './components/TrustLine'
 import { ViewTabs } from './components/ViewTabs'
@@ -42,7 +43,7 @@ import { VIEWS, viewOrDefault } from './state/views'
  *
  * Anything that is both conditional and about trust stays in the advisories block
  * above the list: a simulated clock, part of the query that could not be applied, a
- * stored copy shown because the API could not be reached, an out-of-date list. Each
+ * stored copy shown because this visit could not replace it, an out-of-date list. Each
  * is rare, each changes how the rows below should be read, and none of them is
  * something to find later.
  */
@@ -106,10 +107,7 @@ export function App({ config = appConfig, deps }: AppProps): ReactNode {
    * render it was written on.
    */
   const lengthDrafts = useLengthDrafts(query.length)
-  const notApplied = useMemo(
-    () => [...warnings, ...lengthDrafts.advisories],
-    [warnings, lengthDrafts.advisories],
-  )
+  const notApplied = warnings.length + lengthDrafts.advisories.length
 
   /**
    * What is wrong with the chosen source list, or null when nothing is.
@@ -176,17 +174,27 @@ export function App({ config = appConfig, deps }: AppProps): ReactNode {
             )}
 
             {/*
-             * One band for everything the page was asked for and is not doing, whether it
-             * came from a link, a keystroke, or a box still holding a value that names no
-             * length. Titled without naming a link, because a visitor who followed none
-             * must not be told one was at fault, and kept to a single notice so a second
-             * band is never charged against a name row.
+             * One band for every query value the page was asked for and is not applying,
+             * whether it came from a link, a keystroke, or a box still holding something
+             * that names no length. Titled without naming a link, because a visitor who
+             * followed none must not be told one was at fault.
+             *
+             * Announced politely and only on a line appearing, because the length lines
+             * change while the visitor types. Each of those carries the id its box points
+             * `aria-describedby` at, and is keyed by the box rather than by its wording, so
+             * editing a rejected value rewrites the text in place instead of removing the
+             * line and adding it back as something new to announce.
              */}
-            {notApplied.length > 0 && (
-              <Notice alert tone="warn" title="Not applied">
+            {notApplied > 0 && (
+              <Notice tone="warn" title="Not applied" voice="additions">
                 <ul className="notice__list">
-                  {notApplied.map((advisory) => (
-                    <li key={advisory}>{advisory}</li>
+                  {warnings.map((warning) => (
+                    <li key={warning}>{warning}</li>
+                  ))}
+                  {lengthDrafts.advisories.map((advisory) => (
+                    <li id={advisory.id} key={advisory.end}>
+                      {advisory.text}
+                    </li>
                   ))}
                 </ul>
               </Notice>
@@ -203,7 +211,7 @@ export function App({ config = appConfig, deps }: AppProps): ReactNode {
              * and then received an unattributable one lands here having followed nothing.
              */}
             {listProblem === 'unattributable' && attribution !== null && (
-              <Notice alert tone="warn" title="List filter not applied">
+              <Notice tone="warn" voice="alert" title="List filter not applied">
                 <p>
                   This snapshot does not say which names are on{' '}
                   <span className="mono">{query.list}</span>, so every name is shown. Reason:{' '}
@@ -222,7 +230,7 @@ export function App({ config = appConfig, deps }: AppProps): ReactNode {
              * do it to a link that used to work.
              */}
             {listProblem === 'unknown' && (
-              <Notice alert tone="warn" title="Unknown list">
+              <Notice tone="warn" voice="alert" title="Unknown list">
                 <p>
                   This snapshot has no list named <span className="mono">{query.list}</span>, so no
                   name matches.
@@ -234,18 +242,7 @@ export function App({ config = appConfig, deps }: AppProps): ReactNode {
             )}
 
             {store.failure !== null && store.snapshot !== null && (
-              <Notice alert tone="warn" title="Showing a stored copy">
-                <p>
-                  The read API could not be reached, so this is the snapshot this browser stored on
-                  an earlier visit. It has not been refreshed. Reported reason:{' '}
-                  <span className="mono">{store.failure.message}</span>
-                </p>
-                <p>
-                  <button className="button" onClick={store.retry} type="button">
-                    Try to refresh
-                  </button>
-                </p>
-              </Notice>
+              <StoredCopyNotice failure={store.failure} onRetry={store.retry} />
             )}
 
             {snapshot !== null && <StaleWarning metadata={snapshot.metadata} now={now} />}

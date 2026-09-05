@@ -157,9 +157,17 @@ export function readLengthBound(raw: string): number | null {
  * value already inside it: 3.5 sits between 1 and 64 and is still not a label length.
  * The value is quoted so the visitor knows which of the two boxes to change, and it is
  * quoted short because a link can carry any amount of text.
+ *
+ * `raw` is null for the one case where the value cannot be known: a number input reports
+ * its value as the empty string while the field shows `3.`, so there is nothing to quote
+ * and the requirement is all the page can honestly state. That is the same reason and the
+ * same sentence, missing its subject, rather than a second message for a second path.
  */
-export function boundNotApplied(end: BoundEnd, raw: string): string {
-  return `${BOUND_LABEL[end]} not applied: ${raw.slice(0, MAX_BOUND_ECHO)} is not a whole number from ${String(MIN_LENGTH_BOUND)} to ${String(MAX_LENGTH_BOUND)}.`
+export function boundNotApplied(end: BoundEnd, raw: string | null): string {
+  const requirement = `a whole number from ${String(MIN_LENGTH_BOUND)} to ${String(MAX_LENGTH_BOUND)}`
+  return raw === null
+    ? `${BOUND_LABEL[end]} not applied: this box needs ${requirement}.`
+    : `${BOUND_LABEL[end]} not applied: ${raw.slice(0, MAX_BOUND_ECHO)} is not ${requirement}.`
 }
 
 export const PARAM = {

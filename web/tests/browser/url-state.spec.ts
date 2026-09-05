@@ -109,7 +109,9 @@ test('a length range that is not applied keeps saying so through the back button
   // The bounds are kept rather than repaired, so every history entry below still holds
   // them and the length filter is still doing nothing on every one of them.
   await visit(page, { view: 'all', min: '9', max: '5' })
-  const advisory = page.getByRole('alert')
+  // A named region, not an alert: the band's length lines change as the visitor types, so
+  // it announces politely rather than interrupting on every digit.
+  const advisory = page.getByRole('region', { name: 'Not applied' })
   await expect(advisory).toContainText('Length range not applied: shortest 9 is above longest 5.')
 
   // A same-document history entry, which is what makes going back a `popstate` rather

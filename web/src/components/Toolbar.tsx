@@ -99,14 +99,18 @@ export function Toolbar({
        * label length. `useLengthDrafts` is then the one thing that reports the gap, for
        * as long as the box still holds it. Only the end being edited is touched, so a
        * value this rejects cannot take the other bound down with it.
+       *
+       * The validity travels with the text because the text alone cannot say that a `.`
+       * or a lone `-` is on screen: for those the field reports no value at all.
        */
+      const badInput = event.target.validity.badInput
       const bound = readLengthBound(typed.trim())
       if (end === 'min') {
-        min.setText(typed, boundText(bound))
+        min.setText(typed, boundText(bound), badInput)
         setQuery({ length: { ...query.length, min: bound } }, { replace: true })
         return
       }
-      max.setText(typed, boundText(bound))
+      max.setText(typed, boundText(bound), badInput)
       setQuery({ length: { ...query.length, max: bound } }, { replace: true })
     }
 
@@ -157,7 +161,12 @@ export function Toolbar({
             <label className="visually-hidden" htmlFor="control-min">
               Shortest label length
             </label>
+            {/* Described by its own message, so the value and the reason it is not
+                filtering are announced together where the visitor is typing rather than
+                only in a band further up the page. */}
             <input
+              aria-describedby={min.advisory?.id}
+              aria-invalid={min.advisory !== null}
               className="input input--bound mono"
               id="control-min"
               inputMode="numeric"
@@ -175,6 +184,8 @@ export function Toolbar({
               Longest label length
             </label>
             <input
+              aria-describedby={max.advisory?.id}
+              aria-invalid={max.advisory !== null}
               className="input input--bound mono"
               id="control-max"
               inputMode="numeric"

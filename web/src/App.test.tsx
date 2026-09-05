@@ -108,7 +108,9 @@ describe('App default view', () => {
     await mount(`?view=nope&now=${NOW.toISOString().slice(0, 19)}Z`)
 
     expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('Available .eth names')
-    expect(screen.getByRole('alert')).toHaveTextContent(
+    // The band is a named region rather than an alert: its length lines change while the
+    // visitor types, so it must not interrupt a screen reader on every digit.
+    expect(screen.getByRole('region', { name: 'Not applied' })).toHaveTextContent(
       'The link asked for an unknown view, so Available .eth names is shown instead.',
     )
     // The link is rewritten to one that round-trips, and the explanation survives
@@ -123,7 +125,7 @@ describe('App default view', () => {
 
     await user.type(screen.getByLabelText('Search names'), 'a')
 
-    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(screen.queryByRole('region', { name: 'Not applied' })).not.toBeInTheDocument()
   })
 })
 

@@ -642,9 +642,23 @@ never the ENS availability authority.
   derived from the URL reports it for one render and then loses it while the box carries on
   showing a number that filters nothing. The notice therefore lasts exactly as long as the
   mismatch, across a keystroke elsewhere, a sort change, and a back navigation.
-- Everything the page was asked for and is not doing goes in the one `Not applied` notice.
-  A second band above the list is charged against a name row by `the first screen is the
-answer, not an introduction`.
+- Every query value the page was asked for and is not applying goes in the one `Not applied`
+  band, because each is one line and a second band above the list is charged against a name
+  row by `the first screen is the answer, not an introduction`. A list problem gets a band of
+  its own: it needs a recovery link rather than a line, and the two list cases are mutually
+  exclusive, so it never costs more than one.
+  That band announces politely, and only on a line appearing. Its length lines are derived
+  from the boxes and so change while the visitor types, which an assertive region would read
+  over them on every digit, and `role="status"` would re-read the whole band because it is
+  atomic. Each length line carries the id its box points `aria-describedby` at and is keyed
+  by the box rather than by its wording, so correcting a rejected value rewrites the text in
+  place instead of removing a line and adding a new one to announce.
+- The page never states something it has not established. The stored-copy band is worded
+  from the failure kind, because an unreachable API, a payload this build refused, and a
+  format it does not know are three different things and one sentence for all three was
+  false for two of them. `components/recovery.ts` owns which kinds only a document load can
+  clear, and both the error page and that band read it: the version kind was given a real
+  reload in one of them and left with a button that could not succeed in the other.
 - Whether a named source list exists is decided in `App`, not in `parseQuery`, which never
   sees a snapshot. Two opposite things go wrong and the visitor has to be told which: an
   unattributable snapshot shows every row, and a snapshot with no such list shows none.

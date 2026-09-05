@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react'
 import type { LoadFailure } from '../state/useSnapshot'
+import { needsNewBundle, reloadDocument } from './recovery'
 
 /**
  * The load failed and there is nothing to fall back on.
@@ -24,10 +25,6 @@ export interface ErrorStateProps {
   readonly onReload?: () => void
 }
 
-function reloadDocument(): void {
-  window.location.reload()
-}
-
 const EXPLANATION: Readonly<Record<LoadFailure['kind'], string>> = {
   malformed:
     'The snapshot did not match the published format, so it was refused rather than shown in part. A snapshot is only useful if every status in it can be trusted.',
@@ -49,13 +46,12 @@ export function ErrorState({
   onReload = reloadDocument,
 }: ErrorStateProps): ReactNode {
   /*
-   * A version mismatch is the one failure retrying cannot fix. The payload is newer than
-   * this bundle, so fetching it again from the same bundle lands on the same error, and
-   * only a document load can pick up a newer one. The button says it reloads the page, so
-   * it reloads the page: a button that claimed an action it had not taken would be the
-   * same failure of trust as a status this page had not really read.
+   * The button says it reloads the page, so it reloads the page: a button that claimed an
+   * action it had not taken would be the same failure of trust as a status this page had
+   * not really read. Which kinds need that is `recovery`'s to say, because the stored-copy
+   * band has to answer it the same way.
    */
-  const press = failure.kind === 'version' ? onReload : onRetry
+  const press = needsNewBundle(failure.kind) ? onReload : onRetry
 
   return (
     <div className="card state" role="alert">
