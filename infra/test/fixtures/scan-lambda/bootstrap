@@ -1,0 +1,9 @@
+#!/bin/sh
+# Placeholder for the compiled Go scanner.
+#
+# The tests need a Lambda asset whose content hash never changes, so they never
+# use the real bundle: a freshly built binary hashes differently on every machine,
+# and every template assertion and the determinism check would then depend on who
+# ran them. This file is the whole fixture bundle, it is never executed, and
+# scripts/bundle-scanner.js is what produces the artifact a deployment uses.
+exit 1
