@@ -7,5 +7,14 @@ go.mod text eol=lf
 .gitignore text eol=lf
 .gitattributes text eol=lf
 
+# The website sources. Prettier writes LF and the lockfile must stay
+# byte-identical across machines, so none of these may be checked out with CRLF.
+*.ts text eol=lf
+*.tsx text eol=lf
+*.css text eol=lf
+*.html text eol=lf
+*.svg text eol=lf
+package-lock.json text eol=lf
+
 # Historical output is retained byte-for-byte, including legacy blank EOFs.
 data/results/** whitespace=-blank-at-eof

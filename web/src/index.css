@@ -1,0 +1,2340 @@
+/*
+ * Prism on Paper: the whole of the page's presentation.
+ *
+ * The surface is warm paper, and everything on it is printed rather than layered.
+ * One optical system sits behind the type - a glass object, the caustic it casts,
+ * and a beam ribbon joining them - and a `feTurbulence` grain sits above both the
+ * light and the ink, so the projected colour and the letterforms share one sheet
+ * instead of stacking as translucent panes.
+ *
+ * The names are the event. The approved composition sets them very large in one
+ * grotesque, with nothing else on the first screen but the field that narrows them and
+ * one compact black control object: no card and no explanatory copy, because a boundary
+ * drawn around a name would make it furniture. That composition arrives in later
+ * slices, so the tokens it needs are defined here while the page still renders the
+ * previous list markup under the optical background.
+ *
+ * Colour never carries meaning. The three optical hues appear only in the light
+ * behind the page and in the chromatic split a name is given, and every lifecycle
+ * status is a word. So the palette can be as saturated as the optics need without
+ * costing anyone information.
+ *
+ * There is one scheme, not two. Paper is the design, so a dark inversion of it
+ * would be a different page, and `color-scheme: light` says so to the browser
+ * rather than leaving form controls to guess. Contrast is therefore checked once,
+ * against paper, and every colour that carries text clears 4.5:1 on the lightest
+ * surface it can land on.
+ */
+
+/* Bundled, not fetched. The weight axis is all the page uses, and a runtime
+   third-party origin would put a font request between the visitor and the names. */
+@import '@fontsource-variable/instrument-sans/wght.css';
+
+:root {
+  /* One scheme. Paper is the design, not a light variant of something else. */
+  color-scheme: light;
+
+  /*
+   * Instrument Sans Variable, bundled. A grotesque at weight 700 is what lets a
+   * name be 96px and still read as type rather than as a graphic, and the local
+   * fallbacks are grotesques too, so a failed font load changes the texture
+   * without moving the composition.
+   */
+  --font-sans:
+    'Instrument Sans Variable', 'Helvetica Neue', Helvetica, Arial, ui-sans-serif, system-ui,
+    sans-serif;
+  --font-mono:
+    ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;
+
+  /*
+   * A fixed ramp for the small sizes and a fluid one above body copy. Small text
+   * that shrinks with the viewport gets unreadable on a phone long before the
+   * layout runs out of room, and a display size that does not grow with the
+   * viewport looks timid on a desktop. The name sizes will not be on this ramp: they
+   * come from the hash, in `src/constellation/compose.ts`, which nothing mounts yet.
+   */
+  --step--2: 0.75rem;
+  --step--1: 0.8125rem;
+  --step-0: 1.0625rem;
+  --step-1: clamp(1.1875rem, 1.11rem + 0.35vw, 1.3125rem);
+  --step-2: clamp(1.375rem, 1.16rem + 0.95vw, 1.75rem);
+  --step-3: clamp(1.75rem, 1.36rem + 1.75vw, 2.5rem);
+  --step-4: clamp(2.375rem, 1.55rem + 4vw, 4rem);
+
+  /* Tracking tightens as size grows, which is what keeps large text from looking
+     loose and small text from looking cramped. */
+  --track-tight: -0.028em;
+  --track-snug: -0.014em;
+  --track-wide: 0.07em;
+  /* The names and the composer are set much tighter than body copy. */
+  --track-display: -0.05em;
+
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.5rem;
+  --space-6: 2rem;
+  --space-7: 3rem;
+  --space-8: 4.5rem;
+
+  --radius-1: 0.5rem;
+  --radius-2: 0.875rem;
+  --radius-3: 1.25rem;
+  --radius-pill: 999px;
+
+  --measure: 62ch;
+  --page-max: 68rem;
+  --gutter: clamp(1.25rem, 5vw, 3rem);
+  /* The empty corner, in one place. It is a fixed pixel length on purpose: the area
+     it holds clear is stated in CSS pixels, so scaling it with the root font size
+     would let a larger text setting satisfy it and a smaller one break it. */
+  --corner-clear: 132px;
+
+  /* ------------------------------------------------------------------ paper -- */
+
+  --paper: #f7f3eb;
+  --paper-2: #f2ede3;
+  /* Text drawn on the ink fill, in the control object and the ledger. */
+  --paper-on-ink: #f4f1ea;
+
+  --canvas: var(--paper);
+  --canvas-tint: var(--paper-2);
+  --surface: var(--paper);
+
+  --hairline: rgb(11 11 12 / 12%);
+  --hairline-strong: rgb(11 11 12 / 24%);
+
+  --ink: #0b0b0c;
+  --ink-soft: #1a1a1c;
+  /* 8.9:1 on paper and 8.5:1 on the tint, so body copy stays legible wherever it
+     lands. Warm greys, because a cool grey on warm paper reads as a stain. */
+  --ink-muted: #45433d;
+  /* 6.5:1 on paper and 6.2:1 on the tint. */
+  --ink-faint: #5a574f;
+  --on-ink: var(--paper-on-ink);
+  --on-ink-muted: rgb(244 241 234 / 72%);
+
+  /*
+   * The three optical hues. These are the light, so they are used at whatever
+   * saturation the optics need and never as text: violet is 4.8:1 on paper and
+   * 4.5:1 on the tint, and cyan is 1.8:1, which is a highlight rather than a
+   * colour anything can be written in.
+   */
+  --violet: #6b4cf6;
+  --indigo: #2b1ea8;
+  --cyan: #25cbe0;
+  /* Decorative warm greys, for the composer placeholder and the like. */
+  --graphite: #b4ada0;
+  --graphite-2: #cfc8ba;
+
+  /* A darkened violet for links and focus rings, at 6.2:1 on paper. The optical
+     violet passes AA by a hair on the tint, which is not a margin to spend on
+     every link in the page. */
+  --accent: #5c3bd6;
+  --accent-ink: var(--paper-on-ink);
+  --accent-wash: #eeeafb;
+
+  --good: #0a6b3a;
+  --warn: #8c5a00;
+  --warn-wash: #fbf0dc;
+  --busy: var(--indigo);
+  --muted-tone: var(--ink-faint);
+  --danger: #a03030;
+  --danger-wash: #fbe9e4;
+
+  --shadow-1: 0 1px 2px rgb(11 11 12 / 8%);
+  --shadow-2: 0 18px 42px -22px rgb(11 11 12 / 55%);
+
+  /* One duration and one curve for every hover and state change, so the page
+     feels like a single object rather than a collection of widgets. */
+  --ease: cubic-bezier(0.22, 1, 0.36, 1);
+  --quick: 180ms;
+
+  /* Height of the one black control object. */
+  --bar-h: 46px;
+
+  /* ----------------------------------------------------------------- optics -- */
+
+  /*
+   * The entire coupling between the layout and the light: the glass centre, where
+   * its caustic lands, the beam angle joining them, the glass rotation, and the
+   * refraction spread. `src/optics/ambient.ts` rewrites all seven every frame as a
+   * function of elapsed time and nothing else - there is no pointer, hover, focus,
+   * selection, or composer input to any of them.
+   *
+   * `--ba` is never authored by hand. The values here are the rest composition,
+   * and the loop derives the angle from the two points so the ribbon passes
+   * through both by construction rather than by agreement.
+   */
+  --lx: 1272px;
+  --ly: 178px;
+  --cx: 1090px;
+  --cy: 268px;
+  --ba: 153.69deg;
+  --cf: 212deg;
+  --sep: 1;
+  --beam-h: 300px;
+}
+
+@media (max-width: 560px) {
+  :root {
+    --lx: 326px;
+    --ly: 150px;
+    --cx: 254px;
+    --cy: 206px;
+    --ba: 142.13deg;
+    --beam-h: 190px;
+  }
+}
+
+/* Hairlines become real lines and the faint ink stops being faint. */
+@media (prefers-contrast: more) {
+  :root {
+    --hairline: var(--hairline-strong);
+    --ink-faint: var(--ink-muted);
+    --ink-muted: var(--ink);
+  }
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  /* An anchor jump leaves a little room above its target rather than pinning it to
+     the very edge of the viewport. No smooth scrolling: the skip link has to arrive
+     before the next keystroke, not after an animation. */
+  scroll-padding-top: 4.5rem;
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--canvas);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  font-size: var(--step-0);
+  line-height: 1.5;
+  letter-spacing: var(--track-snug);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/*
+ * Paper tooth.
+ *
+ * Above the optics *and* above the type, which is the whole point of it: the
+ * projected light and the ink are printed through one grain, so they read as one
+ * sheet rather than as coloured panes stacked over text. `z-index: 2` puts it over
+ * both, and `multiply` is what makes it a texture in the surface instead of a haze
+ * on top of it.
+ *
+ * Generated rather than fetched. An inline `feTurbulence` is a few hundred bytes
+ * and needs no request, and at 20% through multiply it is a tooth rather than
+ * noise: the type below it loses no measurable contrast.
+ */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='120' height='120'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/></filter><rect width='120' height='120' filter='url(%23n)' opacity='0.30'/></svg>");
+  opacity: 0.2;
+  mix-blend-mode: multiply;
+}
+
+h1,
+h2,
+h3 {
+  margin: 0;
+  line-height: 1.15;
+  letter-spacing: var(--track-tight);
+  text-wrap: balance;
+}
+
+p {
+  margin: 0;
+  text-wrap: pretty;
+}
+
+ul {
+  margin: 0;
+}
+
+a {
+  color: var(--accent);
+  text-decoration-thickness: from-font;
+  text-underline-offset: 0.18em;
+  transition: color var(--quick) var(--ease);
+}
+
+a:hover {
+  color: var(--ink);
+}
+
+code {
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+  letter-spacing: 0;
+}
+
+strong {
+  font-weight: 600;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+  border-radius: var(--radius-1);
+}
+
+/*
+ * The one motion switch. Not `0s`: a zero duration cancels the `transitionend` and
+ * `animationend` events some code waits on, so the conventional reset is a
+ * duration too short to see.
+ */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* ------------------------------------------------------------------- optics -- */
+
+/*
+ * Four fixed siblings, each blending straight against the paper.
+ *
+ * They must not be wrapped in a positioned or isolated container. A stacking group
+ * makes `mix-blend-mode` composite against the wrapper's backdrop instead of the
+ * paper, and the whole system goes flat with no error anywhere. `#root` is part of
+ * that contract, which is why a browser test asserts it stays a plain static box.
+ *
+ * Nothing here floats independently: the beam is anchored at the glass, its angle
+ * is derived from the glass and the caustic, and both highlights ride the same two
+ * points. That is what makes it one object rather than three coloured blurs.
+ *
+ * None of the four carries a transition. The ambient loop rewrites the variables
+ * every frame, so a transition would only make each layer lag by its own amount -
+ * and `--ba` has no transition to lag by, so the ribbon would visibly come away
+ * from the glass it is supposed to be anchored to.
+ */
+
+#root {
+  /* Named for the reason rather than the effect. A transform, a filter, an opacity
+     below 1, `isolation`, `contain`, or a `z-index` on a positioned box would each
+     create a stacking context here and flatten every blend above. */
+  position: static;
+  isolation: auto;
+}
+
+/* The broad translucent ribbon the glass throws across the sheet. Anchored at the
+   glass with 14% of its length behind it, so it enters from off-canvas, passes
+   through the glass, and rakes down across the paper. */
+#beam {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 0;
+  width: 240vmax;
+  height: var(--beam-h);
+  pointer-events: none;
+  mask-image: linear-gradient(
+    90deg,
+    rgb(0 0 0 / 0%) 0%,
+    #000 11%,
+    #000 58%,
+    rgb(0 0 0 / 25%) 84%,
+    rgb(0 0 0 / 0%) 97%
+  );
+  mix-blend-mode: multiply;
+  transform: translate(var(--lx), var(--ly)) rotate(var(--ba)) translate(-14%, -50%);
+  transform-origin: 0 0;
+  will-change: transform;
+}
+
+/* Thin-film separation: colour concentrates at the two edges of the ribbon and the
+   middle stays almost clear, which is what dispersion actually looks like. */
+#beam .ribbon {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    to bottom,
+    rgb(37 203 224 / 0%) 0%,
+    rgb(37 203 224 / 17%) 5%,
+    rgb(90 196 236 / 11%) 10%,
+    rgb(130 120 250 / 5%) 20%,
+    rgb(255 247 232 / 2%) 46%,
+    rgb(255 247 232 / 2%) 56%,
+    rgb(130 120 250 / 5%) 76%,
+    rgb(43 30 168 / 11%) 88%,
+    rgb(107 76 246 / 18%) 94%,
+    rgb(107 76 246 / 0%) 100%
+  );
+  opacity: var(--sep);
+  filter: blur(12px);
+}
+
+/* Very faint striations along the beam, 4deg off its own axis so they read as
+   diffraction inside the light and never as an alignment grid. */
+#beam .striae {
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(
+    4deg,
+    rgb(43 30 168 / 5.5%) 0 1px,
+    rgb(43 30 168 / 0%) 1px 23px
+  );
+  opacity: 0.75;
+  filter: blur(0.7px);
+}
+
+/* Where the beam converges on the paper. */
+#caustic {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 0;
+  width: 470px;
+  height: 470px;
+  margin-top: -235px;
+  margin-left: -235px;
+  pointer-events: none;
+  mix-blend-mode: multiply;
+  transform: translate3d(var(--cx), var(--cy), 0);
+  will-change: transform;
+}
+
+#caustic .knot {
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(44% 42% at 42% 38%, rgb(107 76 246 / 50%) 0%, rgb(107 76 246 / 0%) 70%),
+    radial-gradient(38% 44% at 62% 50%, rgb(43 30 168 / 40%) 0%, rgb(43 30 168 / 0%) 72%),
+    radial-gradient(50% 38% at 50% 70%, rgb(37 203 224 / 42%) 0%, rgb(37 203 224 / 0%) 74%),
+    radial-gradient(30% 28% at 30% 66%, rgb(255 214 170 / 34%) 0%, rgb(255 214 170 / 0%) 72%);
+  opacity: 0.9;
+  filter: blur(24px);
+}
+
+/* Interference contours, drawn only inside the refracted light and masked away
+   before they reach clean paper. That mask is the whole reason the rings do not
+   become a background texture. Concentric, so there is depth but no grid. */
+#caustic .rings {
+  position: absolute;
+  inset: 0;
+  background: repeating-radial-gradient(
+    circle at 43% 39%,
+    rgb(43 30 168 / 16%) 0 1px,
+    rgb(43 30 168 / 0%) 1px 14px
+  );
+  /* Tied to the same spread as the ribbon, so the refraction reads as one
+     substance getting thicker and thinner rather than two layers fading apart. */
+  opacity: calc(0.62 * var(--sep));
+  mask-image: radial-gradient(
+    circle at 43% 39%,
+    #000 0%,
+    rgb(0 0 0 / 62%) 38%,
+    rgb(0 0 0 / 0%) 68%
+  );
+  filter: blur(0.6px);
+}
+
+/* The glass object itself. */
+#lens {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 0;
+  width: 340px;
+  height: 340px;
+  margin-top: -170px;
+  margin-left: -170px;
+  pointer-events: none;
+  mix-blend-mode: multiply;
+  transform: translate3d(var(--lx), var(--ly), 0);
+  will-change: transform;
+}
+
+#lens .layer {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+}
+
+/* The wide chromatic cast: the light this glass throws onto the paper. */
+#lens .cast {
+  inset: -28px;
+  background:
+    radial-gradient(46% 44% at 34% 30%, rgb(107 76 246 / 56%) 0%, rgb(107 76 246 / 0%) 68%),
+    radial-gradient(40% 46% at 70% 42%, rgb(43 30 168 / 46%) 0%, rgb(43 30 168 / 0%) 70%),
+    radial-gradient(52% 40% at 56% 76%, rgb(37 203 224 / 48%) 0%, rgb(37 203 224 / 0%) 72%),
+    radial-gradient(34% 30% at 24% 72%, rgb(255 214 170 / 40%) 0%, rgb(255 214 170 / 0%) 70%);
+  opacity: 0.8;
+  filter: blur(22px);
+}
+
+/* The body. `--cf` is the `from` angle, which is why the glass appears to turn
+   rather than to change colour. */
+#lens .body {
+  inset: 54px;
+  background: conic-gradient(
+    from var(--cf) at 52% 46%,
+    rgb(107 76 246 / 78%) 0deg,
+    rgb(43 30 168 / 70%) 74deg,
+    rgb(37 203 224 / 64%) 158deg,
+    rgb(160 140 255 / 42%) 236deg,
+    rgb(255 222 186 / 40%) 300deg,
+    rgb(107 76 246 / 78%) 360deg
+  );
+  opacity: 0.78;
+  filter: blur(9px) saturate(134%);
+}
+
+/* The rim. Without a crisp edge somewhere the glass reads as a smudge rather than
+   as an object the beam is passing through. */
+#lens .rim {
+  inset: 50px;
+  background: radial-gradient(
+    circle at 50% 50%,
+    rgb(107 76 246 / 0%) 56%,
+    rgb(107 76 246 / 46%) 70%,
+    rgb(43 30 168 / 30%) 79%,
+    rgb(37 203 224 / 16%) 87%,
+    rgb(37 203 224 / 0%) 96%
+  );
+  opacity: 0.9;
+  filter: blur(2.4px);
+}
+
+/* The only two places light gets brighter than the paper: the glass highlight and
+   the caustic's hot centre. They ride the same two ambient points, and both stay
+   in the empty top-right corner, so only the ribbon's faint mid-body ever crosses
+   the type. This is the one layer blended with `screen`. */
+#spec {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 0;
+  width: 340px;
+  height: 340px;
+  margin-top: -170px;
+  margin-left: -170px;
+  pointer-events: none;
+  mix-blend-mode: screen;
+}
+
+#spec .glass {
+  position: absolute;
+  inset: 141px;
+  background: radial-gradient(
+    circle at 42% 36%,
+    rgb(255 255 255 / 92%) 0%,
+    rgb(255 255 255 / 22%) 40%,
+    rgb(255 255 255 / 0%) 62%
+  );
+  filter: blur(5px);
+  transform: translate3d(var(--lx), var(--ly), 0);
+}
+
+#spec .hot {
+  position: absolute;
+  inset: 152px;
+  background: radial-gradient(
+    circle at 43% 39%,
+    rgb(255 252 244 / 70%) 0%,
+    rgb(255 250 238 / 14%) 40%,
+    rgb(255 255 255 / 0%) 62%
+  );
+  filter: blur(8px);
+  transform: translate3d(var(--cx), var(--cy), 0);
+}
+
+/* The system scales with the sheet. Blurs come down with the sizes, because a 22px
+   blur on a 238px object is a wash rather than a cast, and the two repeat pitches
+   come down so the striae and the rings keep their spacing relative to the light
+   they live inside. */
+@media (max-width: 560px) {
+  #lens,
+  #spec {
+    width: 238px;
+    height: 238px;
+    margin-top: -119px;
+    margin-left: -119px;
+  }
+
+  #lens .cast {
+    inset: -19px;
+    filter: blur(15px);
+  }
+
+  #lens .body {
+    inset: 38px;
+    filter: blur(6px) saturate(134%);
+  }
+
+  #lens .rim {
+    inset: 35px;
+    filter: blur(1.7px);
+  }
+
+  #spec .glass {
+    inset: 99px;
+    filter: blur(4px);
+  }
+
+  #spec .hot {
+    inset: 106px;
+    filter: blur(6px);
+  }
+
+  #caustic {
+    width: 300px;
+    height: 300px;
+    margin-top: -150px;
+    margin-left: -150px;
+  }
+
+  #caustic .knot {
+    filter: blur(17px);
+  }
+
+  #caustic .rings {
+    background: repeating-radial-gradient(
+      circle at 43% 39%,
+      rgb(43 30 168 / 16%) 0 1px,
+      rgb(43 30 168 / 0%) 1px 11px
+    );
+  }
+
+  #beam .ribbon {
+    filter: blur(9px);
+  }
+
+  #beam .striae {
+    background: repeating-linear-gradient(
+      4deg,
+      rgb(43 30 168 / 5.5%) 0 1px,
+      rgb(43 30 168 / 0%) 1px 16px
+    );
+  }
+}
+
+/*
+ * Reduced motion freezes the optics in a deliberate composition: glass upper right,
+ * beam raked down across the sheet, hot centre held clear of the type.
+ *
+ * Frozen twice over. These pins beat the inline values the ambient frame writes, so
+ * the page is static before any script runs and stays static if script runs anyway,
+ * and `src/optics/ambient.ts` refuses to schedule a frame at all. Every one of the
+ * seven is pinned, not only the two positions: a half-turned glass or a part-open
+ * refraction would read as an animation someone had stalled.
+ */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --lx: 1272px !important;
+    --ly: 178px !important;
+    --cx: 1090px !important;
+    --cy: 268px !important;
+    --ba: 153.69deg !important;
+    --cf: 212deg !important;
+    --sep: 1 !important;
+  }
+
+  @media (max-width: 560px) {
+    :root {
+      --lx: 326px !important;
+      --ly: 150px !important;
+      --cx: 254px !important;
+      --cy: 206px !important;
+      --ba: 142.13deg !important;
+    }
+  }
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+.mono {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
+}
+
+/* ---------------------------------------------------------------- skip link -- */
+
+.skip-link {
+  position: fixed;
+  inset-block-start: var(--space-3);
+  inset-inline-start: var(--space-3);
+  /* Above the optical layers and everything else, so nothing can cover the one thing
+     allowed in the empty corner while it holds focus. */
+  z-index: 40;
+  padding: 0.7rem 1.1rem;
+  border-radius: var(--radius-pill);
+  background: var(--ink);
+  color: var(--on-ink);
+  font-size: var(--step--1);
+  font-weight: 500;
+  text-decoration: none;
+  box-shadow: var(--shadow-2);
+  transform: translateY(-250%);
+  transition: transform var(--quick) var(--ease);
+}
+
+.skip-link:focus-visible {
+  transform: none;
+  color: var(--on-ink);
+}
+
+/* -------------------------------------------------------------------- shell -- */
+
+.page {
+  max-width: var(--page-max);
+  margin-inline: auto;
+  padding-inline: var(--gutter);
+}
+
+/*
+ * The title, and nothing else.
+ *
+ * What used to be here was a hero: a display-size headline, an eyebrow, and a
+ * sentence of positioning, about a third of a 900px screen before a single name.
+ * A visitor arrives with one question, so the page answers it with a label and a
+ * count and then gets out of the way. Everything the headline used to say is still
+ * on the page, in the disclosure below the list, where a reader who wants it will
+ * look and a reader who does not is not charged for it.
+ *
+ * The title and the count share a baseline, so the two read as one line at any
+ * width that fits them, and stack without a second gap when they do not.
+ *
+ * The lead-in above it is the empty corner, and it is a reservation rather than
+ * spacing. Nothing may be laid out in the top-left 240 by 120 pixels: no name, no
+ * logo, no eyebrow, and no control, so that the first thing on the page is paper
+ * with the light moving across it. The column starts at x = 224 at 1440 and at
+ * x = 42 at 834, so the corner cannot be cleared sideways at every width and is
+ * cleared downwards at all of them instead. `constellation.spec.ts` measures it.
+ */
+.lede {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-2) var(--space-4);
+  padding-block: var(--corner-clear) var(--space-2);
+}
+
+.lede__title {
+  font-size: var(--step-2);
+  font-weight: 650;
+  line-height: 1.15;
+  letter-spacing: var(--track-tight);
+  /* A long word breaks rather than pushing the page sideways. */
+  overflow-wrap: break-word;
+}
+
+.lede__count {
+  color: var(--ink-muted);
+  font-size: var(--step--1);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/*
+ * The one status line the page will not let a reader miss.
+ *
+ * It replaces the Scan section that used to stand above the list. Three facts
+ * survive at that size - whether every list is inside its own schedule, when the
+ * scan was taken, and that none of this is a live check - and the rest moved into
+ * the disclosure. It is a paragraph rather than a set of tiles so it costs one line
+ * at desktop width, and it wraps into as many lines as it needs on a phone.
+ */
+.trustline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  /* The separator, and the only one. An interpunct between the phrases became the
+     last glyph of a wrapped line at every width below about 1100px; space cannot be
+     stranded, so it is wide enough here to do the separating on its own. */
+  gap: var(--space-2) var(--space-5);
+  padding-block-end: var(--space-3);
+  color: var(--ink-muted);
+  font-size: var(--step--1);
+  line-height: 1.5;
+}
+
+/* The state badge sits on the text baseline rather than above it, because it is
+   read as the first phrase of the sentence and not as a chip beside it. */
+.trustline__state {
+  position: relative;
+  inset-block-start: 0.05em;
+}
+
+.trustline__when,
+.trustline__caveat {
+  /* Each is one statement; breaking mid-phrase reads as two. */
+  display: inline-block;
+}
+
+.trustline__more {
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+/*
+ * The simulated clock, as a line rather than a banner.
+ *
+ * It is never dismissible and never silent - see `SimulatedClockNotice` for why -
+ * but a titled banner cost four lines above the names on its own. The tinted rule
+ * on the start edge is what makes it read as an interruption at one line's height.
+ */
+.clockline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-2) var(--space-4);
+  padding: var(--space-2) var(--space-4);
+  border-inline-start: 3px solid var(--warn);
+  border-radius: 0 var(--radius-1) var(--radius-1) 0;
+  background: var(--warn-wash);
+  font-size: var(--step--1);
+  line-height: 1.5;
+}
+
+/* Wider than `--measure`, which is a cap for paragraphs of body copy. This is one
+   sentence, and holding it to a reading measure forced a second line at desktop
+   width for the sake of a rule that only pays off over several lines. */
+.clockline__text {
+  min-width: 0;
+  max-width: 44rem;
+}
+
+.clockline__out {
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+/*
+ * `minmax(0, 1fr)` rather than the default `auto`. An `auto` column never shrinks
+ * below its content's min-content width, so one long unbreakable string anywhere
+ * inside would widen the whole page instead of wrapping.
+ */
+.stack {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+}
+
+/*
+ * The caveats that have to be seen before the data, collected once.
+ *
+ * Only two things qualify: the clock is not the reader's own, and the snapshot is
+ * outside its schedule. Both change what every row on the page means, which is the
+ * test for being above the list rather than in the disclosure below it.
+ *
+ * `:not(:empty)` carries the spacing, because on the ordinary screen this container
+ * has no children at all and a padded empty box is a gap with nothing in it.
+ */
+.advisories {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.advisories:not(:empty) {
+  padding-block-end: var(--space-3);
+}
+
+/*
+ * A section: a heading, a hairline above it, and room around it. This is the card
+ * that used to be a box. Nothing here has a border or a fill, because the space
+ * and the rule already say where one section ends and the next begins.
+ */
+.card {
+  display: grid;
+  gap: var(--space-5);
+  padding-block: clamp(1.75rem, 4vw, 2.75rem);
+  border-block-start: 1px solid var(--hairline);
+}
+
+.card__title {
+  font-size: var(--step-2);
+  font-weight: 600;
+}
+
+.section-head {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.prose {
+  color: var(--ink-muted);
+  max-width: var(--measure);
+}
+
+.prose-stack {
+  display: grid;
+  gap: var(--space-4);
+}
+
+/* ------------------------------------------------------------- disclosure -- */
+
+/*
+ * Everything a reader may want to check, under one control, below the names.
+ *
+ * The scan facts, the source-list tiles, the status counts, the lifecycle rules, and
+ * what this page is not were five sections above the list. Together they were most of
+ * the first screen and none of them answers the question a visitor arrives with, so
+ * they are one `<details>` now. Nothing was deleted: a reader who wants provenance
+ * gets all of it, one click away, and the two caveats that change what every row
+ * means stay above the list where they cannot be missed.
+ *
+ * A `<details>` rather than a JavaScript panel, for three reasons that matter here:
+ * it works before the bundle runs, find-in-page reaches the closed content and the
+ * browser opens it on the way to a match, and `#details` on the body inside makes a
+ * fragment link do the same.
+ */
+.disclosure {
+  border-block-start: 1px solid var(--hairline);
+}
+
+.disclosure__summary {
+  display: grid;
+  gap: var(--space-1);
+  padding-block: var(--space-5);
+  cursor: pointer;
+  list-style: none;
+}
+
+.disclosure__summary::-webkit-details-marker {
+  display: none;
+}
+
+.disclosure__label {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6em;
+  font-size: var(--step-1);
+  font-weight: 600;
+  color: var(--ink);
+}
+
+/* The triangle, drawn so it can turn. `::before` on the label rather than on the
+   summary keeps it on the label's first line when the hint wraps under it. */
+.disclosure__label::after {
+  content: '';
+  width: 0.4em;
+  height: 0.4em;
+  border-right: 2px solid var(--accent);
+  border-bottom: 2px solid var(--accent);
+  rotate: 45deg;
+  translate: 0 -0.15em;
+  transition: rotate var(--quick) var(--ease);
+}
+
+.disclosure[open] > .disclosure__summary .disclosure__label::after {
+  rotate: -135deg;
+  translate: 0 0.05em;
+}
+
+.disclosure__summary:hover .disclosure__label {
+  color: var(--accent);
+}
+
+.disclosure__hint {
+  color: var(--ink-muted);
+  font-size: var(--step--1);
+  max-width: var(--measure);
+}
+
+/* The first card inside has a rule of its own, and the summary above it is already
+   separated by the disclosure's. Two rules a line apart read as a rendering fault. */
+.disclosure__body > .card:first-child {
+  border-block-start: 0;
+  padding-block-start: 0;
+}
+
+.footer {
+  display: grid;
+  gap: var(--space-3);
+  padding-block: var(--space-7) var(--space-8);
+  border-block-start: 1px solid var(--hairline);
+  color: var(--ink-faint);
+  font-size: var(--step--1);
+}
+
+/*
+ * The measure goes on the paragraphs, not on the footer. Every other section rule
+ * on the page spans the full column, and one that stopped two thirds of the way
+ * across would read as a mistake rather than as a margin.
+ */
+.footer > p {
+  max-width: var(--measure);
+}
+
+/* ------------------------------------------------------------------ notices -- */
+
+/*
+ * A banner. The colour is an accent on one edge, never the whole surface: a page
+ * whose first screen is three saturated slabs teaches the reader to skip them, and
+ * these are the ones that must be read.
+ */
+.notice {
+  display: grid;
+  gap: var(--space-2);
+  /* Sized to the words rather than to the column. A banner stretched across a
+     desktop-width page reads as a slab; kept to a paragraph's measure it reads as
+     a note, which is what it is. */
+  max-width: 44rem;
+  padding: var(--space-4);
+  border: 1px solid var(--hairline);
+  border-inline-start: 3px solid var(--notice-tone);
+  border-start-start-radius: var(--radius-2);
+  border-start-end-radius: var(--radius-2);
+  border-end-end-radius: var(--radius-2);
+  border-end-start-radius: var(--radius-2);
+  background: var(--notice-wash, var(--canvas-tint));
+}
+
+.notice--info {
+  --notice-tone: var(--busy);
+}
+
+.notice--warn {
+  --notice-tone: var(--warn);
+  --notice-wash: var(--warn-wash);
+}
+
+.notice--danger {
+  --notice-tone: var(--danger);
+  --notice-wash: var(--danger-wash);
+}
+
+/* A banner that appeared after the page settled gets the heavier edge. It is the
+   only one a reader has not already had the chance to read. */
+.notice[role='alert'] {
+  border-inline-start-width: 4px;
+  box-shadow: var(--shadow-1);
+}
+
+/* These carry the data-trust warnings, which are the most consequential sentences
+   on the page. Set at reading size rather than as fine print: the one thing that
+   would make them fail is being skippable. */
+.notice__title {
+  font-size: var(--step-0);
+  font-weight: 600;
+}
+
+.notice__body {
+  display: grid;
+  gap: var(--space-3);
+  justify-items: start;
+  color: var(--ink-muted);
+  font-size: var(--step-0);
+  line-height: 1.5;
+}
+
+.notice__list {
+  display: grid;
+  gap: var(--space-2);
+  padding-inline-start: 1.15rem;
+}
+
+/* -------------------------------------------------------------------- scan -- */
+
+.facts {
+  display: grid;
+  gap: var(--space-5) var(--space-6);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+/* Uneven on purpose. The four facts are very different lengths - a full UTC
+   timestamp against "just now" - and equal columns would wrap the one fact that
+   must not be read in two pieces. */
+@media (min-width: 48rem) {
+  .facts {
+    grid-template-columns:
+      minmax(0, 1.4fr) minmax(0, 0.8fr)
+      minmax(0, 0.9fr) minmax(0, 1.1fr);
+  }
+}
+
+.fact {
+  display: grid;
+  gap: var(--space-1);
+  align-content: start;
+}
+
+.fact__label {
+  margin: 0;
+  font-size: var(--step--2);
+  font-weight: 600;
+  letter-spacing: var(--track-wide);
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+
+.fact__value {
+  margin: 0;
+  font-size: var(--step-0);
+  color: var(--ink);
+  overflow-wrap: break-word;
+}
+
+.field__hint {
+  color: var(--ink-faint);
+  font-size: var(--step--1);
+  max-width: var(--measure);
+}
+
+.groups {
+  display: grid;
+  gap: var(--space-3);
+  padding: 0;
+  list-style: none;
+}
+
+@media (min-width: 48rem) {
+  .groups {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+/*
+ * A source list, as a tile. These are the one place a real surface earns its
+ * keep: they are peers to be compared, and an out-of-date one has to be findable
+ * at a glance without reading all three.
+ */
+.group {
+  display: grid;
+  gap: var(--space-2);
+  align-content: start;
+  padding: var(--space-4);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-2);
+  background: var(--canvas-tint);
+  transition:
+    border-color var(--quick) var(--ease),
+    background-color var(--quick) var(--ease);
+}
+
+.group--stale {
+  border-color: var(--warn);
+  background: var(--warn-wash);
+}
+
+.group__name {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-3);
+  align-items: baseline;
+  justify-content: space-between;
+  font-size: var(--step-0);
+  font-weight: 600;
+  overflow-wrap: break-word;
+}
+
+.group__meta {
+  display: grid;
+  gap: var(--space-1);
+  color: var(--ink-muted);
+  font-size: var(--step--1);
+}
+
+/* -------------------------------------------------------------------- badge -- */
+
+/*
+ * A status, as a dot and a word.
+ *
+ * The dot is the only place a lifecycle hue appears, and it is never alone: the
+ * label beside it is the actual answer, so the page loses nothing for a reader who
+ * cannot separate the hues or is not seeing them at all.
+ */
+.badge {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.45em;
+  font-size: var(--step--1);
+  font-weight: 500;
+  color: var(--ink);
+  white-space: nowrap;
+}
+
+.badge::before {
+  content: '';
+  width: 0.4375rem;
+  height: 0.4375rem;
+  flex: none;
+  /* Baseline alignment keeps the dot on the text's optical centre rather than
+     centred on the line box, which sits too high beside small type. */
+  translate: 0 -0.28em;
+  border-radius: 50%;
+  background: var(--tone, var(--muted-tone));
+}
+
+.badge--good,
+.count--good {
+  --tone: var(--good);
+}
+
+.badge--warn,
+.count--warn {
+  --tone: var(--warn);
+}
+
+.badge--busy,
+.count--busy {
+  --tone: var(--busy);
+}
+
+.badge--muted,
+.count--muted {
+  --tone: var(--muted-tone);
+}
+
+/* ----------------------------------------------------------------- summary -- */
+
+.summary__total {
+  color: var(--ink-muted);
+  font-size: var(--step-1);
+}
+
+/*
+ * Explicit column counts rather than `auto-fit`.
+ *
+ * `auto-fit` answers a track it cannot quite fit by silently dropping to one
+ * column, and three pixels of shortfall once turned all seven counts into seven
+ * full-width rows. Naming the count per breakpoint makes the packing something
+ * that was decided rather than something that happened.
+ */
+.counts {
+  display: grid;
+  gap: var(--space-5) var(--space-4);
+  margin: 0;
+  /* Capped so the seven figures stay a group the eye takes in at once. Spread over
+     a full desktop column they read as separate facts instead of one summary. */
+  max-width: 48rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+@media (min-width: 30rem) {
+  .counts {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (min-width: 48rem) {
+  .counts {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+.count {
+  display: grid;
+  gap: var(--space-1);
+  align-content: start;
+}
+
+/* The number reads first, so it is ordered first. The label stays the `<dt>` in
+   the markup, because that is what it is. */
+.count__value {
+  order: -1;
+  margin: 0;
+  font-size: var(--step-3);
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: var(--track-tight);
+  font-variant-numeric: tabular-nums;
+}
+
+.count__label {
+  display: flex;
+  align-items: baseline;
+  gap: 0.45em;
+  color: var(--ink-muted);
+  font-size: var(--step--1);
+}
+
+.count__label::before {
+  content: '';
+  width: 0.4375rem;
+  height: 0.4375rem;
+  flex: none;
+  translate: 0 -0.28em;
+  border-radius: 50%;
+  background: var(--tone, var(--muted-tone));
+}
+
+/* ------------------------------------------------------------------- views -- */
+
+/*
+ * The views and the filters are one band: choosing a view and narrowing it are the
+ * same job, so they sit together at the top of the stage with no rule between them.
+ *
+ * There is no hairline above the tabs any more either. The stage's own edge is the
+ * boundary now, and a second line a few pixels inside it read as a mistake.
+ */
+.views {
+  padding-block-start: var(--space-4);
+}
+
+/*
+ * The views, as a set of pills that wrap.
+ *
+ * A horizontally scrolling strip is the usual answer at phone width and it is the
+ * wrong one here: a link parked outside the viewport is unreachable on a touch
+ * device, which draws no scrollbar to say anything is hidden. Wrapping keeps all
+ * five on screen at every width.
+ */
+.views__list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  padding: 0;
+  list-style: none;
+}
+
+.views__tab {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.45em;
+  padding: 0.5rem 0.95rem;
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--radius-pill);
+  font-size: var(--step--1);
+  font-weight: 500;
+  color: var(--ink);
+  text-decoration: none;
+  white-space: nowrap;
+  transition:
+    background-color var(--quick) var(--ease),
+    border-color var(--quick) var(--ease),
+    color var(--quick) var(--ease),
+    translate var(--quick) var(--ease);
+}
+
+.views__tab:hover {
+  border-color: var(--ink-faint);
+  background: var(--canvas-tint);
+  color: var(--ink);
+  translate: 0 -1px;
+}
+
+/* Back down under the press. A control that lifts on approach and stays lifted
+   while it is being pressed has not acknowledged the press. */
+.views__tab:active {
+  translate: none;
+}
+
+.views__tab--current,
+.views__tab--current:hover {
+  background: var(--ink);
+  border-color: var(--ink);
+  color: var(--on-ink);
+}
+
+.views__count {
+  color: var(--ink-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+.views__tab--current .views__count {
+  color: var(--on-ink-muted);
+}
+
+/* ----------------------------------------------------------------- toolbar -- */
+
+/*
+ * One row of controls, and a disclosure for the rest.
+ *
+ * The four-column grid this replaces put search, length, source list, and sort in a
+ * band about 120px tall before a single name. Two of those four are what a visitor
+ * reaches for on arrival, so those two stay visible and the others move behind
+ * `More filters`. The disclosure is a real `<details>`, so it works with no
+ * JavaScript, find-in-page still reaches what is inside it, and the browser opens it
+ * on the way to a match.
+ */
+.toolbar {
+  padding-block: var(--space-3) var(--space-4);
+}
+
+.toolbar__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: var(--space-3) var(--space-4);
+}
+
+.toolbar__field {
+  display: grid;
+  gap: var(--space-2);
+  align-content: end;
+  flex: 0 0 auto;
+  min-width: 0;
+}
+
+/*
+ * The search box takes the room that is left, up to a limit; the length pair keeps
+ * its own. The limit is what makes the row read as one group of controls: allowed to
+ * grow without one, the search field ran to about 800px at desktop width and left a
+ * gap wide enough that the length pair looked right-aligned to the page instead of
+ * attached to the search beside it.
+ */
+.toolbar__field--search {
+  flex: 1 1 14rem;
+  max-width: 24rem;
+}
+
+.toolbar__label {
+  font-size: var(--step--1);
+  font-weight: 600;
+  color: var(--ink);
+}
+
+/*
+ * On the baseline of the row rather than the bottom of it. Every control beside this
+ * has a label above it, so `align-items: end` puts them all on one line; the reset
+ * has no label, and aligning it with the inputs is what keeps it from floating.
+ */
+.toolbar__reset {
+  padding-block-end: 0.7rem;
+  font-size: var(--step--1);
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+/* A summary is a list item by default in some engines, and its marker is a
+   rendering detail this control draws for itself. */
+.more__summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5em;
+  width: fit-content;
+  margin-block-start: var(--space-3);
+  padding: 0.4rem 0;
+  color: var(--accent);
+  font-size: var(--step--1);
+  font-weight: 500;
+  cursor: pointer;
+  list-style: none;
+}
+
+.more__summary::-webkit-details-marker {
+  display: none;
+}
+
+/* The disclosure triangle, drawn rather than inherited, so it turns. */
+.more__summary::before {
+  content: '';
+  width: 0.45em;
+  height: 0.45em;
+  border-right: 1.5px solid currentcolor;
+  border-bottom: 1.5px solid currentcolor;
+  rotate: 45deg;
+  translate: 0 -0.1em;
+  transition: rotate var(--quick) var(--ease);
+}
+
+.more[open] > .more__summary::before {
+  rotate: -135deg;
+  translate: 0 0.1em;
+}
+
+.more__body {
+  display: grid;
+  gap: var(--space-5);
+  padding-block: var(--space-5) var(--space-2);
+}
+
+.more__grid {
+  display: grid;
+  gap: var(--space-5);
+  grid-template-columns: minmax(0, 1fr);
+}
+
+@media (min-width: 34rem) {
+  .more__grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.more__notes {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.field {
+  display: grid;
+  gap: var(--space-2);
+  align-content: start;
+  min-width: 0;
+}
+
+.field__label {
+  font-size: var(--step--1);
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.input,
+.select {
+  appearance: none;
+  width: 100%;
+  min-width: 0;
+  min-height: 2.75rem;
+  padding: 0.55rem 0.8rem;
+  font: inherit;
+  font-size: var(--step-0);
+  letter-spacing: inherit;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--radius-1);
+  transition:
+    border-color var(--quick) var(--ease),
+    background-color var(--quick) var(--ease);
+}
+
+.input::placeholder {
+  color: var(--ink-faint);
+}
+
+.input:hover,
+.select:hover {
+  border-color: var(--ink-faint);
+}
+
+/*
+ * The chevron is a background image rather than a pseudo-element, because a
+ * `<select>` does not reliably render one. It cannot read `currentColor`, so the
+ * stroke is a literal copy of `--ink-muted`: 8.9:1 on paper. With one scheme there
+ * is only ever one such copy to keep in step.
+ */
+.select {
+  padding-inline-end: 2.25rem;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8'%3E%3Cpath d='M1 1.75 6 6.5l5-4.75' fill='none' stroke='%2345433d' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 0.8rem center;
+  background-size: 0.7rem;
+  cursor: pointer;
+}
+
+.range {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.range__to {
+  color: var(--ink-faint);
+  font-size: var(--step--1);
+}
+
+/*
+ * A length bound is one or two digits, and a `number` input's intrinsic width is
+ * several times that. In the visible row that width is taken from the search box
+ * beside it, so it is stated here instead of inherited.
+ *
+ * The spin buttons go with it. They are a third of the control's width for a value
+ * a visitor types, and they are the reason `appearance: none` above is not enough:
+ * Firefox needs the property named on the input itself.
+ */
+.input--bound {
+  width: 4.5rem;
+  flex: 0 0 auto;
+  padding-inline: 0.6rem;
+  text-align: center;
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+
+.input--bound::-webkit-outer-spin-button,
+.input--bound::-webkit-inner-spin-button {
+  margin: 0;
+  appearance: none;
+}
+
+/* `auto` for the toggle so its label sets its width, and `minmax(0, 1fr)` for the
+   select so it gives that width up rather than pushing the row wider. */
+.sort {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--space-2);
+}
+
+.sort .button {
+  padding-inline: 0.85rem;
+  white-space: nowrap;
+}
+
+.fieldset {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  display: grid;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.fieldset__legend {
+  padding: 0;
+  font-size: var(--step--1);
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.checkbox-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+/*
+ * A status filter, as a chip around a real checkbox.
+ *
+ * The input keeps its own visible box rather than being hidden behind the chip.
+ * A hidden input is still focusable, so the tests still pass, but the focus ring
+ * is then drawn on a one-pixel target nobody can see - and a chip that only looks
+ * pressed loses the one affordance that says it is a checkbox and not a link.
+ */
+.checkbox {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.45rem 0.85rem 0.45rem 0.6rem;
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--radius-pill);
+  font-size: var(--step--1);
+  cursor: pointer;
+  transition:
+    background-color var(--quick) var(--ease),
+    border-color var(--quick) var(--ease);
+}
+
+.checkbox:hover {
+  border-color: var(--ink-faint);
+  background: var(--canvas-tint);
+}
+
+.checkbox:has(input:checked) {
+  border-color: var(--accent);
+  background: var(--accent-wash);
+}
+
+.checkbox input {
+  appearance: none;
+  flex: none;
+  width: 1.05rem;
+  height: 1.05rem;
+  margin: 0;
+  border: 1.5px solid var(--hairline-strong);
+  border-radius: 0.3rem;
+  background: var(--surface);
+  cursor: pointer;
+  transition:
+    background-color var(--quick) var(--ease),
+    border-color var(--quick) var(--ease);
+}
+
+/*
+ * The tick, and why its colour is argued rather than measured.
+ *
+ * A `<select>`'s chevron and this tick are both background images, so neither can
+ * read `currentColour` and neither is visible to an automated contrast check - axe
+ * sees a filled box. The colour has to be reasoned about instead. White over the
+ * accent (#5c3bd6) is 6.9:1, comfortably past the 3:1 a non-text graphic needs.
+ */
+.checkbox input:checked {
+  border-color: var(--accent);
+  background-color: var(--accent);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 10'%3E%3Cpath d='M1 5.2 4.3 8.5 11 1.5' fill='none' stroke='%23ffffff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: 0.68rem;
+}
+
+.checkbox__count {
+  color: var(--ink-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ----------------------------------------------------------------- buttons -- */
+
+.button {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4em;
+  min-height: 2.75rem;
+  padding: 0.55rem 1.15rem;
+  font: inherit;
+  font-size: var(--step--1);
+  font-weight: 500;
+  letter-spacing: inherit;
+  color: var(--on-ink);
+  background: var(--ink);
+  border: 1px solid var(--ink);
+  border-radius: var(--radius-pill);
+  cursor: pointer;
+  transition:
+    background-color var(--quick) var(--ease),
+    border-color var(--quick) var(--ease),
+    color var(--quick) var(--ease),
+    transform var(--quick) var(--ease);
+}
+
+.button:hover {
+  transform: translateY(-1px);
+}
+
+.button:active {
+  transform: none;
+}
+
+.button--quiet {
+  color: var(--ink);
+  background: var(--surface);
+  border-color: var(--hairline-strong);
+}
+
+.button--quiet:hover {
+  border-color: var(--ink-faint);
+  background: var(--canvas-tint);
+}
+
+/* ------------------------------------------------------------------- stage -- */
+
+/*
+ * The stage: the band the names are read against.
+ *
+ * It is the one place on the page that carries its own palette rather than the
+ * document's. The reasoning is that the list is the page - everything above it is a
+ * label and a caveat, and everything below it is provenance - so the list gets a
+ * ground of its own, and a name set at 40px on a near-black field is a different
+ * object from the same name in a table cell.
+ *
+ * The palette is scoped rather than global, and it is a full override rather than a
+ * tint: every ink, hairline, and accent inside is restated against #04060f and
+ * checked there. That is what lets every component inside keep using the same tokens
+ * with no dark-stage variant of its own - `--ink-muted` means "muted against the
+ * ground you are on", and the ground changed. The values are not the dark scheme's:
+ * that one is tuned against black, and against this blue-black its muted inks read
+ * cold and its accent is too dim to carry a link.
+ *
+ * It stays this palette in both schemes. A band whose whole purpose is to be the one
+ * dark thing on a light page cannot invert with the system, and the light page around
+ * it does not.
+ */
+.stage {
+  /* `isolation` makes this a stacking context, so the `z-index: -1` atmosphere below
+     paints above the stage's own background and below everything in flow. Without
+     it, a negative index escapes to the root and the layers land behind the page. */
+  position: relative;
+  isolation: isolate;
+  margin-block: var(--space-2) var(--space-7);
+  padding-block-end: var(--space-6);
+  border-block: 1px solid rgb(140 170 255 / 18%);
+  background: var(--canvas);
+  color: var(--ink);
+
+  --canvas: #04060f;
+  --canvas-tint: rgb(255 255 255 / 5%);
+  --surface: #0b1020;
+
+  --hairline: rgb(140 170 255 / 16%);
+  --hairline-strong: rgb(140 170 255 / 30%);
+
+  --ink: #f2f6ff;
+  --ink-muted: #9fb0cf;
+  --ink-faint: #7f8fae;
+  --on-ink: #04060f;
+  --on-ink-muted: rgb(4 6 15 / 66%);
+
+  --accent: #6ea8ff;
+  --accent-ink: #04060f;
+  --accent-wash: rgb(110 168 255 / 14%);
+
+  --good: #4ae08a;
+  --warn: #ffb02e;
+  --warn-wash: rgb(255 176 46 / 12%);
+  --busy: #6ea8ff;
+  --muted-tone: #93a0bb;
+  --danger: #ff8080;
+  --danger-wash: rgb(255 128 128 / 13%);
+
+  --shadow-1: 0 1px 2px rgb(0 0 0 / 50%);
+  --shadow-2: 0 18px 44px -12px rgb(0 0 0 / 70%);
+}
+
+/*
+ * The atmosphere: two layers, both drawn in CSS, neither an asset.
+ *
+ * The first is depth - blue light gathered at the top corners so the band reads as
+ * lit from above rather than as a flat rectangle of colour. The second is structure:
+ * a column grid of hairlines, faded out before it reaches the rows, which gives the
+ * type something to sit on without competing with it.
+ *
+ * Neither layer clips. `overflow: hidden` here would also hide any real horizontal
+ * overflow inside the band, and the layout tests exist to catch exactly that; a
+ * pseudo-element at `inset: 0` cannot overflow in the first place.
+ */
+.stage::before,
+.stage::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+}
+
+.stage::before {
+  background:
+    radial-gradient(120% 80% at 12% 0%, rgb(37 99 235 / 34%), transparent 62%),
+    radial-gradient(90% 70% at 88% 4%, rgb(56 132 255 / 22%), transparent 58%),
+    radial-gradient(140% 120% at 50% 100%, rgb(10 16 40 / 55%), transparent 70%);
+}
+
+.stage::after {
+  background-image: linear-gradient(to right, rgb(140 170 255 / 13%) 0 1px, transparent 1px 100%);
+  background-size: 4.5rem 100%;
+  /* Gone before the first row, so the grid is a header atmosphere and not a texture
+     laid over the names. */
+  mask-image: linear-gradient(to bottom, rgb(0 0 0 / 65%), transparent 55%);
+}
+
+/*
+ * The chevron again, for the stage.
+ *
+ * The token overrides above cannot reach a colour spelled inside a data URI, so a
+ * `<select>` inside the stage would keep the page's dark grey chevron and draw it on
+ * a near-black control. The condition is the class, not the visitor's scheme
+ * preference: the stage is dark whatever the paper around it is doing.
+ */
+.stage .select {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8'%3E%3Cpath d='M1 1.75 6 6.5l5-4.75' fill='none' stroke='%239fb0cf' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+}
+
+.stage .checkbox input:checked {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 10'%3E%3Cpath d='M1 5.2 4.3 8.5 11 1.5' fill='none' stroke='%2304060f' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+}
+
+/* ----------------------------------------------------------------- results -- */
+
+.results-panel {
+  /* Clear of the sticky top bar when the skip link or `#results` lands here. */
+  scroll-margin-block-start: 4.5rem;
+}
+
+.results {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+}
+
+/*
+ * The caption is for a screen reader, not for the page.
+ *
+ * It stays a real `<caption>` because that is the table's accessible name, and a
+ * reader who lands on the table out of context needs it. It is not drawn, because
+ * the trust line on the first screen already says the same thing in more words, and
+ * a second copy of it between `More filters` and the column headers cost two lines
+ * of the first screen and read as a stray sentence belonging to neither.
+ *
+ * Hidden by clipping rather than by `display: none`, which would remove the name.
+ * The properties are `.visually-hidden`'s, restated here because a `<caption>` is a
+ * table part and the class is applied by markup elsewhere.
+ */
+.results__caption {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+/*
+ * A legend, not a header bar.
+ *
+ * The heading row is the most spreadsheet-like thing a table has, and the name
+ * below it is now the largest text on the page, so this steps back to a quiet
+ * micro-label on a plain hairline. It stays a real `<th scope="col">` carrying
+ * `aria-sort`, because that is what a screen reader navigates the columns by.
+ */
+.results thead th {
+  padding: 0 var(--space-4) var(--space-3) 0;
+  border-block-end: 1px solid var(--hairline);
+  vertical-align: bottom;
+  font-size: var(--step--2);
+  font-weight: 600;
+  letter-spacing: var(--track-wide);
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+
+/*
+ * `baseline`, not `top`. The name is set several steps larger than the status
+ * beside it, and aligning the cells' tops would leave the small text floating at
+ * the ceiling of a tall row. Aligning first baselines instead sets the status and
+ * the countdown on the name's own line, which is what makes the row read as one
+ * statement about one name rather than as three cells that happen to be adjacent.
+ */
+.results tbody th,
+.results tbody td {
+  padding: var(--space-5) var(--space-4) var(--space-5) 0;
+  border-block-end: 1px solid var(--hairline);
+  vertical-align: baseline;
+  font-weight: 400;
+  transition: background-color var(--quick) var(--ease);
+}
+
+/* The row is the event, so it gets the room - but only as much as leaves the third
+   row on the first screen at 900px tall, which is what the row height is for. */
+@media (min-width: 48rem) {
+  .results tbody th,
+  .results tbody td {
+    padding-block: var(--space-4) var(--space-5);
+  }
+}
+
+/*
+ * Hover and keyboard focus are the same state, because they answer the same
+ * question: which name am I about to open? `:focus-within` is what carries it for
+ * the keyboard, since the thing that takes focus is the link inside the cell and
+ * the thing worth emphasising is the row around it.
+ */
+.results__row:hover > *,
+.results__row:focus-within > * {
+  background-color: var(--canvas-tint);
+}
+
+/*
+ * Rows arriving, when a view or a filter changes the list.
+ *
+ * There is no JavaScript behind this and no key to keep in step. React reuses a
+ * row's DOM node while its name is still in the list, so only genuinely new rows
+ * mount, and only those run the animation. Changing the sort reorders rows that
+ * were already there and is correctly silent; switching view brings different
+ * names, and those rise in.
+ *
+ * Transform only, and never opacity. A fade would put every row's text below the
+ * contrast threshold for the length of the animation, and the geometry the layout
+ * tests measure - how many lines a name takes, how many a timestamp takes, how wide
+ * a cell is - is unchanged by a vertical offset but not by a fade.
+ */
+@media (prefers-reduced-motion: no-preference) {
+  .results__row {
+    animation: row-in 420ms var(--ease) backwards;
+  }
+
+  .results__row:nth-child(2) {
+    animation-delay: 40ms;
+  }
+
+  .results__row:nth-child(3) {
+    animation-delay: 80ms;
+  }
+
+  .results__row:nth-child(4) {
+    animation-delay: 120ms;
+  }
+
+  .results__row:nth-child(5) {
+    animation-delay: 160ms;
+  }
+
+  .results__row:nth-child(6) {
+    animation-delay: 200ms;
+  }
+
+  .results__row:nth-child(7) {
+    animation-delay: 240ms;
+  }
+
+  /* The stagger stops here rather than running down a long page. Past the seventh
+     row it is no longer read as a sequence, only as a wait. */
+  .results__row:nth-child(n + 8) {
+    animation-delay: 280ms;
+  }
+}
+
+@keyframes row-in {
+  from {
+    transform: translateY(0.6rem);
+  }
+
+  to {
+    transform: none;
+  }
+}
+
+.results tbody tr:last-child > * {
+  border-block-end: 0;
+}
+
+.results thead th:last-child,
+.results tbody tr > *:last-child {
+  padding-inline-end: 0;
+}
+
+/* Proportions only once there is room for them. Below this the browser's own
+   measurement of the content is the better judge, and a fixed 28% name column
+   at phone width is what breaks a name across two lines. */
+@media (min-width: 48rem) {
+  .results thead th:first-child {
+    width: 28%;
+  }
+
+  .results thead th:nth-child(2) {
+    width: 20%;
+  }
+
+  /* A percentage on a column is a preference the auto table layout will still give
+     up to a wordier column beside it. Holding the headings on one line puts a floor
+     under the first two columns, which is what the percentages were asking for. */
+  .results thead th {
+    white-space: nowrap;
+  }
+}
+
+/*
+ * Three columns at 320 CSS px.
+ *
+ * A table cannot be narrower than the widest unbreakable thing in each of its
+ * columns added together, so reflow here is won by shortening those, not by
+ * restyling the table: the column gutters tighten, the status wraps to two lines,
+ * and the ticking value drops a step. Turning the rows into blocks would fit too,
+ * and would take the table roles a screen reader navigates by with it.
+ */
+@media (max-width: 47.99rem) {
+  .results thead th,
+  .results tbody th,
+  .results tbody td {
+    padding-inline-end: var(--space-3);
+  }
+
+  .badge {
+    white-space: normal;
+  }
+
+  .countdown__value {
+    font-size: var(--step-0);
+  }
+}
+
+.results__name {
+  display: table-cell;
+}
+
+.ens-link {
+  position: relative;
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  font-weight: 600;
+  color: var(--ink);
+  text-decoration: none;
+  overflow-wrap: break-word;
+  transition: color var(--quick) var(--ease);
+}
+
+/*
+ * The underline is drawn rather than declared.
+ *
+ * `text-decoration` cannot be animated from nothing to something, and at this size
+ * it lands too close to the letterforms. A bar of its own can sweep in from the
+ * start edge, which reads as the name being picked up rather than as a state flag
+ * switching on. It is a pseudo-element, so the text box keeps no background of its
+ * own and an automated contrast check still sees plain ink on the canvas.
+ */
+.ens-link::after {
+  content: '';
+  position: absolute;
+  inset-inline: 0;
+  inset-block-end: -0.06em;
+  height: max(1px, 0.055em);
+  background: currentcolor;
+  border-radius: 1px;
+  scale: 0 1;
+  transform-origin: left center;
+  transition: scale var(--quick) var(--ease);
+}
+
+.ens-link:hover,
+.results__row:focus-within .ens-link {
+  color: var(--accent);
+}
+
+/*
+ * Hover only, and not `:focus-visible`.
+ *
+ * The keyboard already gets a 2px accent ring, and the bar lands within a pixel or
+ * two of it at this size, so drawing both merged them into one thick smudge that
+ * read as a rendering fault. The ring is the stronger cue and the one the
+ * accessibility requirement is about, so it keeps the job alone.
+ */
+.ens-link:hover::after {
+  scale: 1 1;
+}
+
+/*
+ * A ring sized for the name rather than for a 13px control.
+ *
+ * The global offset is tuned to the inputs and buttons, and at three times the type
+ * size it sits inside the descenders. Both values are proportional here for the same
+ * reason the type is: this is the largest interactive text on the page.
+ */
+.results__name .ens-link:focus-visible {
+  outline-offset: 0.14em;
+  border-radius: 0.22em;
+}
+
+/*
+ * The name is the subject of the whole page, so it is the largest thing on it after
+ * the headline: set in the text face, not the monospace kept for machine timestamps.
+ *
+ * It does not grow below 48rem, and that is a hard floor rather than a taste. A
+ * table cannot be narrower than its columns' widest unbreakable content added
+ * together, and at 320px a nine-character label at reading size is already most of
+ * the room the name column has. One step further and the name wraps, which is the
+ * one thing the layout tests forbid outright.
+ *
+ * The size is set on the link and inherited by the label inside it, not set on the
+ * label. That is what lets the focus ring above be expressed in `em` and scale with
+ * the name: an `em` on the link resolves against the link's own font size, so a size
+ * that lived only on the child would leave the ring at body scale.
+ */
+.results__name .ens-link {
+  font-size: var(--step-0);
+  letter-spacing: var(--track-snug);
+}
+
+/* The text face, not the monospace the global `.mono` rule would otherwise give it.
+   Monospace is kept for machine timestamps, where digits have to line up. */
+.results__name .mono {
+  font-family: var(--font-sans);
+  font-size: inherit;
+  letter-spacing: inherit;
+}
+
+@media (min-width: 48rem) {
+  .results__name .ens-link {
+    font-size: var(--step-2);
+    letter-spacing: var(--track-tight);
+  }
+}
+
+@media (min-width: 64rem) {
+  .results__name .ens-link {
+    font-size: var(--step-3);
+  }
+}
+
+.results__length {
+  display: block;
+  /* Clear of the hover underline, which is drawn just under the name's own box. */
+  margin-block-start: 0.5rem;
+  color: var(--ink-faint);
+  font-size: var(--step--1);
+  font-variant-numeric: tabular-nums;
+  /* "5 characters" is one fact and reads badly split over two lines. */
+  white-space: nowrap;
+}
+
+.results__next {
+  min-width: 0;
+}
+
+/* Standing alone in the cell rather than under a countdown, the note is the cell's
+   own first line, and the space that separates it from a countdown above would
+   push it out of line with the status beside it. */
+.results__next > .countdown__note:first-child {
+  margin-block-start: 0;
+  max-width: 46ch;
+}
+
+/* --------------------------------------------------------------- countdown -- */
+
+.countdown {
+  display: grid;
+  gap: 0.15rem;
+  justify-items: start;
+}
+
+.countdown__what {
+  color: var(--ink-muted);
+  font-size: var(--step--1);
+}
+
+.countdown__left {
+  order: -1;
+}
+
+.countdown__value {
+  font-size: var(--step-1);
+  font-weight: 600;
+  letter-spacing: var(--track-snug);
+  color: var(--ink);
+}
+
+/* Tabular sans, not the monospace face. A ticking value needs digits of a fixed
+   advance so the line does not twitch every second, and `tabular-nums` gives that
+   without setting the page's largest changing number as terminal output. The
+   timestamp under it stays monospace, because that one really is machine text. */
+.countdown__value.mono {
+  font-family: var(--font-sans);
+  letter-spacing: var(--track-tight);
+}
+
+/* A boundary already behind us. The words below say what that does and does not
+   mean; the colour only draws the eye to them. */
+.countdown__value--passed {
+  color: var(--warn);
+}
+
+.countdown__at {
+  margin-block-start: 0.2rem;
+  color: var(--ink-faint);
+  font-size: var(--step--2);
+}
+
+/* `Countdown` splits the instant into two spans so it can break in exactly one
+   place. Each half has to be unbreakable for that to hold, and `12:00:00 UTC`
+   carries a space of its own: left alone it becomes a third line. */
+.countdown__at time > span {
+  white-space: nowrap;
+}
+
+.countdown__note {
+  margin-block-start: var(--space-2);
+  color: var(--ink-muted);
+  font-size: var(--step--1);
+  max-width: 34ch;
+}
+
+/* ------------------------------------------------------------------- pager -- */
+
+.pager {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3) var(--space-5);
+  align-items: center;
+  justify-content: space-between;
+  padding-block-start: var(--space-5);
+  border-block-start: 1px solid var(--hairline);
+}
+
+.pager__range {
+  color: var(--ink-muted);
+  font-size: var(--step--1);
+  font-variant-numeric: tabular-nums;
+}
+
+.pager__list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  align-items: center;
+  padding: 0;
+  list-style: none;
+}
+
+.pager__page,
+.pager__step {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 2.25rem;
+  min-height: 2.25rem;
+  padding-inline: 0.6rem;
+  border: 1px solid transparent;
+  border-radius: var(--radius-pill);
+  color: var(--ink);
+  font-size: var(--step--1);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  text-decoration: none;
+  transition:
+    background-color var(--quick) var(--ease),
+    border-color var(--quick) var(--ease),
+    color var(--quick) var(--ease);
+}
+
+.pager__page:hover,
+.pager__step:hover {
+  background: var(--canvas-tint);
+  border-color: var(--hairline-strong);
+  color: var(--ink);
+}
+
+.pager__page--current,
+.pager__page--current:hover {
+  background: var(--ink);
+  border-color: var(--ink);
+  color: var(--on-ink);
+}
+
+/* Not a link and not a disabled button: there is nowhere to go, so there is
+   nothing here to offer or to focus. */
+.pager__step--off {
+  color: var(--ink-faint);
+  cursor: default;
+}
+
+.pager__step--off:hover {
+  background: none;
+  border-color: transparent;
+  color: var(--ink-faint);
+}
+
+.pager__gap {
+  padding-inline: 0.35rem;
+  color: var(--ink-faint);
+}
+
+/* ------------------------------------------------------------------ states -- */
+
+.state {
+  display: grid;
+  gap: var(--space-3);
+  justify-items: start;
+  padding-block: var(--space-6);
+}
+
+.state__title {
+  font-size: var(--step-2);
+  font-weight: 600;
+}
+
+.spinner {
+  width: 1.5rem;
+  height: 1.5rem;
+  border: 2px solid var(--hairline-strong);
+  border-block-start-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 700ms linear infinite;
+}
+
+@keyframes spin {
+  to {
+    rotate: 360deg;
+  }
+}

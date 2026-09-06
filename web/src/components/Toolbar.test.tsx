@@ -1,0 +1,705 @@
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
+import type { ReactNode } from 'react'
+import { beforeEach, describe, expect, it } from 'vitest'
+import { deriveAttribution, type Attribution } from '../snapshot/attribution'
+import { applyQuery, countByStatus } from '../state/filter'
+import { parseQuery, serializeQuery } from '../state/query'
+import { useLengthDrafts } from '../state/useLengthDrafts'
+import { useUrlState } from '../state/useUrlState'
+import { buildSnapshot } from '../test/factory'
+import type { Snapshot } from '../snapshot/types'
+import { Toolbar } from './Toolbar'
+
+/**
+ * The toolbar is tested through the address bar, because that is where its state
+ * actually lives. Asserting on `window.location.search` after an interaction checks
+ * the thing a visitor would copy out and send to someone else, and it holds the round
+ * trip honest: the link a control writes must parse back to the state that wrote it.
+ *
+ * Every mount names `view=all`. The default view is `available`, which admits one
+ * status, and a view with one status is the wrong place to test a status filter or a
+ * count that has to change - the whole point of `all` is that every status is in it.
+ */
+
+/**
+ * Wires the real URL state to the real toolbar. Anything faked between them would
+ * test a copy of the state rather than the link.
+ *
+ * The match count is rendered here rather than in the toolbar, because that is where
+ * `App` renders it: beside the page heading, above the list. It is included because
+ * it is the evidence that a control did something - a link that parses is not proof
+ * that fewer rows survive it.
+ */
+function Harness({
+  snapshot,
+  attribution,
+}: {
+  snapshot: Snapshot
+  attribution?: Attribution
+}): ReactNode {
+  const { query, warnings, setQuery, hrefFor } = useUrlState()
+  const lengthDrafts = useLengthDrafts(query.length)
+  const resolved = attribution ?? deriveAttribution(snapshot.metadata.sources, snapshot.results)
+  const context = { sourceIdByName: resolved.available ? resolved.sourceIdByName : null }
+  const page = applyQuery(snapshot.results, query, context)
+  const notApplied = warnings.length + lengthDrafts.advisories.length
+  return (
+    <>
+      <p role="status">
+        {page.total} {page.total === 1 ? 'name matches' : 'names match'}
+      </p>
+      {/* Rendered here for the same reason the count is: `App` puts the advisories above
+          the list, in one band, and holds the length drafts above the toolbar so this
+          block and the boxes read the same thing. The ids match `App`'s, because each box
+          points `aria-describedby` at its own line and a dangling reference would prove
+          nothing. Without this the harness would pass on a page that dropped a filter in
+          silence. */}
+      {notApplied > 0 && (
+        <ul aria-label="Not applied">
+          {warnings.map((warning) => (
+            <li key={warning}>{warning}</li>
+          ))}
+          {lengthDrafts.advisories.map((advisory) => (
+            <li id={advisory.id} key={advisory.end}>
+              {advisory.text}
+            </li>
+          ))}
+        </ul>
+      )}
+      <Toolbar
+        attribution={resolved}
+        lengthDrafts={lengthDrafts}
+        query={query}
+        resetHref={hrefFor({
+          search: '',
+          statuses: [],
+          length: { min: null, max: null },
+          list: null,
+        })}
+        setQuery={setQuery}
+        sources={snapshot.metadata.sources}
+        statusCounts={countByStatus(snapshot.results, query, context)}
+      />
+    </>
+  )
+}
+
+function mount(search = '?view=all', attribution?: Attribution): void {
+  window.history.replaceState(null, '', `/${search}`)
+  const snapshot = buildSnapshot()
+  render(
+    attribution === undefined ? (
+      <Harness snapshot={snapshot} />
+    ) : (
+      <Harness attribution={attribution} snapshot={snapshot} />
+    ),
+  )
+}
+
+/** Opens the disclosure the way a visitor does, so what it holds becomes usable. */
+async function openMore(user: ReturnType<typeof userEvent.setup>): Promise<void> {
+  await user.click(screen.getByText('More filters'))
+}
+
+/**
+ * The band that lists what the page is not applying.
+ *
+ * Queried by its name rather than by `role="alert"`: the band is polite, because its length
+ * lines change while the visitor types and an assertive region would interrupt them on
+ * every digit.
+ */
+function notAppliedBand(): HTMLElement {
+  return screen.getByRole('list', { name: 'Not applied' })
+}
+
+function queryNotAppliedBand(): HTMLElement | null {
+  return screen.queryByRole('list', { name: 'Not applied' })
+}
+
+/**
+ * The back button, through the event the browser actually raises.
+ *
+ * `popstate` is the one navigation the hook's own `setQuery` never runs, so anything
+ * that only refreshes on a change the visitor made is invisible until a test comes this
+ * way. The location moves asynchronously, which is why this waits for it.
+ */
+async function goBack(): Promise<void> {
+  await travel(() => {
+    window.history.back()
+  })
+}
+
+/** The forward button, the same way. */
+async function goForward(): Promise<void> {
+  await travel(() => {
+    window.history.forward()
+  })
+}
+
+async function travel(move: () => void): Promise<void> {
+  const from = window.location.search
+  await act(async () => {
+    move()
+    await waitFor(() => {
+      expect(window.location.search).not.toBe(from)
+    })
+  })
+}
+
+/**
+ * Says whether the field can read its own contents.
+ *
+ * jsdom models no bad-input state, so the test states it. In a browser this is what a
+ * number input reports for `5.`, `-`, or a lone `e`: the field shows the text, `value` is
+ * the empty string, and `validity.badInput` is the only thing that tells the two apart.
+ */
+function unreadable(box: HTMLElement, badInput: boolean): void {
+  Object.defineProperty(box, 'validity', { configurable: true, value: { badInput } })
+}
+
+/**
+ * Puts the field in the state, and lets a write out of it the way a browser does.
+ *
+ * Both halves are modelled because both matter here. While the text cannot be read the value
+ * is the empty string and `badInput` is set; any later write to `value` replaces that text and
+ * settles it, which a real Chromium confirms for a write back to the empty string as well as
+ * to a digit. React makes exactly that write whenever the committed bound changes, and it
+ * fires no event while doing so.
+ */
+function holdsUnreadableText(box: HTMLInputElement): void {
+  let unreadableNow = true
+  Object.defineProperty(box, 'validity', {
+    configurable: true,
+    get: () => ({ badInput: unreadableNow }) as ValidityState,
+  })
+  // Whatever descriptor is in place already, which is React's own value tracker, so a write
+  // still reaches it and React still sees the value it wrote.
+  const installed =
+    Object.getOwnPropertyDescriptor(box, 'value') ??
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')
+  Object.defineProperty(box, 'value', {
+    configurable: true,
+    get: () => installed?.get?.call(box) as string,
+    set: (next: string) => {
+      unreadableNow = false
+      installed?.set?.call(box, next)
+    },
+  })
+  // `fireEvent` writes the value through the prototype, which is how it makes React notice a
+  // change - and here it is also the one write that must not settle the state it is creating.
+  fireEvent.input(box, { target: { value: '' } })
+}
+
+/** The link is canonical when parsing and re-serializing it changes nothing. */
+function expectCanonicalLink(expected: string): void {
+  expect(window.location.search).toBe(expected)
+  expect(serializeQuery(parseQuery(window.location.search).state)).toBe(expected)
+}
+
+beforeEach(() => {
+  window.history.replaceState(null, '', '/')
+})
+
+describe('Toolbar disclosure', () => {
+  it('shows search and length at once, and keeps the rest one control away', async () => {
+    const user = userEvent.setup()
+    mount()
+
+    // The two a visitor reaches for on arrival are on screen without asking.
+    expect(screen.getByLabelText('Search names')).toBeVisible()
+    expect(screen.getByLabelText('Shortest label length')).toBeVisible()
+    expect(screen.getByLabelText('Longest label length')).toBeVisible()
+
+    // The rest is in the DOM, so find-in-page and the tests reach it, but it is
+    // not taking up the screen until it is asked for.
+    expect(screen.getByLabelText('Sort by')).not.toBeVisible()
+    expect(screen.getByRole('checkbox', { name: 'Available (1)' })).not.toBeVisible()
+
+    await openMore(user)
+
+    expect(screen.getByLabelText('Sort by')).toBeVisible()
+    expect(screen.getByLabelText('Source list')).toBeVisible()
+    expect(screen.getByRole('checkbox', { name: 'Available (1)' })).toBeVisible()
+  })
+})
+
+describe('Toolbar search', () => {
+  it('writes the normalized search to the link and keeps what was typed on screen', async () => {
+    const user = userEvent.setup()
+    mount()
+
+    await user.type(screen.getByLabelText('Search names'), 'BBBB.eth')
+
+    // The link carries the normalized label; the box still shows the keystrokes.
+    expectCanonicalLink('?view=all&q=bbbb')
+    expect(screen.getByLabelText('Search names')).toHaveValue('BBBB.eth')
+  })
+
+  it('applies a search that arrived in the link', () => {
+    mount('?view=all&q=bbbb')
+    expect(screen.getByLabelText('Search names')).toHaveValue('bbbb')
+    expect(screen.getByRole('status')).toHaveTextContent('1 name matches')
+  })
+})
+
+describe('Toolbar length range', () => {
+  it('writes both bounds to the link', async () => {
+    const user = userEvent.setup()
+    mount()
+
+    await user.type(screen.getByLabelText('Shortest label length'), '4')
+    await user.type(screen.getByLabelText('Longest label length'), '4')
+
+    expectCanonicalLink('?view=all&min=4&max=4')
+    expect(screen.getByRole('status')).toHaveTextContent('3 names match')
+  })
+
+  it('clears a bound the snapshot cannot use, without discarding the keystroke', async () => {
+    const user = userEvent.setup()
+    mount('?view=all&min=4')
+
+    await user.clear(screen.getByLabelText('Shortest label length'))
+
+    expectCanonicalLink('?view=all')
+    expect(screen.getByLabelText('Shortest label length')).toHaveValue(null)
+  })
+
+  it('says so when a typed bound names no label length, and keeps the other one', async () => {
+    const user = userEvent.setup()
+    // A longest length that is really filtering, so the count shows whether the other
+    // bound survived the rejected keystroke.
+    mount('?view=all&max=4')
+    expect(screen.getByRole('status')).toHaveTextContent('3 names match')
+
+    // A third digit on a two-digit bound, which is how a visitor reaches this: 100 is
+    // not a label length, and it used to take `max=4` down with it in silence.
+    await user.type(screen.getByLabelText('Shortest label length'), '100')
+
+    expect(notAppliedBand()).toHaveTextContent(
+      'Shortest length not applied: 100 is not a whole number from 1 to 64.',
+    )
+    // The keystrokes stay on screen, the bound the visitor already had still filters,
+    // and the shortest bound is simply not one.
+    expect(screen.getByLabelText('Shortest label length')).toHaveValue(100)
+    expect(screen.getByLabelText('Longest label length')).toHaveValue(4)
+    expectCanonicalLink('?view=all&max=4')
+    expect(screen.getByRole('status')).toHaveTextContent('3 names match')
+  })
+
+  it('keeps saying so through a keystroke elsewhere, a sort change, and the back button', async () => {
+    const user = userEvent.setup()
+    mount('?view=all&max=4')
+    await user.type(screen.getByLabelText('Shortest label length'), '100')
+    const said = 'Shortest length not applied: 100 is not a whole number from 1 to 64.'
+    expect(notAppliedBand()).toHaveTextContent(said)
+
+    /*
+     * The value is not in the URL - it names no length, so nothing wrote it there - which
+     * is why the notice cannot be read back out of one. Each of these used to erase it
+     * while the box carried on showing 100 and filtering nothing.
+     */
+    await user.type(screen.getByLabelText('Search names'), 'a')
+    expect(notAppliedBand(), 'a search keystroke erased it').toHaveTextContent(said)
+
+    await openMore(user)
+    await user.selectOptions(screen.getByLabelText('Sort by'), 'expiry')
+    expect(notAppliedBand(), 'a sort change erased it').toHaveTextContent(said)
+
+    await goBack()
+    expect(notAppliedBand(), 'the back button erased it').toHaveTextContent(said)
+    expect(screen.getByLabelText('Shortest label length')).toHaveValue(100)
+  })
+
+  /*
+   * `fireEvent.change` rather than `user.type` for the last two, because a number input
+   * reports `value` as the empty string until the text is a valid number, so the
+   * intermediate keystrokes of `3.5` and `-3` cannot build them one at a time. What the
+   * browser hands over once the text does parse is exactly this. The half-typed states
+   * those keystrokes pass through are reported too, from the field's validity rather than
+   * from its value; the test below covers them.
+   */
+  it.each(['0', '65', '99', '100', '3.5', '-3'])(
+    'reports a typed %s the same way the same value in a link is reported',
+    (typed) => {
+      mount('?view=all')
+      fireEvent.change(screen.getByLabelText('Shortest label length'), {
+        target: { value: typed },
+      })
+
+      const fromLink = parseQuery(`?view=all&min=${typed}`).warnings
+      expect(fromLink).toEqual([
+        `Shortest length not applied: ${typed} is not a whole number from 1 to 64.`,
+      ])
+      expect(notAppliedBand()).toHaveTextContent(fromLink[0] ?? '')
+      // And the box still holds it, so there is something for the notice to be about.
+      expect(screen.getByLabelText('Shortest label length')).toHaveValue(Number(typed))
+    },
+  )
+
+  it.each([
+    ['corrected', '4', '?view=all&min=4'],
+    ['emptied', '', '?view=all'],
+  ])('stops saying so once the box is %s', (_what, replacement, link) => {
+    mount('?view=all')
+    const box = screen.getByLabelText('Shortest label length')
+    fireEvent.change(box, { target: { value: '3.5' } })
+    expect(notAppliedBand()).toBeInTheDocument()
+
+    fireEvent.change(box, { target: { value: replacement } })
+
+    expect(queryNotAppliedBand()).not.toBeInTheDocument()
+    expectCanonicalLink(link)
+  })
+
+  it('says so for text the field cannot read at all, which reports no value', () => {
+    // `?view=all&min=5` with the filter really applying, then a `.` on the end. The field
+    // shows `5.`, reports its value as the empty string, and sets `badInput`; the value
+    // alone is indistinguishable from an emptied box, which is how this used to take an
+    // applied bound down with nothing on screen saying why.
+    mount('?view=all&min=5')
+    expect(screen.getByRole('status')).toHaveTextContent('1 name matches')
+
+    const box = screen.getByLabelText('Shortest label length')
+    unreadable(box, true)
+    fireEvent.input(box, { target: { value: '' } })
+
+    expect(notAppliedBand()).toHaveTextContent(
+      'Shortest length not applied: this box needs a whole number from 1 to 64.',
+    )
+    expect(box).toHaveAttribute('aria-invalid', 'true')
+    // The bound really is gone, which is what the notice is there to explain.
+    expectCanonicalLink('?view=all')
+    expect(screen.getByRole('status')).toHaveTextContent('4 names match')
+  })
+
+  it('says so for the first character typed into an empty box, which changes no value', () => {
+    /*
+     * The box is empty and no bound is applied, so a `.` leaves the reported value exactly
+     * where it was. React dispatches no change for that, which is why the validity is read
+     * from the native `input` event instead: the field visibly holds a character, and a
+     * character that filters nothing has to be reported like any other.
+     */
+    mount('?view=all')
+    const box = screen.getByLabelText('Shortest label length')
+
+    unreadable(box, true)
+    fireEvent.input(box, { target: { value: '' } })
+
+    expect(notAppliedBand()).toHaveTextContent(
+      'Shortest length not applied: this box needs a whole number from 1 to 64.',
+    )
+    expect(box).toHaveAttribute('aria-invalid', 'true')
+  })
+
+  it('stops saying so once the box is emptied out of that state', () => {
+    /*
+     * Select all and delete over a field showing `5.`. The reported value was already the
+     * empty string and still is, so again React dispatches nothing - and the band went on
+     * claiming a bound was not applied over a box the visitor had emptied, which is the page
+     * stating something it has not established.
+     */
+    mount('?view=all&min=5')
+    const box = screen.getByLabelText('Shortest label length')
+    unreadable(box, true)
+    fireEvent.input(box, { target: { value: '' } })
+    expect(notAppliedBand()).toBeInTheDocument()
+
+    unreadable(box, false)
+    fireEvent.input(box, { target: { value: '' } })
+
+    expect(queryNotAppliedBand()).not.toBeInTheDocument()
+    expect(box).toHaveAttribute('aria-invalid', 'false')
+  })
+
+  it.each([
+    ['Shortest label length', 'min', 'Shortest', 5, '1 name matches'],
+    ['Longest label length', 'max', 'Longest', 4, '3 names match'],
+  ])(
+    'stops saying so once React empties the %s box itself',
+    async (label, param, end, bound, applied) => {
+      const user = userEvent.setup()
+      /*
+       * The box is emptied by a forward navigation rather than by a keystroke, and the write that
+       * empties it is React's own, which fires no event at all. Nothing below touches the field
+       * after the half-typed character: the visitor presses Back and then Forward, and React
+       * writes the box both times.
+       */
+      mount(`?view=all&${param}=${bound}`)
+      expect(screen.getByRole('status')).toHaveTextContent(applied)
+      // A second history entry to come back from, made by a control that filters nothing.
+      await openMore(user)
+      await user.selectOptions(screen.getByLabelText('Sort by'), 'expiry')
+
+      const box = screen.getByLabelText(label)
+      holdsUnreadableText(box as HTMLInputElement)
+      expect(notAppliedBand()).toHaveTextContent(
+        `${end} length not applied: this box needs a whole number from 1 to 64.`,
+      )
+
+      // Back to the entry that still carries the bound, so React writes it into the box.
+      await goBack()
+      expect(box).toHaveValue(bound)
+      expect(screen.getByRole('status')).toHaveTextContent(applied)
+
+      // And forward again to the entry the bound is gone from, so React writes the box empty.
+      await goForward()
+
+      expect(box).toHaveValue(null)
+      expect(queryNotAppliedBand(), 'the band outlived the box').not.toBeInTheDocument()
+      expect(box).toHaveAttribute('aria-invalid', 'false')
+      // Nothing is filtering by length, and the page says nothing about a box holding nothing.
+      expect(screen.getByRole('status')).toHaveTextContent('4 names match')
+    },
+  )
+
+  it('describes the offending box by its own message, so the two are read together', () => {
+    mount('?view=all')
+    const shortest = screen.getByLabelText('Shortest label length')
+    const longest = screen.getByLabelText('Longest label length')
+
+    fireEvent.change(shortest, { target: { value: '100' } })
+
+    const describedBy = shortest.getAttribute('aria-describedby')
+    expect(describedBy).not.toBeNull()
+    expect(document.getElementById(describedBy ?? '')).toHaveTextContent(
+      'Shortest length not applied: 100 is not a whole number from 1 to 64.',
+    )
+    // The other box is filtering nothing and claims nothing.
+    expect(longest).toHaveAttribute('aria-invalid', 'false')
+    expect(longest).not.toHaveAttribute('aria-describedby')
+  })
+
+  it('keeps a range that arrived inverted in a link, and says it is not applied', () => {
+    mount('?view=all&min=9&max=4')
+
+    // What the link asked for is what the boxes and the address bar show. Repairing it
+    // to nothing would leave the visitor looking at a link that no longer says what
+    // they were sent.
+    expectCanonicalLink('?view=all&min=9&max=4')
+    expect(screen.getByLabelText('Shortest label length')).toHaveValue(9)
+    expect(screen.getByLabelText('Longest label length')).toHaveValue(4)
+    expect(notAppliedBand()).toHaveTextContent(
+      'Length range not applied: shortest 9 is above longest 4.',
+    )
+    // Not applied means not applied: the four names the view holds, not none of them.
+    expect(screen.getByRole('status')).toHaveTextContent('4 names match')
+  })
+
+  it('keeps the longest length the visitor already set when they type a taller shortest', async () => {
+    const user = userEvent.setup()
+    // A longest length that is really filtering, so the count is evidence of whether
+    // the range is applied.
+    mount('?view=all&max=4')
+    expect(screen.getByRole('status')).toHaveTextContent('3 names match')
+
+    await user.type(screen.getByLabelText('Shortest label length'), '9')
+
+    /*
+     * Both bounds survive, in the boxes and in the link. The visitor never has to go
+     * and find the longest length again because of what they typed into the other box,
+     * and the range they have just made is reported rather than dropped in silence.
+     */
+    expectCanonicalLink('?view=all&min=9&max=4')
+    expect(screen.getByLabelText('Shortest label length')).toHaveValue(9)
+    expect(screen.getByLabelText('Longest label length')).toHaveValue(4)
+    expect(notAppliedBand()).toHaveTextContent(
+      'Length range not applied: shortest 9 is above longest 4.',
+    )
+    expect(screen.getByRole('status')).toHaveTextContent('4 names match')
+  })
+
+  it('retires the notice, and filters again, once the range reads the right way round', async () => {
+    const user = userEvent.setup()
+    mount('?view=all&max=4')
+
+    await user.type(screen.getByLabelText('Shortest label length'), '9')
+    expect(notAppliedBand()).toBeInTheDocument()
+
+    await user.clear(screen.getByLabelText('Shortest label length'))
+    await user.type(screen.getByLabelText('Shortest label length'), '3')
+
+    expectCanonicalLink('?view=all&min=3&max=4')
+    expect(queryNotAppliedBand()).not.toBeInTheDocument()
+    expect(screen.getByRole('status')).toHaveTextContent('3 names match')
+  })
+
+  it('still says the range is not applied after a change somewhere else', async () => {
+    const user = userEvent.setup()
+    mount('?view=all&min=9&max=4')
+    await openMore(user)
+
+    // A push navigation, and nothing to do with the length range. The notice describes
+    // the state, which this change carries forward, so it has to survive.
+    await user.selectOptions(screen.getByLabelText('Sort by'), 'expiry')
+
+    expectCanonicalLink('?view=all&min=9&max=4&sort=expiry')
+    expect(notAppliedBand()).toHaveTextContent(
+      'Length range not applied: shortest 9 is above longest 4.',
+    )
+  })
+
+  it('still says the range is not applied after the back button', async () => {
+    const user = userEvent.setup()
+    mount('?view=all&min=9&max=4')
+    await openMore(user)
+    await user.selectOptions(screen.getByLabelText('Sort by'), 'expiry')
+
+    /*
+     * `popstate` is the one navigation `setQuery` never sees, so a notice delivered only
+     * by the arrival capture would vanish here - leaving a screen whose two bounds are
+     * set, whose length filter is doing nothing, and which says so nowhere.
+     */
+    await goBack()
+
+    expect(window.location.search).toBe('?view=all&min=9&max=4')
+    expect(notAppliedBand()).toHaveTextContent(
+      'Length range not applied: shortest 9 is above longest 4.',
+    )
+  })
+
+  it('drops an arrival-only notice on the way back, because the link no longer says it', async () => {
+    const user = userEvent.setup()
+    // `nope` is dropped from the link on arrival, so unlike the range it is not in any
+    // history entry and there is nothing left for a later screen to report.
+    mount('?view=nope&min=3&max=4')
+    expect(notAppliedBand()).toHaveTextContent('unknown view')
+
+    await openMore(user)
+    await user.selectOptions(screen.getByLabelText('Sort by'), 'expiry')
+    await goBack()
+
+    expect(queryNotAppliedBand()).not.toBeInTheDocument()
+  })
+})
+
+describe('Toolbar status filter', () => {
+  it('writes ticked statuses in the published order, whatever order they were ticked', async () => {
+    const user = userEvent.setup()
+    mount()
+    await openMore(user)
+
+    await user.click(screen.getByRole('checkbox', { name: /^Available/ }))
+    await user.click(screen.getByRole('checkbox', { name: /^Expiring soon/ }))
+
+    expectCanonicalLink('?view=all&status=expiring-soon%2Cavailable')
+  })
+
+  it('shows the count for each status, before its own filter is applied', async () => {
+    const user = userEvent.setup()
+    mount()
+    await openMore(user)
+
+    expect(screen.getByRole('checkbox', { name: 'Available (1)' })).toBeInTheDocument()
+    expect(screen.getByRole('checkbox', { name: 'Registered (0)' })).toBeInTheDocument()
+
+    await user.click(screen.getByRole('checkbox', { name: 'Available (1)' }))
+    // Ticking one status must not zero the others, or the list of counts would
+    // collapse to the one already chosen.
+    expect(screen.getByRole('checkbox', { name: 'Premium (1)' })).toBeInTheDocument()
+  })
+
+  it('ticks the boxes named by an incoming link', () => {
+    mount('?view=all&status=premium')
+    expect(screen.getByRole('checkbox', { name: 'Premium (1)' })).toBeChecked()
+    expect(screen.getByRole('checkbox', { name: 'Available (1)' })).not.toBeChecked()
+  })
+
+  it('unticks a status back out of the link', async () => {
+    const user = userEvent.setup()
+    mount('?view=all&status=premium')
+    await openMore(user)
+
+    await user.click(screen.getByRole('checkbox', { name: 'Premium (1)' }))
+
+    expectCanonicalLink('?view=all')
+  })
+})
+
+describe('Toolbar sort', () => {
+  it('writes a chosen sort and names both of its directions in words', async () => {
+    const user = userEvent.setup()
+    mount()
+    await openMore(user)
+
+    // The direction is never called "ascending": each sort names its own two ends.
+    const toggle = screen.getByRole('button', { name: /Press to sort/ })
+    expect(toggle).toHaveAccessibleName(/^A to Z/)
+
+    await user.selectOptions(screen.getByLabelText('Sort by'), 'expiry')
+    expectCanonicalLink('?view=all&sort=expiry')
+    expect(toggle).toHaveAccessibleName(/^Soonest first/)
+
+    await user.click(toggle)
+    expectCanonicalLink('?view=all&sort=expiry&dir=desc')
+    expect(toggle).toHaveAccessibleName(/^Latest first/)
+  })
+
+  it('leaves the default sort out of the link', async () => {
+    const user = userEvent.setup()
+    mount('?view=all&sort=expiry')
+    await openMore(user)
+
+    await user.selectOptions(screen.getByLabelText('Sort by'), 'name')
+
+    expectCanonicalLink('?view=all')
+  })
+})
+
+describe('Toolbar source list', () => {
+  it('offers each list with its own name count and writes the choice to the link', async () => {
+    const user = userEvent.setup()
+    mount()
+    await openMore(user)
+
+    await user.selectOptions(
+      screen.getByLabelText('Source list'),
+      screen.getByRole('option', { name: 'data/words/4-letters.txt (3)' }),
+    )
+
+    expectCanonicalLink('?view=all&list=four-letters')
+    expect(screen.getByRole('status')).toHaveTextContent('3 names match')
+  })
+
+  it('hides the control and states why when names cannot be attributed', () => {
+    mount('?view=all', {
+      available: false,
+      reason: 'source list five-letters does not state a label length',
+      sourceIdByName: new Map(),
+      lengthBySourceId: new Map(),
+    })
+
+    expect(screen.queryByRole('combobox', { name: 'Source list' })).not.toBeInTheDocument()
+    expect(
+      screen.getByText(/source list five-letters does not state a label length/),
+    ).toBeInTheDocument()
+  })
+})
+
+describe('Toolbar reset', () => {
+  it('offers a link back to the unfiltered view only while something is filtered', async () => {
+    const user = userEvent.setup()
+    mount()
+    await openMore(user)
+
+    expect(screen.queryByRole('link', { name: 'Clear filters' })).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('checkbox', { name: 'Available (1)' }))
+
+    // Visible without opening the disclosure again: the way out of a filter must
+    // not be behind the control that set it.
+    const reset = screen.getByRole('link', { name: 'Clear filters' })
+    expect(reset).toBeVisible()
+    expect(reset).toHaveAttribute('href', '?view=all')
+  })
+
+  it('keeps the sort when clearing the filters, because sorting hides nothing', async () => {
+    const user = userEvent.setup()
+    mount('?view=all&sort=expiry&dir=desc&status=premium')
+    await openMore(user)
+
+    await user.click(screen.getByRole('checkbox', { name: 'Premium (1)' }))
+
+    expectCanonicalLink('?view=all&sort=expiry&dir=desc')
+  })
+})

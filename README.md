@@ -118,6 +118,7 @@ internal/scanner/     one scheduled scan, from event to published pointer
 internal/dynamo/      DynamoDB snapshot storage
 internal/api/         cached HTTP read API for the published snapshot
 infra/                TypeScript AWS CDK definition of the publisher stack
+web/                  React website that browses a published snapshot
 data/words/           current candidate lists
 data/fixtures/        committed fixture snapshots for local development
 data/results/         historical scan output from the original utility
@@ -127,8 +128,8 @@ data/archive/         superseded candidate lists
 ## Snapshot contract
 
 `internal/snapshot` defines the deterministic, storage-neutral snapshot the
-planned website publishes and reads. The same logical scan always serializes to
-the same bytes and the same checksum, whatever order the input arrives in and
+publisher writes and the website reads. The same logical scan always serializes
+to the same bytes and the same checksum, whatever order the input arrives in and
 whatever order the workers finish in. Snapshots are compressed, checksummed, and
 split into immutable chunks, and a reader rejects a snapshot whose chunks are
 missing, duplicated, reordered, or corrupt.
@@ -269,6 +270,23 @@ with ENS before registering.
 
 The full contract is in [docs/read-api.md](docs/read-api.md).
 
+## Website
+
+`web/` is a React and TypeScript single-page app that browses one published
+snapshot by lifecycle status, with search, filters, sorting, and per-source
+staleness warnings. It runs from the committed fixtures with no credentials and no
+network access:
+
+```powershell
+cd web
+npm ci
+npm run dev
+```
+
+The browser is a presentation layer only. It reads statuses and boundaries that the
+Go scanner computed, never queries The Graph or re-checks a name, and never decides
+whether a name is available. See [web/README.md](web/README.md).
+
 ## Development
 
 ```powershell
@@ -286,6 +304,13 @@ names it `bootstrap` because that is what the runtime executes.
 
 No test contacts The Graph or AWS. The DynamoDB API and the storage interfaces
 are injected, so every path is exercised against local fakes.
+
+For the website:
+
+```powershell
+cd web
+npm run verify
+```
 
 The serverless website architecture and delivery phases are documented in
 [docs/website-plan.md](docs/website-plan.md).
