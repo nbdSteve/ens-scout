@@ -30,11 +30,24 @@ export interface ResultSpec {
   readonly premiumEnds?: Date
 }
 
+export interface SourceSpec {
+  readonly id: string
+  readonly path: string
+  readonly cadence: Cadence
+  readonly names: number
+  /**
+   * When this list was last scanned. Defaults to the snapshot's own scan time,
+   * which is the freshly scanned case; a test that wants a carried list, or a list
+   * whose schedule has stopped, gives an earlier instant here.
+   */
+  readonly lastScannedAt?: Date
+}
+
 export interface SnapshotSpec {
   readonly snapshotId?: string
   readonly scannedAt?: Date
   readonly results?: readonly ResultSpec[]
-  readonly sources?: readonly { id: string; path: string; cadence: Cadence; names: number }[]
+  readonly sources?: readonly SourceSpec[]
   /** Overrides the counts derived from `results`, for a deliberately wrong payload. */
   readonly counts?: Readonly<Record<Status, number>>
   readonly expectedIntervalSeconds?: number
@@ -85,7 +98,7 @@ const DEFAULT_RESULTS: readonly ResultSpec[] = [
 ]
 
 // Sorted by id, which is what the publisher writes and what the parser requires.
-const DEFAULT_SOURCES: readonly { id: string; path: string; cadence: Cadence; names: number }[] = [
+const DEFAULT_SOURCES: readonly SourceSpec[] = [
   { id: 'five-letters', path: 'data/words/5-letters.txt', cadence: 'daily', names: 1 },
   { id: 'four-letters', path: 'data/words/4-letters.txt', cadence: 'three-hourly', names: 3 },
 ]
@@ -102,11 +115,19 @@ export function buildSnapshotDocument(spec: SnapshotSpec = {}): SnapshotDocument
       counts[status] = spec.counts[status]
     }
   }
+  const scannedAt = toIsoSecond(spec.scannedAt ?? SCANNED_AT)
   const metadata: MetadataDocument = {
     format_version: FORMAT_VERSION,
     snapshot_id: spec.snapshotId ?? 'test-snapshot',
-    scanned_at: toIsoSecond(spec.scannedAt ?? SCANNED_AT),
-    sources: spec.sources ?? DEFAULT_SOURCES,
+    scanned_at: scannedAt,
+    sources: (spec.sources ?? DEFAULT_SOURCES).map((source) => ({
+      id: source.id,
+      path: source.path,
+      cadence: source.cadence,
+      names: source.names,
+      last_scanned_at:
+        source.lastScannedAt === undefined ? scannedAt : toIsoSecond(source.lastScannedAt),
+    })),
     scan_age: {
       expected_interval_seconds: spec.expectedIntervalSeconds ?? 24 * 60 * 60,
       stale_after_seconds: spec.staleAfterSeconds ?? 48 * 60 * 60,

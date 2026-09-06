@@ -114,7 +114,7 @@ func TestCarryForwardOutputBuildsIntoASnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CarryForward: %v", err)
 	}
-	snapshot, err := Build("carried", fixedNow, testSources(len(carried)), carried)
+	snapshot, err := Build("carried", fixedNow, testSources(fixedNow, len(carried)), carried)
 	if err != nil {
 		t.Fatalf("Build rejected carried results: %v", err)
 	}
@@ -165,13 +165,23 @@ func TestCarryForwardMergesWithFreshResults(t *testing.T) {
 	}
 
 	merged := append(append([]ens.Result(nil), carried...), fresh...)
+	// The carried list keeps the instant its own schedule last reached. Only the
+	// rescanned list advances to this run's scan time, which is what makes a
+	// merge-forward publication unable to refresh the group it did not scan.
+	carriedScan := fixedNow.Add(-day)
 	sources := []SourceList{
-		{ID: "carried-list", Path: "data/words/carried.txt", Cadence: CadenceDaily, Names: len(carried)},
-		{ID: "fresh-list", Path: "data/words/fresh.txt", Cadence: CadenceThreeHourly, Names: len(fresh)},
+		{ID: "carried-list", Path: "data/words/carried.txt", Cadence: CadenceDaily, Names: len(carried), LastScannedAt: carriedScan},
+		{ID: "fresh-list", Path: "data/words/fresh.txt", Cadence: CadenceThreeHourly, Names: len(fresh), LastScannedAt: fixedNow},
 	}
 	snapshot, err := Build("merged", fixedNow, sources, merged)
 	if err != nil {
 		t.Fatalf("Build rejected a merged snapshot: %v", err)
+	}
+	if got := snapshot.Metadata.Sources[0].LastScannedAt; !got.Equal(carriedScan) {
+		t.Errorf("carried list was last scanned at %s, want %s", got, carriedScan)
+	}
+	if got := snapshot.Metadata.Sources[1].LastScannedAt; !got.Equal(fixedNow) {
+		t.Errorf("rescanned list was last scanned at %s, want %s", got, fixedNow)
 	}
 	want := []string{"amber.eth", "nova.eth", "orb.eth", "zap.eth"}
 	for i, name := range want {
@@ -239,7 +249,7 @@ func TestCarryForwardCanonicalizesTheScanTime(t *testing.T) {
 		t.Fatalf("carried status is %q, want %q at the truncated scan time", carried[0].Status, ens.StatusGracePeriod)
 	}
 	// Build truncates the same way, so the carried result is canonical for it.
-	if _, err := Build("truncated", scannedAt, testSources(1), carried); err != nil {
+	if _, err := Build("truncated", scannedAt, testSources(scannedAt, 1), carried); err != nil {
 		t.Errorf("Build rejected a result carried at a fractional instant: %v", err)
 	}
 }

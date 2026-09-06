@@ -60,7 +60,7 @@ This is what a client polls to decide whether to download a replacement.
 
 ```json
 {
-  "format_version": 2,
+  "format_version": 3,
   "snapshot_id": "...",
   "scanned_at": "2026-03-01T12:00:00Z",
   "checksum": "...",
@@ -81,6 +81,7 @@ This is what a client polls to decide whether to download a replacement.
       "path": "data/words/3-letters.txt",
       "cadence": "three-hourly",
       "names": 20,
+      "last_scanned_at": "2026-03-01T12:00:00Z",
       "scan_age": { "expected_interval_seconds": 10800, "stale_after_seconds": 21600 }
     },
     {
@@ -88,6 +89,7 @@ This is what a client polls to decide whether to download a replacement.
       "path": "data/words/4-letters.txt",
       "cadence": "three-hourly",
       "names": 30,
+      "last_scanned_at": "2026-03-01T12:00:00Z",
       "scan_age": { "expected_interval_seconds": 10800, "stale_after_seconds": 21600 }
     },
     {
@@ -95,6 +97,7 @@ This is what a client polls to decide whether to download a replacement.
       "path": "data/words/5-letters.txt",
       "cadence": "daily",
       "names": 50,
+      "last_scanned_at": "2026-02-28T16:00:00Z",
       "scan_age": { "expected_interval_seconds": 86400, "stale_after_seconds": 172800 }
     }
   ],
@@ -143,6 +146,7 @@ It resolves exactly what `/api/snapshot` resolves, through the same call and the
       "id": "three-letters",
       "cadence": "three-hourly",
       "names": 20,
+      "last_scanned_at": "2026-03-01T12:00:00Z",
       "scan_age": {
         "age_seconds": 25200,
         "expected_interval_seconds": 10800,
@@ -154,6 +158,7 @@ It resolves exactly what `/api/snapshot` resolves, through the same call and the
       "id": "four-letters",
       "cadence": "three-hourly",
       "names": 30,
+      "last_scanned_at": "2026-03-01T12:00:00Z",
       "scan_age": {
         "age_seconds": 25200,
         "expected_interval_seconds": 10800,
@@ -165,8 +170,9 @@ It resolves exactly what `/api/snapshot` resolves, through the same call and the
       "id": "five-letters",
       "cadence": "daily",
       "names": 50,
+      "last_scanned_at": "2026-02-28T16:00:00Z",
       "scan_age": {
-        "age_seconds": 25200,
+        "age_seconds": 97200,
         "expected_interval_seconds": 86400,
         "stale_after_seconds": 172800,
         "stale": false
@@ -185,14 +191,16 @@ A stale but complete snapshot is still `200`.
 Staleness means the publisher is behind, which is a separate alarm from the read path being unable to serve, and the fields above say which lists are overdue.
 
 Per-list staleness is why the sources are reported separately.
-The example above is seven hours after a scan: the snapshot is not stale, because the daily list governs the snapshot-wide window, while both three-hourly lists are already past their own.
+Each source age resolves against that source's own `last_scanned_at`, which is the last time that list was really queried against the subgraph, and not against the snapshot-wide `scanned_at`.
+The example above is seven hours after the snapshot-wide scan: the snapshot is not stale, because the daily list governs the snapshot-wide window, while both three-hourly lists are already past their own.
+The daily list in that example was carried forward from an earlier scan, so its own age is 27 hours rather than 7 hours, and it is still inside its own two-day window.
 
-Every source age resolves against the one snapshot-wide scan time, because the snapshot carries no per-source scan time.
-The sources therefore differ in how long that shared scan time may stand and not in what it is.
-The total-outage case the example describes resolves correctly: when publication stops altogether, the shared scan time stops advancing and each list trips its own threshold on its own schedule.
-One stopped schedule does not.
-A publisher merging forward re-derives the other group's results at the fresh scan's instant, so if the three-hourly schedule stops while the daily schedule keeps publishing, the three-hourly lists keep reporting a fresh age and never trip their own stale flag, even though they have not been queried against The Graph for days.
-Reporting that needs a per-source scan time in the snapshot contract, which is a `FormatVersion` bump, a fixture regeneration, and a publisher change, so it is a deliberate contract change for a later change rather than something the read path can infer.
+A source instant advances only when that source is scanned.
+A publisher merging forward re-derives the other group's results at the fresh scan's instant, but it carries each unscanned list's own instant unchanged, so one stopped schedule trips its own stale flag on its own threshold while the other group keeps publishing.
+The total-outage case behaves the same way: no instant advances, and each list trips its own threshold on its own schedule.
+
+The snapshot-wide `scan_age` still resolves against `scanned_at` and the slowest cadence any source declares.
+It answers how old the snapshot is, so a client that wants to know whether a particular list is overdue must read that list's own `scan_age`.
 
 `status` has one value.
 A run that cannot serve a snapshot answers with a failure code instead, so there is no degraded state to name here.

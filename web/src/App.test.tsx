@@ -158,7 +158,15 @@ describe('App list filter that cannot be honoured', () => {
     ...DOCUMENT,
     metadata: {
       ...DOCUMENT.metadata,
-      sources: [{ id: 'wordlist', path: 'data/words/wordlist.txt', cadence: 'daily', names: 5 }],
+      sources: [
+        {
+          id: 'wordlist',
+          path: 'data/words/wordlist.txt',
+          cadence: 'daily',
+          names: 5,
+          last_scanned_at: DOCUMENT.metadata.scanned_at,
+        },
+      ],
     },
   }
 

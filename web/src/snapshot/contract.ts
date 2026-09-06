@@ -16,7 +16,7 @@
  */
 
 /** Wire version this client accepts. Mirrors `snapshot.FormatVersion`. */
-export const FORMAT_VERSION = 2
+export const FORMAT_VERSION = 3
 
 /** Parent zone every stored name carries. Mirrors `snapshot.NameSuffix`. */
 export const NAME_SUFFIX = '.eth'

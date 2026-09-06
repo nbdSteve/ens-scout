@@ -201,7 +201,7 @@ func Verify(latest Latest, chunks []Chunk) (Snapshot, error) {
 		return Snapshot{}, fmt.Errorf("snapshot %s lists %d source lists but the pointer reports %d", latest.SnapshotID, len(snapshot.Metadata.Sources), len(latest.Sources))
 	}
 	for i, source := range snapshot.Metadata.Sources {
-		if source != latest.Sources[i] {
+		if !source.Equal(latest.Sources[i]) {
 			return Snapshot{}, fmt.Errorf("snapshot %s source list %q disagrees with its pointer", latest.SnapshotID, source.ID)
 		}
 	}

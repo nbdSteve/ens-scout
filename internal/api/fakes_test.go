@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -42,6 +43,59 @@ func publishFixture(t *testing.T, store *snapshot.MemoryStore, name string) snap
 	}
 	if _, err := store.PutLatest(ctx, latest); err != nil {
 		t.Fatalf("publish fixture %s: %v", name, err)
+	}
+	return latest
+}
+
+// publishWithSourceScan publishes the preview fixture's results under a snapshot
+// that says one named list was last scanned at the given instant, leaving every
+// other list and the snapshot-wide scan time exactly as the fixture has them.
+//
+// It exists so a test can vary one list's own instant and nothing else. Two
+// publications that differ only there must be reported differently, and anything
+// that resolved a list's age from the snapshot would report them identically.
+func publishWithSourceScan(
+	t *testing.T,
+	store *snapshot.MemoryStore,
+	sourceID string,
+	lastScannedAt time.Time,
+) snapshot.Latest {
+	t.Helper()
+	ctx := context.Background()
+
+	base, err := snapshot.Fixture(snapshot.FixturePreview)
+	if err != nil {
+		t.Fatalf("build the preview fixture: %v", err)
+	}
+	sources := append([]snapshot.SourceList(nil), base.Metadata.Sources...)
+	edited := false
+	for i := range sources {
+		if sources[i].ID == sourceID {
+			sources[i].LastScannedAt = lastScannedAt
+			edited = true
+		}
+	}
+	if !edited {
+		t.Fatalf("the preview fixture has no source %q", sourceID)
+	}
+
+	// The scan time and the results are the fixture's, so the only thing that
+	// varies between calls is the one instant this helper was given.
+	id := fmt.Sprintf("source-scan-%s-%d", sourceID, lastScannedAt.UTC().Unix())
+	snap, err := snapshot.Build(id, base.Metadata.ScannedAt, sources, base.Results)
+	if err != nil {
+		t.Fatalf("build a snapshot with %q last scanned at %s: %v", sourceID, lastScannedAt, err)
+	}
+	payload, err := snapshot.Encode(snap)
+	if err != nil {
+		t.Fatalf("encode the snapshot: %v", err)
+	}
+	latest := payload.Latest(snap.Metadata.ScannedAt.Add(time.Minute))
+	if err := store.PutChunks(ctx, latest.SnapshotID, payload.Chunks); err != nil {
+		t.Fatalf("store the chunks: %v", err)
+	}
+	if _, err := store.PutLatest(ctx, latest); err != nil {
+		t.Fatalf("publish the pointer: %v", err)
 	}
 	return latest
 }
@@ -93,6 +147,33 @@ func get(handler *Handler, method, path string, header http.Header) *httptest.Re
 	recorder := httptest.NewRecorder()
 	handler.ServeHTTP(recorder, request)
 	return recorder
+}
+
+// healthOf fetches and decodes PathHealth, failing the test on any status but 200.
+func healthOf(t *testing.T, handler *Handler) healthDocument {
+	t.Helper()
+	response := get(handler, http.MethodGet, PathHealth, nil)
+	if response.Code != http.StatusOK {
+		t.Fatalf("health status = %d, want %d (body %s)", response.Code, http.StatusOK, response.Body)
+	}
+	var document healthDocument
+	if err := json.Unmarshal(response.Body.Bytes(), &document); err != nil {
+		t.Fatalf("decode health: %v", err)
+	}
+	return document
+}
+
+// sourceNamed returns one reported list, failing the test when it is absent. A
+// missing list would otherwise make an assertion about it vacuous.
+func sourceNamed(t *testing.T, document healthDocument, id string) healthSource {
+	t.Helper()
+	for _, source := range document.Sources {
+		if source.ID == id {
+			return source
+		}
+	}
+	t.Fatalf("health reports no source %q", id)
+	return healthSource{}
 }
 
 // leakedSecret stands in for THEGRAPH_API_KEY. It is a fabricated literal: these

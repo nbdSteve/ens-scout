@@ -154,6 +154,20 @@ planned read API, the local preview, and the browser all agree.
 - Pass `checker.Run`'s `Stats.ClassifiedAt` to `snapshot.Build` as the scan time.
   Every published status is re-checked against that instant, so sampling the
   clock again after a long scan rejects the whole snapshot.
+- Every `SourceList` carries its own `LastScannedAt`, which is when that list was
+  really queried and not when the snapshot holding it was published. `Build`
+  refuses a zero instant, a non-canonical or non-UTC one, one later than the
+  snapshot's scan time, and a whole set in which no list was scanned at that time.
+  Nothing anywhere substitutes the snapshot-wide scan time for a missing one: that
+  substitution is what let a stopped schedule report the freshness of whichever
+  group was still publishing, so a payload without the field is malformed rather
+  than approximated. Compare two with `SourceList.Equal`, never with `==`, because
+  a `time.Time` carries a monotonic reading and a location that byte equality sees.
+- The 2 to 3 `FormatVersion` bump is the whole migration. A v2 payload decodes to a
+  zero instant that `Snapshot.Validate` refuses, and a v2 pointer fails
+  `Latest.Validate`, which the publisher retries a bounded number of times and then
+  publishes past and quarantines. No reader accepts both shapes, so there is no
+  window in which the field is optional.
 - Keep the pointer monotonic. `LatestStore.PutLatest` rejects an older scan time,
   treats an otherwise identical pointer at the same scan time as a successful
   no-op so a retry is safe, and rejects any other pointer at the same scan time.
@@ -227,6 +241,16 @@ implement the snapshot contract above rather than restating it.
   the fastest cadence would multiply the Graph budget by eight for no new data.
   Carried statuses are re-derived, never copied, so an expiry that lapsed since
   the last scan is reported correctly without a lookup.
+- A source's `LastScannedAt` advances only when that source is scanned. A scanned
+  list gets `stats.ClassifiedAt`, and a carried list keeps the instant the previous
+  snapshot published for it, which is what makes a stopped schedule go stale while
+  the other group keeps publishing. The instants therefore come from the previous
+  snapshot's own sources, so a carried name whose owning list that snapshot never
+  published has no instant to keep: it is dropped and counted on a
+  `carry_forward_unattributed` record rather than published with a freshness this
+  run cannot support, and it returns on its own list's next schedule. Inventing an
+  instant for it, or reusing this run's, would state that a list was scanned when
+  nothing scanned it.
 - Read the previous snapshot after the fresh scan, not before it. A scan takes
   minutes and the other group's schedule can publish during them, so a snapshot
   read first would carry stale results over data this run never checked and
@@ -436,16 +460,16 @@ contract; these are the rules behind it.
   because the fast lists go stale while the daily list still governs the
   snapshot, and a stale but complete snapshot is still a 200: staleness is a
   publisher alarm, not a read-path failure.
-- Every per-source age on `/health` resolves against the one snapshot-wide scan
-  time, because the snapshot carries no per-source scan time. A total outage
-  therefore reports correctly, since the shared scan time stops advancing and each
-  list trips its own threshold on its own schedule, but one stopped schedule does
-  not: a publisher merging forward re-derives the other group's results at the
-  fresh scan's instant, so a list whose own schedule has stopped keeps reporting a
-  fresh age and never trips its own stale flag. Reporting that needs a per-source
-  scan time in the snapshot contract, which is a `FormatVersion` bump plus a
-  fixture regeneration plus a publisher change, so it is a deliberate contract
-  change and not something the read path can infer.
+- Every per-source age and stale flag on `/health` resolves against that source's
+  own `LastScannedAt` through `SourceList.ResolveScanAge`, never against the
+  snapshot-wide scan time. One stopped schedule is the case that needs it: a
+  publisher merging forward re-derives the other group's results at the fresh scan's
+  instant, so a list measured against the snapshot-wide time reported the freshness
+  of whichever group was still publishing. The snapshot-wide `scan_age` still
+  resolves against `scanned_at` and the slowest declared cadence, because it answers
+  how old the snapshot is rather than whether a particular list is overdue. There is
+  no fallback for a source with no instant: the contract refuses such a payload
+  before the read path sees it.
 - Declare retryability per failure rather than inferring it from the 503. Most of
   these failures are cleared by the next scheduled scan, but no scan can shrink a
   published snapshot below `ENS_API_MAX_BODY_BYTES`, so `snapshot_too_large`
@@ -580,6 +604,13 @@ never the ENS availability authority.
   wire carries only the slowest one, which is why the duplication exists at all.
   `contract.drift.test.ts` parses the Go sources and fails on drift; keep it
   passing rather than relaxing it.
+- `resolveSourceGroups` is the one place a list's freshness is decided, and it
+  measures each list from that list's own `lastScannedAt`. The trust line, the
+  banner, and the per-list tile all read it, so a stopped schedule is reported the
+  same way in all three. `parseSources` refuses a payload without those instants
+  instead of falling back to the snapshot-wide scan time, and the tile states the
+  instant beside the figure derived from it: a carried list is older than the scan
+  time above it, so the schedule alone would not be relatable to anything.
 - Treat every `VITE_*` variable as public. Vite inlines them into the bundle, so
   only the read API's base URL belongs there. A Graph endpoint, an API key, or an
   AWS credential in one would ship to every visitor. The `assets` Playwright

@@ -665,6 +665,11 @@ func TestMetaSummarisesWithoutTheResults(t *testing.T) {
 	if len(document.Sources) != len(wantCadence) {
 		t.Fatalf("sources = %d, want %d", len(document.Sources), len(wantCadence))
 	}
+	publishedScans := make(map[string]time.Time, len(latest.Sources))
+	for _, source := range latest.Sources {
+		publishedScans[source.ID] = source.LastScannedAt
+	}
+	carried := 0
 	for _, source := range document.Sources {
 		cadence, known := wantCadence[source.ID]
 		if !known {
@@ -682,6 +687,21 @@ func TestMetaSummarisesWithoutTheResults(t *testing.T) {
 		if source.ScanAge != want {
 			t.Errorf("source %q scan age = %+v, want %+v", source.ID, source.ScanAge, want)
 		}
+		// Each list carries the instant it was itself last asked about, which is
+		// what a client needs to judge that list rather than the snapshot.
+		if published := publishedScans[source.ID]; !source.LastScannedAt.Equal(published) {
+			t.Errorf("source %q last scanned at %s, want the published %s",
+				source.ID, source.LastScannedAt, published)
+		}
+		if !source.LastScannedAt.Equal(document.ScannedAt) {
+			carried++
+		}
+	}
+	// The fixture is a merge-forward publication, so at least one list must differ
+	// from the snapshot-wide scan time. Without that this loop would pass against a
+	// document that simply repeated the snapshot's own instant for every list.
+	if carried == 0 {
+		t.Error("every source repeats the snapshot scan time, so nothing here is source-specific")
 	}
 
 	// The document is a pure function of the snapshot, so the same pointer always
@@ -736,6 +756,10 @@ func TestHealthResolvesStalenessAgainstItsOwnClock(t *testing.T) {
 	}
 
 	stalePerSource := map[string]bool{"three-letters": true, "four-letters": true, "five-letters": false}
+	publishedScans := make(map[string]time.Time, len(latest.Sources))
+	for _, source := range latest.Sources {
+		publishedScans[source.ID] = source.LastScannedAt
+	}
 	for _, source := range document.Sources {
 		want, known := stalePerSource[source.ID]
 		if !known {
@@ -745,9 +769,73 @@ func TestHealthResolvesStalenessAgainstItsOwnClock(t *testing.T) {
 		if source.ScanAge.Stale != want {
 			t.Errorf("source %q stale = %v, want %v", source.ID, source.ScanAge.Stale, want)
 		}
-		if source.ScanAge.AgeSeconds != document.ScanAge.AgeSeconds {
-			t.Errorf("source %q age = %d, want the shared %d", source.ID, source.ScanAge.AgeSeconds, document.ScanAge.AgeSeconds)
+		// Each age is measured from that list's own instant, so the daily list
+		// carried by this publication reports the older age it really has.
+		published := publishedScans[source.ID]
+		if !source.LastScannedAt.Equal(published) {
+			t.Errorf("source %q last scanned at %s, want the published %s",
+				source.ID, source.LastScannedAt, published)
 		}
+		if wantAge := int64(now.Sub(published) / time.Second); source.ScanAge.AgeSeconds != wantAge {
+			t.Errorf("source %q age = %d, want %d measured from its own instant",
+				source.ID, source.ScanAge.AgeSeconds, wantAge)
+		}
+	}
+}
+
+// TestHealthStalesAStoppedSourceWhileTheSnapshotIsFresh is the defect this field
+// exists to remove. One pointer serves every schedule group, so a group that keeps
+// publishing keeps the snapshot-wide scan time moving; a list whose own schedule
+// has stopped must still go stale, and the only instant that can say so is its own.
+func TestHealthStalesAStoppedSourceWhileTheSnapshotIsFresh(t *testing.T) {
+	store := snapshot.NewMemoryStore()
+
+	// The daily list was last scanned fifty hours before a snapshot that was itself
+	// scanned an hour ago: past the daily stale threshold of forty-eight hours,
+	// while the snapshot as a whole is an hour old and comfortably fresh.
+	stopped := 50 * time.Hour
+	latest := publishWithSourceScan(t, store, "five-letters", scanTime.Add(-stopped))
+	now := scanTime.Add(time.Hour)
+	handler := newTestHandler(t, store, now)
+
+	document := healthOf(t, handler)
+	if document.ScanAge.Stale {
+		t.Error("the snapshot itself was reported stale, so this test proves nothing about a source")
+	}
+	source := sourceNamed(t, document, "five-letters")
+	if !source.ScanAge.Stale {
+		t.Errorf("the stopped list reports an age of %ds and is not stale", source.ScanAge.AgeSeconds)
+	}
+	if wantAge := int64((stopped + time.Hour) / time.Second); source.ScanAge.AgeSeconds != wantAge {
+		t.Errorf("the stopped list's age = %d, want %d", source.ScanAge.AgeSeconds, wantAge)
+	}
+	// The other group is the one that kept publishing, and it must read fresh.
+	for _, id := range []string{"three-letters", "four-letters"} {
+		if other := sourceNamed(t, document, id); other.ScanAge.Stale {
+			t.Errorf("source %q went stale with the list that stopped", id)
+		}
+	}
+	if !latest.ScannedAt.Equal(scanTime) {
+		t.Fatalf("the published scan time is %s, want %s", latest.ScannedAt, scanTime)
+	}
+}
+
+// TestHealthFreshensARescannedSourceFromItsOwnInstant is the other half. The
+// snapshot-wide scan time is identical to the stopped case above, so only the
+// list's own instant can account for the difference in what health reports.
+func TestHealthFreshensARescannedSourceFromItsOwnInstant(t *testing.T) {
+	store := snapshot.NewMemoryStore()
+	publishWithSourceScan(t, store, "five-letters", scanTime)
+	now := scanTime.Add(time.Hour)
+	handler := newTestHandler(t, store, now)
+
+	document := healthOf(t, handler)
+	source := sourceNamed(t, document, "five-letters")
+	if source.ScanAge.Stale {
+		t.Error("a list rescanned at the snapshot scan time was reported stale")
+	}
+	if wantAge := int64(time.Hour / time.Second); source.ScanAge.AgeSeconds != wantAge {
+		t.Errorf("the rescanned list's age = %d, want %d", source.ScanAge.AgeSeconds, wantAge)
 	}
 }
 
