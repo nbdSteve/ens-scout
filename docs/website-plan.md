@@ -17,6 +17,10 @@ These decisions are approved and are no longer open questions.
 - The backend is Go on AWS Lambda, and it reuses the existing `internal/ens`,
 `internal/checker`, and `internal/names` packages.
 - The frontend is React with TypeScript, built by Vite.
+- The visual direction is "Prism on Paper" revision 2: warm paper, ink, a
+chromatic beam, caustics, glass, and interference lines. The page carries no
+brand mark, no logo, and no header, and its optical background is ambient and
+time-driven only.
 - Infrastructure is TypeScript AWS CDK, not AWS SAM.
 - CI/CD runs in GitHub Actions and assumes an AWS role through GitHub OIDC, so
 no long-lived AWS keys are stored in the repository.
@@ -52,13 +56,13 @@ An optional lookup endpoint will recheck a small set of names on demand.
 
 `README.md` records what the repository holds today, including the
 `cmd/scan-lambda/`, `internal/scanner/`, and `internal/dynamo/` packages the
-publisher work added, the `internal/api/` package the read API work added, and
-the `infra/` CDK application that defines the stack they run in.
+publisher work added, the `internal/api/` package the read API work added, the
+`infra/` CDK application that defines the stack they run in, and the `web/`
+frontend, which `web/README.md` documents.
 The directories still to be created are:
 
 ```text
 cmd/api-lambda/       the entrypoint that wires internal/api and live checks
-web/                  React, TypeScript, and Vite frontend application
 ```
 
 The Lambda binaries will target Linux on the AWS `provided.al2023` runtime.
@@ -267,7 +271,13 @@ and secrets. Done.
 ### Phase 2: read API and frontend
 
 - Add snapshot metadata and body endpoints with ETag support.
-- Build the responsive browse, filter, sort, and countdown experience.
+- Build the responsive browse, filter, sort, and countdown experience. Done,
+against the committed fixtures, with the read API client and its `If-None-Match`
+and local-copy handling in place for when an endpoint exists.
+- Finish the approved composition: the name constellation in place of the results
+table, the large `.eth` composer, the compact control bar, and the mono ledger.
+The optical background is mounted already, so until then the page renders the
+previous list markup underneath it.
 - Deploy static assets behind CloudFront and restrict CORS to that origin.
 
 ### Phase 3: live verification and operations
@@ -300,8 +310,8 @@ and secrets. Done.
 ## Decisions still open
 
 - Confirm the public product and repository name; `ens-scout` is the current
-  recommendation while the existing CLI remains `ens-scrape`.
-- Choose the visual direction within the React, TypeScript, and Vite stack.
+  recommendation while the existing CLI remains `ens-scrape`. The page itself
+  carries no name either way.
 - Choose the public domain.
   The deployment account and region are settled and recorded as CDK context in
   `infra/cdk.json`.

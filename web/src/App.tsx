@@ -1,0 +1,352 @@
+import { useMemo, type ReactNode } from 'react'
+import { EmptyState } from './components/EmptyState'
+import { ErrorState } from './components/ErrorState'
+import { LoadingState } from './components/LoadingState'
+import { Notice } from './components/Notice'
+import { Pagination } from './components/Pagination'
+import { ResultsTable } from './components/ResultsTable'
+import { SimulatedClockNotice } from './components/SimulatedClockNotice'
+import { SnapshotDetails } from './components/SnapshotDetails'
+import { StaleWarning } from './components/StaleWarning'
+import { StoredCopyNotice } from './components/StoredCopyNotice'
+import { Toolbar } from './components/Toolbar'
+import { TrustLine } from './components/TrustLine'
+import { ViewTabs } from './components/ViewTabs'
+import { appConfig, type AppConfig } from './config/env'
+import { Optics } from './optics/Optics'
+import type { Status } from './snapshot/contract'
+import { deriveAttribution } from './snapshot/attribution'
+import { applyQuery, countByStatus, filterResults } from './state/filter'
+import { CLEAR_FILTERS, isFiltered } from './state/query'
+import { useLengthDrafts } from './state/useLengthDrafts'
+import { useNow } from './state/useNow'
+import { useSnapshot, type SnapshotDeps } from './state/useSnapshot'
+import { useUrlState } from './state/useUrlState'
+import { VIEWS, viewOrDefault } from './state/views'
+
+/**
+ * The page.
+ *
+ * The names come first. A visitor arrives with one question - which names are open -
+ * so the first screen is the answer to it: the view they are in, how many names it
+ * holds, one line saying when the scan was taken and that these are recorded
+ * statuses, the views, the two controls most likely to be used, and then rows.
+ * Everything else is below them.
+ *
+ * That ordering is not a demotion of the caveats. The two that a reader must not be
+ * able to miss are still above the list and still unmissable: the trust line always
+ * states the scan time and that nothing here is a live check, and an overdue source
+ * list raises a real alert. What moved below is the long form - the full provenance,
+ * the per-list schedules, the published counts, the lifecycle rules, the method - and
+ * it moved because at full length it filled the first screen and pushed the names
+ * out of sight. A caveat nobody scrolls past the names to read is not a caveat.
+ *
+ * Anything that is both conditional and about trust stays in the advisories block
+ * above the list: a simulated clock, part of the query that could not be applied, a
+ * stored copy shown because this visit could not replace it, an out-of-date list. Each
+ * is rare, each changes how the rows below should be read, and none of them is
+ * something to find later.
+ */
+export interface AppProps {
+  /** Overridden in tests. Defaults to the build-time configuration. */
+  readonly config?: AppConfig
+  readonly deps?: SnapshotDeps
+}
+
+export function App({ config = appConfig, deps }: AppProps): ReactNode {
+  const { query, warnings, setQuery, hrefFor } = useUrlState()
+  const now = useNow(query.now)
+  const store = useSnapshot(config, deps)
+
+  const snapshot = store.snapshot
+  const attribution = useMemo(
+    () =>
+      snapshot === null ? null : deriveAttribution(snapshot.metadata.sources, snapshot.results),
+    [snapshot],
+  )
+  const context = useMemo(
+    () => ({ sourceIdByName: attribution?.available === true ? attribution.sourceIdByName : null }),
+    [attribution],
+  )
+  const page = useMemo(
+    () => (snapshot === null ? null : applyQuery(snapshot.results, query, context)),
+    [snapshot, query, context],
+  )
+  const statusCounts = useMemo<ReadonlyMap<Status, number>>(
+    () =>
+      snapshot === null
+        ? new Map<Status, number>()
+        : countByStatus(snapshot.results, query, context),
+    [snapshot, query, context],
+  )
+  // How many rows each view would show under the filters currently in force. The
+  // view's own status preset is applied and any hand-picked statuses are dropped,
+  // since those belong to the view they were picked in and do not carry across.
+  const viewCounts = useMemo<ReadonlyMap<string, number>>(() => {
+    const counts = new Map<string, number>()
+    if (snapshot !== null) {
+      for (const candidate of VIEWS) {
+        counts.set(
+          candidate.id,
+          filterResults(snapshot.results, { ...query, view: candidate.id, statuses: [] }, context)
+            .length,
+        )
+      }
+    }
+    return counts
+  }, [snapshot, query, context])
+
+  const view = viewOrDefault(query.view)
+  const filtered = isFiltered(query)
+  const resetHref = hrefFor(CLEAR_FILTERS)
+
+  /*
+   * The two length boxes are held here, not in the toolbar, because the advisory below
+   * has to read the same boxes the visitor is typing into. A bound the parser refused is
+   * not in the URL, so nothing derived from the URL can report it for longer than the one
+   * render it was written on.
+   */
+  const lengthDrafts = useLengthDrafts(query.length)
+  const notApplied = warnings.length + lengthDrafts.advisories.length
+
+  /**
+   * What is wrong with the chosen source list, or null when nothing is.
+   *
+   * Two different things can be, and they leave the page looking opposite ways: a
+   * snapshot that cannot attribute any name to a list shows every row, and a snapshot
+   * that simply has no such list shows none. Both are settled here rather than in
+   * `parseQuery`, which never sees a snapshot and so cannot know which ids exist.
+   */
+  const listProblem = useMemo<'unattributable' | 'unknown' | null>(() => {
+    if (query.list === null || snapshot === null || attribution === null) {
+      return null
+    }
+    if (!attribution.available) {
+      return 'unattributable'
+    }
+    return snapshot.metadata.sources.some((source) => source.id === query.list) ? null : 'unknown'
+  }, [query.list, snapshot, attribution])
+
+  return (
+    <>
+      {/*
+       * First, and outside every other element. The optical layers blend against
+       * the paper itself, so any wrapper between them and the body would isolate
+       * them and flatten the whole background.
+       */}
+      <Optics />
+
+      {/*
+       * The only thing in the top-left corner, and only while it has focus. The page
+       * carries no name, no logo, and no bar: a visitor arrived to read names, and a
+       * strip of branding above them would be the first thing they had to look past.
+       * There is deliberately no `banner` landmark, which is what the two landmark
+       * tests now assert.
+       */}
+      <a className="skip-link" href="#results">
+        Skip to the names
+      </a>
+
+      <main id="main">
+        <div className="page">
+          <div className="lede">
+            {/*
+             * The view names the page. It is also what the results region is
+             * labelled by, so a screen reader that jumps straight to the table is
+             * told which list it has landed in.
+             */}
+            <h1 className="lede__title" id="page-title">
+              {view.title}
+            </h1>
+            {page !== null && (
+              <p className="lede__count" role="status">
+                {page.total.toLocaleString('en-GB')}{' '}
+                {page.total === 1 ? 'name matches' : 'names match'}
+              </p>
+            )}
+          </div>
+
+          {snapshot !== null && <TrustLine now={now} snapshot={snapshot} />}
+
+          {/*
+           * The block is the polite region, and it is always mounted even when it holds
+           * nothing. A region that is rendered only when it has something to say enters the
+           * DOM together with its first line, and a live region created with its content is
+           * the case where a screen reader announces nothing at all - which is the common
+           * case here, since one line is usually all there is. Mounted from the first paint,
+           * a line appearing is a mutation inside a region that already exists, so it is
+           * announced without depending on `aria-relevant`, which NVDA does not implement.
+           * It is styled to collapse while empty, so it costs no space above the names.
+           *
+           * Every banner inside that appears later than the first paint declares its own
+           * `role="alert"`, which governs its own subtree, so this changes how one thing is
+           * announced: the `Not applied` band, which is the one fed by a text box.
+           */}
+          <div aria-live="polite" className="advisories">
+            {query.now !== null && (
+              <SimulatedClockNotice now={now} realHref={hrefFor({ now: null })} />
+            )}
+
+            {/*
+             * One band for every query value the page was asked for and is not applying,
+             * whether it came from a link, a keystroke, or a box still holding something
+             * that names no length. Titled without naming a link, because a visitor who
+             * followed none must not be told one was at fault.
+             *
+             * Announced by the block above rather than by a region of its own, because the
+             * length lines change while the visitor types and a band that appears with its
+             * first line already inside it is never announced at all. Each line carries the
+             * id its box points `aria-describedby` at, and is keyed by the box rather than by
+             * its wording, so editing a rejected value rewrites the text in place instead of
+             * removing the line and adding it back.
+             */}
+            {notApplied > 0 && (
+              <Notice tone="warn" title="Not applied">
+                <ul className="notice__list">
+                  {warnings.map((warning) => (
+                    <li key={warning}>{warning}</li>
+                  ))}
+                  {lengthDrafts.advisories.map((advisory) => (
+                    <li id={advisory.id} key={advisory.end}>
+                      {advisory.text}
+                    </li>
+                  ))}
+                </ul>
+              </Notice>
+            )}
+
+            {/*
+             * A list filter that could not be honoured. `filterResults` returns every
+             * row when attribution cannot be verified, so without this the page would
+             * show the whole snapshot as though the filter had applied - and the only
+             * explanation would be inside a disclosure that is closed by default.
+             *
+             * Worded about the list and not about where it came from. A followed link is
+             * the usual route, but a visitor who chose a list against a cached snapshot
+             * and then received an unattributable one lands here having followed nothing.
+             */}
+            {listProblem === 'unattributable' && attribution !== null && (
+              <Notice tone="warn" voice="alert" title="List filter not applied">
+                <p>
+                  This snapshot does not say which names are on{' '}
+                  <span className="mono">{query.list}</span>, so every name is shown. Reason:{' '}
+                  {attribution.reason ?? 'attribution could not be verified'}.
+                </p>
+                <p>
+                  <a href={hrefFor({ list: null })}>Show every list instead</a>
+                </p>
+              </Notice>
+            )}
+
+            {/*
+             * The opposite case, and the one that would otherwise render an empty page with
+             * no explanation: the filter applied perfectly well and matched nothing, because
+             * the snapshot carries no list under that id. A renamed word list is enough to
+             * do it to a link that used to work.
+             */}
+            {listProblem === 'unknown' && (
+              <Notice tone="warn" voice="alert" title="Unknown list">
+                <p>
+                  This snapshot has no list named <span className="mono">{query.list}</span>, so no
+                  name matches.
+                </p>
+                <p>
+                  <a href={hrefFor({ list: null })}>Show every list instead</a>
+                </p>
+              </Notice>
+            )}
+
+            {store.failure !== null && store.snapshot !== null && (
+              <StoredCopyNotice failure={store.failure} onRetry={store.retry} />
+            )}
+
+            {snapshot !== null && <StaleWarning metadata={snapshot.metadata} now={now} />}
+          </div>
+        </div>
+
+        {(store.phase === 'loading' || store.phase === 'failed') && (
+          <div className="page">
+            <div className="stack">
+              {store.phase === 'loading' && <LoadingState />}
+              {store.phase === 'failed' && store.failure !== null && (
+                <ErrorState failure={store.failure} onRetry={store.retry} />
+              )}
+            </div>
+          </div>
+        )}
+
+        {snapshot !== null && store.origin !== null && attribution !== null && page !== null && (
+          <>
+            {/*
+             * The stage is full-bleed and carries its own dark palette, so the names
+             * are read against nothing else. `.page` is repeated inside it rather
+             * than the stage being stretched out of the column: a `100vw` block
+             * includes the scrollbar and would make the document scroll sideways.
+             */}
+            <div className="stage">
+              <div className="page">
+                <ViewTabs
+                  counts={viewCounts}
+                  current={view.id}
+                  hrefForView={(id) => hrefFor({ view: id })}
+                />
+                <Toolbar
+                  attribution={attribution}
+                  lengthDrafts={lengthDrafts}
+                  query={query}
+                  resetHref={resetHref}
+                  setQuery={setQuery}
+                  sources={snapshot.metadata.sources}
+                  statusCounts={statusCounts}
+                />
+                <section aria-labelledby="page-title" className="results-panel" id="results">
+                  {page.total === 0 ? (
+                    <EmptyState filtered={filtered} resetHref={resetHref} viewLabel={view.label} />
+                  ) : (
+                    <>
+                      <ResultsTable
+                        direction={query.direction}
+                        now={now}
+                        rows={page.rows}
+                        sort={query.sort}
+                      />
+                      <Pagination
+                        firstRow={page.firstRow}
+                        hrefForPage={(n) => hrefFor({ page: n })}
+                        lastRow={page.lastRow}
+                        page={page.page}
+                        pageCount={page.pageCount}
+                        total={page.total}
+                      />
+                    </>
+                  )}
+                </section>
+              </div>
+            </div>
+
+            <div className="page">
+              <SnapshotDetails
+                cachedAt={store.cachedAt}
+                config={config}
+                confirmedCurrent={store.confirmedCurrent}
+                now={now}
+                origin={store.origin}
+                snapshot={snapshot}
+              />
+            </div>
+          </>
+        )}
+      </main>
+
+      <footer className="footer">
+        <div className="page">
+          <p>
+            <strong>ENS decides, not this page.</strong> Every status here is what one scan
+            recorded, not a live check. Confirm availability and price at{' '}
+            <a href="https://app.ens.domains/">app.ens.domains</a> before you register.
+          </p>
+        </div>
+      </footer>
+    </>
+  )
+}
