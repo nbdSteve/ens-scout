@@ -542,6 +542,26 @@ func Run(ctx context.Context, deps Dependencies, event Event) (Result, error) {
 		return Result{}, deps.fail(logger, "previous_snapshot_read_failed", Fields{Group: group}, err)
 	}
 
+	// A stored snapshot scanned later than this run's own instant means the other
+	// schedule has already published past it. That is a lost pointer race, which the
+	// pointer write would refuse anyway, and it is classified here rather than left
+	// to surface further down: a carried list keeps the instant the previous snapshot
+	// recorded for it, so every one of those instants is later than this scan's, and
+	// the contract would refuse the whole build over a source timestamp. Refusing
+	// there is correct for a malformed payload and misleading for a benign overlap,
+	// so the run says which one this is while it can still tell.
+	if previous != nil && previous.Metadata.ScannedAt.After(stats.ClassifiedAt) {
+		err := fmt.Errorf("%w: snapshot %s was scanned at %s, before the published snapshot %s at %s",
+			snapshot.ErrPointerConflict,
+			snapshotID(group, stats.ClassifiedAt), stats.ClassifiedAt.Format(time.RFC3339),
+			previous.Metadata.SnapshotID, previous.Metadata.ScannedAt.Format(time.RFC3339))
+		return Result{}, deps.fail(logger, "publish_failed", Fields{
+			Group:      group,
+			SnapshotID: snapshotID(group, stats.ClassifiedAt),
+			PreviousID: previous.Metadata.SnapshotID,
+		}, err)
+	}
+
 	// Each list the previous snapshot published, with the instant that list was
 	// last actually asked about. A carried list keeps its own instant, so a list
 	// whose schedule has stopped goes stale on the site while this group keeps

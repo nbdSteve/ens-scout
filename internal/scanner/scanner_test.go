@@ -2306,6 +2306,57 @@ func TestRunRefusesToWriteChunksItCannotStage(t *testing.T) {
 	}
 }
 
+// A run that reads a snapshot scanned after its own instant has lost the pointer
+// race, and has to say so. Carrying that snapshot's source scan times forward would
+// hand snapshot.Build an instant later than the scan time it is building with, and
+// the contract refuses that as a malformed payload: correct for one, and a
+// misleading report of a benign schedule overlap for the other.
+func TestARunThatReadsANewerSnapshotLosesThePointerRace(t *testing.T) {
+	store := newFakeStore()
+	dir := defaultLists(t)
+
+	// The daily schedule publishes one minute into the three-hourly run's scan, so
+	// the pointer the short run then reads is newer than its own classification.
+	daily := newTestRun(t, dir, newFakeGraph(nil), store).at(fixedNow.Add(time.Minute))
+	published, err := Run(context.Background(), daily.deps, Event{Group: GroupLong})
+	if err != nil {
+		t.Fatalf("the daily run: %v", err)
+	}
+
+	short := newTestRun(t, dir, newFakeGraph(nil), store).at(fixedNow)
+	result, err := Run(context.Background(), short.deps, Event{Group: GroupShort})
+	if !errors.Is(err, snapshot.ErrPointerConflict) {
+		t.Fatalf("the older run returned %v, want an ErrPointerConflict", err)
+	}
+	if result.Latest.SnapshotID != "" {
+		t.Errorf("the refused run reported publishing %q", result.Latest.SnapshotID)
+	}
+
+	// The lost race is reported as one, at the level and event the pointer write's
+	// own refusal already uses, and not as a build error about a source timestamp.
+	record := requireRecordAt(t, short, "publish_failed", LevelError)
+	if record.PreviousID != published.Latest.SnapshotID {
+		t.Errorf("the refusal names %q as the published snapshot, want %q",
+			record.PreviousID, published.Latest.SnapshotID)
+	}
+	if hasRecord(t, short, "snapshot_build_failed") {
+		t.Errorf("the overlap was reported as a malformed snapshot: %s", short.logs.String())
+	}
+
+	// Nothing was published, staged, or written.
+	if _, latest, err := snapshot.Read(context.Background(), store); err != nil {
+		t.Errorf("the published snapshot is not readable: %v", err)
+	} else if latest.SnapshotID != published.Latest.SnapshotID {
+		t.Errorf("the pointer names %q, want %q", latest.SnapshotID, published.Latest.SnapshotID)
+	}
+	if got := store.SnapshotIDs(); !equalStrings(sortedCopy(got), []string{published.Latest.SnapshotID}) {
+		t.Errorf("the store holds %v, want only %q", got, published.Latest.SnapshotID)
+	}
+	if staged := stagedIDs(t, store); len(staged) != 0 {
+		t.Errorf("the refused run staged %v", staged)
+	}
+}
+
 func TestConcurrentRunsLeaveOneCoherentSnapshot(t *testing.T) {
 	store := newFakeStore()
 	dir := defaultLists(t)

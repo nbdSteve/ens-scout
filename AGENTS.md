@@ -258,6 +258,15 @@ implement the snapshot contract above rather than restating it.
   bounded retry and its backoff now happen after the Graph spend, which is worth
   paying to carry the newest published snapshot rather than the oldest one the run
   could have seen.
+- A previous snapshot scanned later than this run's own instant is classified as a
+  lost pointer race, before the snapshot is built, and reported with the same error
+  and the same record the pointer write's own refusal uses. The two schedules
+  overlap, so the run that samples the older clock reads a pointer newer than its
+  own scan and cannot publish either way. Left to the contract, it fails instead on
+  a carried source instant later than the scan time it is building with, which is a
+  refusal about a malformed payload and a misleading way to report a benign overlap.
+  Classifying it earlier is the only change: `snapshot.Build` keeps every one of its
+  refusals, and nothing anywhere clamps, repairs, or falls back.
 - Only lists that contributed a name become sources. A bootstrap run therefore
   advertises its own cadence's staleness thresholds rather than the slowest
   cadence of a list it has not published yet.
@@ -711,6 +720,13 @@ never the ENS availability authority.
 - Whether a named source list exists is decided in `App`, not in `parseQuery`, which never
   sees a snapshot. Two opposite things go wrong and the visitor has to be told which: an
   unattributable snapshot shows every row, and a snapshot with no such list shows none.
+- The local cache key carries the wire version, so a `FormatVersion` bump orphans the
+  previous key: nothing reads it and nothing replaces it. `cache.ts` sweeps every
+  `ens-scout.snapshot.v<n>` key that is not the current one, on the clear path, after a
+  successful write, and again to make room when a write hits the quota. The tail has to be
+  a version number, so the probe key and anything else on the origin is never collateral,
+  and the sweep is what keeps a snapshot-sized orphan from costing a returning visitor the
+  offline fallback it can no longer use.
 - One axe pass per page state, not one per colour scheme. There is a single palette and
   `:root` pins `color-scheme: light`, so a dark browser context selects no different rule
   and leaves the UA widgets alone; a second run under it asserted the same rendering
