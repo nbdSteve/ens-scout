@@ -54,9 +54,16 @@ export function SnapshotStatus({
         <h3 className="card__title" id="scan-heading">
           Scan
         </h3>
+        {/*
+          The qualifier is what keeps this true in both builds. A build with a verifier puts
+          a second, labelled status beside the scan's, and that one does not describe the
+          instant below; a build without one has no fresh checks at all, so the clause is
+          vacuous rather than confusing. The alternative was to pass the API base URL in
+          here to pick between two sentences, for a card whose only subject is the scan.
+        */}
         <p className="prose">
-          Every status and countdown on this page describes the instant below. Nothing here is
-          re-checked in your browser.
+          Every status and countdown on this page describes the instant below, unless it is labelled
+          as a fresh check.
         </p>
       </div>
 

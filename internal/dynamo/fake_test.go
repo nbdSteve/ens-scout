@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -456,10 +457,52 @@ func parseKeyCondition(expression *string, names map[string]string, values map[s
 	return partition, prefix, nil
 }
 
-// evaluateCondition understands the four condition forms this package sends.
+// evaluateCondition understands the condition forms this package sends.
 func evaluateCondition(expression string, names map[string]string, values map[string]types.AttributeValue, item map[string]types.AttributeValue) (bool, error) {
 	expression = strings.TrimSpace(expression)
+
+	// A disjunction is split before anything else, and only at the top level, so a
+	// function argument can never be mistaken for an operand.
+	if parts := splitOutsideParens(expression, " OR "); len(parts) > 1 {
+		for _, part := range parts {
+			holds, err := evaluateCondition(part, names, values, item)
+			if err != nil {
+				return false, err
+			}
+			if holds {
+				return true, nil
+			}
+		}
+		return false, nil
+	}
+
 	switch {
+	case strings.Contains(expression, " <= "):
+		// The check store's allowance condition. An absent attribute does not satisfy
+		// a comparison, which is what the attribute_not_exists half of the disjunction
+		// is there for.
+		parts := strings.SplitN(expression, " <= ", 2)
+		name, err := resolveName(strings.TrimSpace(parts[0]), names)
+		if err != nil {
+			return false, err
+		}
+		stored, exists := item[name]
+		if !exists {
+			return false, nil
+		}
+		left, err := attributeNumber(stored)
+		if err != nil {
+			return false, err
+		}
+		bound, exists := values[strings.TrimSpace(parts[1])]
+		if !exists {
+			return false, fmt.Errorf("fake: condition %q has no binding for %q", expression, parts[1])
+		}
+		right, err := attributeNumber(bound)
+		if err != nil {
+			return false, err
+		}
+		return left <= right, nil
 	case strings.HasPrefix(expression, "attribute_type(") && strings.HasSuffix(expression, ")"):
 		arguments := strings.SplitN(strings.TrimSuffix(strings.TrimPrefix(expression, "attribute_type("), ")"), ",", 2)
 		if len(arguments) != 2 {
@@ -517,12 +560,15 @@ func evaluateCondition(expression string, names map[string]string, values map[st
 }
 
 // applyUpdate understands a SET expression of comma-separated assignments.
+//
+// The assignments are split at the top level only, because if_not_exists takes two
+// arguments and a naive split on every comma would cut one of them in half.
 func applyUpdate(expression string, names map[string]string, values map[string]types.AttributeValue, item map[string]types.AttributeValue) error {
 	trimmed := strings.TrimSpace(expression)
 	if !strings.HasPrefix(trimmed, "SET ") {
 		return fmt.Errorf("fake: unsupported update expression %q", expression)
 	}
-	for _, assignment := range strings.Split(strings.TrimPrefix(trimmed, "SET "), ",") {
+	for _, assignment := range splitOutsideParens(strings.TrimPrefix(trimmed, "SET "), ",") {
 		parts := strings.SplitN(assignment, "=", 2)
 		if len(parts) != 2 {
 			return fmt.Errorf("fake: unsupported assignment %q", assignment)
@@ -531,13 +577,113 @@ func applyUpdate(expression string, names map[string]string, values map[string]t
 		if err != nil {
 			return err
 		}
-		value, exists := values[strings.TrimSpace(parts[1])]
-		if !exists {
-			return fmt.Errorf("fake: update has no binding for %q", strings.TrimSpace(parts[1]))
+		value, err := evaluateOperand(strings.TrimSpace(parts[1]), names, values, item)
+		if err != nil {
+			return err
 		}
 		item[name] = value
 	}
 	return nil
+}
+
+// evaluateOperand resolves the right-hand side of one assignment.
+//
+// It models the three forms this package sends and nothing else: a value binding, an
+// if_not_exists fallback, and the sum of two operands. An addition is evaluated as
+// int64 arithmetic on the N type, which is what the check store's counters are; a real
+// table's numbers are decimal and wider, so a fractional or huge operand is an error
+// here rather than a silently truncated one.
+func evaluateOperand(token string, names map[string]string, values map[string]types.AttributeValue, item map[string]types.AttributeValue) (types.AttributeValue, error) {
+	token = strings.TrimSpace(token)
+
+	if parts := splitOutsideParens(token, "+"); len(parts) > 1 {
+		if len(parts) != 2 {
+			return nil, fmt.Errorf("fake: unsupported sum %q", token)
+		}
+		var total int64
+		for _, part := range parts {
+			operand, err := evaluateOperand(part, names, values, item)
+			if err != nil {
+				return nil, err
+			}
+			number, err := attributeNumber(operand)
+			if err != nil {
+				return nil, err
+			}
+			total += number
+		}
+		return numberValue(total), nil
+	}
+
+	if strings.HasPrefix(token, "if_not_exists(") && strings.HasSuffix(token, ")") {
+		arguments := splitOutsideParens(strings.TrimSuffix(strings.TrimPrefix(token, "if_not_exists("), ")"), ",")
+		if len(arguments) != 2 {
+			return nil, fmt.Errorf("fake: if_not_exists takes two arguments, got %q", token)
+		}
+		name, err := resolveName(strings.TrimSpace(arguments[0]), names)
+		if err != nil {
+			return nil, err
+		}
+		if stored, exists := item[name]; exists {
+			return stored, nil
+		}
+		return evaluateOperand(strings.TrimSpace(arguments[1]), names, values, item)
+	}
+
+	if strings.HasPrefix(token, ":") {
+		value, exists := values[token]
+		if !exists {
+			return nil, fmt.Errorf("fake: update has no binding for %q", token)
+		}
+		return value, nil
+	}
+	return nil, fmt.Errorf("fake: unsupported operand %q", token)
+}
+
+// attributeNumber reads a stored N as an int64, and refuses anything else. A fake that
+// coerced a string or a decimal would let arithmetic succeed here that the real service
+// answers with a ValidationException.
+func attributeNumber(value types.AttributeValue) (int64, error) {
+	number, ok := value.(*types.AttributeValueMemberN)
+	if !ok {
+		return 0, fmt.Errorf("fake: %T is not a number", value)
+	}
+	parsed, err := strconv.ParseInt(number.Value, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("fake: %q is not an integer: %w", number.Value, err)
+	}
+	return parsed, nil
+}
+
+// splitOutsideParens splits on a separator that is not inside parentheses, and returns
+// one element when the separator does not appear at that level. Unbalanced parentheses
+// leave the depth positive, so the tail simply never splits, which is a refusal by the
+// caller rather than a guess here.
+func splitOutsideParens(text, separator string) []string {
+	var (
+		parts []string
+		depth int
+		start int
+	)
+	for i := 0; i < len(text); i++ {
+		switch text[i] {
+		case '(':
+			depth++
+			continue
+		case ')':
+			if depth > 0 {
+				depth--
+			}
+			continue
+		}
+		if depth == 0 && strings.HasPrefix(text[i:], separator) {
+			parts = append(parts, strings.TrimSpace(text[start:i]))
+			i += len(separator) - 1
+			start = i + 1
+		}
+	}
+	parts = append(parts, strings.TrimSpace(text[start:]))
+	return parts
 }
 
 // project keeps only the attributes a projection expression names.

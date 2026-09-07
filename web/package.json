@@ -10,7 +10,9 @@
   "scripts": {
     "dev": "vite",
     "build": "npm run typecheck && vite build",
+    "build:verify": "vite build --outDir dist-verify",
     "preview": "vite preview",
+    "preview:verify": "vite preview --outDir dist-verify",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.node.json --noEmit",
     "lint": "eslint .",
     "format": "prettier --write .",

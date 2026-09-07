@@ -1,10 +1,14 @@
-// Package dynamo stores published ENS snapshots in a single DynamoDB table.
+// Package dynamo stores published ENS snapshots, and the read API's fresh-check
+// allowances, in a single DynamoDB table.
 //
-// It is the storage backend for the contract in internal/snapshot and nothing
-// more: it decides what to write by calling snapshot.ValidatePutChunks,
-// snapshot.PlanChunkWrite, and snapshot.PlanLatestWrite, so the chunk-immutability
-// and pointer-ordering rules have exactly one definition and this package cannot
-// drift from the local fakes that tests are written against.
+// It is the storage backend for the contracts in internal/snapshot and
+// internal/checkstore and nothing more: Store decides what to write by calling
+// snapshot.ValidatePutChunks, snapshot.PlanChunkWrite, and
+// snapshot.PlanLatestWrite, so the chunk-immutability and pointer-ordering rules
+// have exactly one definition and this package cannot drift from the local fakes
+// that tests are written against. CheckStore, in check.go, is the same
+// arrangement for the counting windows and the result cache, whose key layout
+// internal/checkstore owns.
 //
 // Every read is strongly consistent. A publisher writes chunks, reads them back,
 // verifies them, and only then moves the pointer, so an eventually consistent read

@@ -11,12 +11,19 @@ import { openMore, searchOf, since, visit } from './support'
  * need real history and a real reload.
  */
 
-/** The names in the table, in the order the page shows them. */
+/**
+ * The names in the table, in the order the page shows them.
+ *
+ * Read from the row headers, which every row has, rather than from a link, which a row
+ * has only while a fresh check covers it. This bundle has no verifier, so no name here
+ * is ever a link: reading links would collect nothing and quietly turn every order
+ * comparison below into `[]` against `[]`.
+ */
 function namesOn(page: import('@playwright/test').Page): Promise<string[]> {
   return page
     .getByRole('table')
-    .getByRole('link')
-    .evaluateAll((nodes) => nodes.map((node) => node.firstChild?.textContent ?? ''))
+    .getByRole('rowheader')
+    .evaluateAll((nodes) => nodes.map((node) => node.querySelector('.mono')?.textContent ?? ''))
 }
 
 test('a view link writes the view and the back button returns', async ({ page }) => {

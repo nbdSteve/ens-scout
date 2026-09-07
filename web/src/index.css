@@ -1635,7 +1635,11 @@ strong {
   background: var(--accent-wash);
 }
 
-.checkbox input {
+/* The row tick box shares the box itself, not the chip around it. Two hand-drawn
+   checkboxes on one page would be two ticks to keep in step, and the tick is a
+   background image whose colour has to be argued rather than measured - see below. */
+.checkbox input,
+.verify-box input {
   appearance: none;
   flex: none;
   width: 1.05rem;
@@ -1658,13 +1662,24 @@ strong {
  * sees a filled box. The colour has to be reasoned about instead. White over the
  * accent (#5c3bd6) is 6.9:1, comfortably past the 3:1 a non-text graphic needs.
  */
-.checkbox input:checked {
+.checkbox input:checked,
+.verify-box input:checked {
   border-color: var(--accent);
   background-color: var(--accent);
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 10'%3E%3Cpath d='M1 5.2 4.3 8.5 11 1.5' fill='none' stroke='%23ffffff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
   background-repeat: no-repeat;
   background-position: center;
   background-size: 0.68rem;
+}
+
+/* A box the selection bound has closed. It is genuinely `disabled`, so this only has
+   to look it: the cursor and the flattened border say the control is out of reach,
+   and `VerifyBar` above says why in words. */
+.verify-box input:disabled {
+  border-color: var(--hairline);
+  background-color: transparent;
+  cursor: not-allowed;
+  opacity: 0.55;
 }
 
 .checkbox__count {
@@ -1715,6 +1730,27 @@ strong {
 .button--quiet:hover {
   border-color: var(--ink-faint);
   background: var(--canvas-tint);
+}
+
+/*
+ * A disabled action still has to be legible.
+ *
+ * Dimming the primary button with `opacity` takes its label - `--on-ink` over
+ * `--ink` - under the contrast threshold, so the ground steps back to nothing and
+ * the ink moves to the muted token instead, which is measured against the canvas.
+ * The lift is removed too: a button that rises to the pointer and then does nothing
+ * is worse than one that plainly does not respond.
+ */
+.button:disabled {
+  color: var(--ink-faint);
+  background: transparent;
+  border-color: var(--hairline-strong);
+  cursor: not-allowed;
+}
+
+.button:disabled:hover {
+  transform: none;
+  background: transparent;
 }
 
 /* ------------------------------------------------------------------- stage -- */
@@ -1829,7 +1865,8 @@ strong {
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8'%3E%3Cpath d='M1 1.75 6 6.5l5-4.75' fill='none' stroke='%239fb0cf' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
 }
 
-.stage .checkbox input:checked {
+.stage .checkbox input:checked,
+.stage .verify-box input:checked {
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 10'%3E%3Cpath d='M1 5.2 4.3 8.5 11 1.5' fill='none' stroke='%2304060f' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
 }
 
@@ -1838,6 +1875,107 @@ strong {
 .results-panel {
   /* Clear of the sticky top bar when the skip link or `#results` lands here. */
   scroll-margin-block-start: 4.5rem;
+}
+
+/* ------------------------------------------------------------- verify bar -- */
+
+/*
+ * The fresh-check action, between the toolbar and the names.
+ *
+ * It draws nothing until a name is ticked or a check fails, so there is no resting
+ * state to budget for: the space below is the space the bar takes when a visitor has
+ * asked for it. The block-end rule is the only thing separating it from the column
+ * headers, which is enough at this weight and cheaper than a filled panel.
+ */
+.verify-bar {
+  display: grid;
+  gap: var(--space-3);
+  margin-block-end: var(--space-4);
+  padding-block-end: var(--space-4);
+  border-block-end: 1px solid var(--hairline);
+}
+
+/*
+ * The count and the actions on one line while there is room, and stacked below it.
+ * `space-between` rather than a gap alone, so the primary action keeps the end edge
+ * of the column and the eye finds it in the same place as the pagination below.
+ */
+.verify-bar__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.verify-bar__count {
+  margin: 0;
+  color: var(--ink-muted);
+  font-size: var(--step--1);
+  font-variant-numeric: tabular-nums;
+}
+
+.verify-bar__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+/* A caveat, so it is set as one: quiet, measured, and never wider than a line a
+   visitor will actually read to the end of. */
+.verify-bar__note {
+  max-width: 68ch;
+  margin: 0;
+  color: var(--ink-faint);
+  font-size: var(--step--1);
+}
+
+.verify-bar__recover {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-block-end: 0;
+}
+
+/*
+ * The scroll container the table gets when it has a tick column, and only then.
+ *
+ * A table can be no narrower than the widest unbreakable content of each of its
+ * columns added together. At 320 CSS px the three text columns are already at that
+ * floor, and a fourth column cannot be bought from them: tightening every gutter and
+ * taking the tick target down to the 24px WCAG 2.2 asks of it still leaves the table
+ * wider than the content column, and the only things left to give are breaking names
+ * mid-word or turning the rows into blocks, which would take with them the table roles
+ * a screen reader navigates by. WCAG 1.4.10 exempts a data table from reflow for
+ * exactly this case, so the table scrolls inside the page instead of taking the page
+ * with it. `auto` rather than `scroll`: at every width where four columns do fit, which
+ * is every width above the narrowest, this does nothing at all.
+ *
+ * The padding is the focus ring's room. `:focus-visible` draws 2px at a 3px offset, and
+ * the tick box sits flush against the table's start edge because the column has no
+ * gutter there, so a container clipping at that edge would cut the ring in half. The
+ * matching negative margin puts the table's own edges back on the content column, so
+ * nothing else on the page moves. A fixed pixel length, like the ring it is measured
+ * from: an outline does not scale with the root font size, so neither may this.
+ */
+.results__scroll {
+  /*
+   * Positioned, so that it clips. An `overflow` ancestor clips an absolutely positioned
+   * descendant only when it is in that descendant's containing block chain, and the
+   * table is full of them: every `.visually-hidden` announcement and the caption. Left
+   * static, those seven spans resolved against an ancestor above this one, escaped the
+   * clip, and put the whole end column's worth of width back into the document - which
+   * is a page that scrolls sideways at 320px with nothing visible out there to find.
+   */
+  position: relative;
+  overflow-x: auto;
+  /* Not left to `visible`, which computes to `auto` beside an `auto` on the other axis.
+     The rows arrive by translating upwards, and a transform counts towards scrollable
+     overflow, so the vertical axis would grow a scrollbar for the length of every
+     entry animation. */
+  overflow-y: hidden;
+  margin: -5px;
+  padding: 5px;
 }
 
 .results {
@@ -1997,13 +2135,17 @@ strong {
 
 /* Proportions only once there is room for them. Below this the browser's own
    measurement of the content is the better judge, and a fixed 28% name column
-   at phone width is what breaks a name across two lines. */
+   at phone width is what breaks a name across two lines.
+
+   Addressed by class, not by position. The tick column is conditional, so a
+   `:first-child` rule aimed at the name silently moved onto the tick box as soon as
+   the deployment had a verifier, and took the name column's floor with it. */
 @media (min-width: 48rem) {
-  .results thead th:first-child {
+  .results thead th.results__name {
     width: 28%;
   }
 
-  .results thead th:nth-child(2) {
+  .results thead th.results__status {
     width: 20%;
   }
 
@@ -2023,6 +2165,10 @@ strong {
  * restyling the table: the column gutters tighten, the status wraps to two lines,
  * and the ticking value drops a step. Turning the rows into blocks would fit too,
  * and would take the table roles a screen reader navigates by with it.
+ *
+ * Three, and not the four a deployment with a verifier has. Nothing below closes that
+ * gap and nothing here should try to; `.results__scroll` is where the fourth column is
+ * answered, and why.
  */
 @media (max-width: 47.99rem) {
   .results thead th,
@@ -2040,8 +2186,106 @@ strong {
   }
 }
 
+/* ------------------------------------------------------------ row selection -- */
+
+/*
+ * The tick column: as narrow as the box in it, and out of the way of everything else.
+ *
+ * `width: 1px` with `white-space: nowrap` is how a table column is asked to be no
+ * wider than its content - the auto layout treats the declared width as a minimum and
+ * the content sets the real one. A percentage here would take room from the name.
+ */
+.results__pick {
+  width: 1px;
+  white-space: nowrap;
+  /*
+   * The one cell in the row that is not baseline-aligned. There is no text in it to
+   * find a baseline from, and an inline-flex box with no text baselines resolves its
+   * own to its bottom margin edge, which dropped the tick well below the name beside
+   * it. Aligning to the top and centring the box in its own 44px block puts it on the
+   * name's optical middle instead, at every one of the three name sizes.
+   */
+  vertical-align: top;
+}
+
+/*
+ * The label is the hit target, not the input.
+ *
+ * A 17px box is far under the 44px a pointer needs, so the label is sized to it and
+ * the box sits centred inside. The room is taken on the end edge only: the column has
+ * no gutter of its own on the start edge, and a symmetric target would indent the
+ * name column on every row.
+ */
+.verify-box {
+  display: inline-flex;
+  align-items: center;
+  min-width: 2.75rem;
+  min-height: 2.75rem;
+  cursor: pointer;
+}
+
+.verify-box:has(input:disabled) {
+  cursor: not-allowed;
+}
+
 .results__name {
   display: table-cell;
+}
+
+/*
+ * An unverified name: the same words in the same place, without the link.
+ *
+ * Deliberately not a greyed-out link. There is nowhere to go yet, so there is nothing
+ * to disable, and a disabled link still announces itself as a link and still invites a
+ * click. The type scale matches the link's exactly, so ticking a box and checking does
+ * not reflow the row it happened in.
+ */
+.results__unlinked {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  font-size: var(--step-0);
+  font-weight: 600;
+  letter-spacing: var(--track-snug);
+  color: var(--ink);
+  overflow-wrap: break-word;
+}
+
+@media (min-width: 48rem) {
+  .results__unlinked {
+    font-size: var(--step-2);
+    letter-spacing: var(--track-tight);
+  }
+}
+
+@media (min-width: 64rem) {
+  .results__unlinked {
+    font-size: var(--step-3);
+  }
+}
+
+/* The text face, for the same reason `.results__name .mono` gives: monospace is kept
+   for machine timestamps, where digits have to line up. */
+.results__unlinked .mono {
+  font-family: var(--font-sans);
+  font-size: inherit;
+  letter-spacing: inherit;
+}
+
+/*
+ * What the row says about its own fresh check, under the length.
+ *
+ * It is the faintest thing in the cell because it is usually `No fresh check`, which
+ * is the resting state of every row on the page and must not read as a warning on each
+ * one. The words carry the state; nothing here colours it.
+ */
+.results__verify {
+  display: block;
+  margin-block-start: 0.2rem;
+  color: var(--ink-faint);
+  font-size: var(--step--2);
+  letter-spacing: var(--track-wide);
+  text-transform: uppercase;
 }
 
 .ens-link {
@@ -2157,6 +2401,39 @@ strong {
   font-variant-numeric: tabular-nums;
   /* "5 characters" is one fact and reads badly split over two lines. */
   white-space: nowrap;
+}
+
+/*
+ * The freshly read status, under the scan's own.
+ *
+ * Two statuses in one cell is the point: they answer the same question at different
+ * times and they can disagree, so they are stacked in the order they were established
+ * rather than put in separate columns, which would have implied the fresh one belonged
+ * to the same scan. The label between them names the instant, so neither is ever on
+ * screen without the time it is true of.
+ */
+.results__fresh {
+  display: grid;
+  gap: 0.1rem;
+  justify-items: start;
+  margin-block-start: var(--space-3);
+  padding-block-start: var(--space-3);
+  border-block-start: 1px solid var(--hairline);
+}
+
+.results__fresh-label {
+  color: var(--ink-faint);
+  font-size: var(--step--2);
+  letter-spacing: var(--track-wide);
+  text-transform: uppercase;
+}
+
+/* The instant stays monospace - it really is machine text - but it must not be
+   uppercased or tracked out with the label around it, or a timestamp read as a
+   spaced-out serial number. `.mono` already resets the tracking; this drops the
+   transform, which is inherited and which `.mono` has no business knowing about. */
+.results__fresh-label time {
+  text-transform: none;
 }
 
 .results__next {

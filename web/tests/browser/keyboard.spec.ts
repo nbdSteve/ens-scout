@@ -40,24 +40,59 @@ test('the first tab stop is the skip link, and it leads to the names', async ({ 
   await expect(page).toHaveURL(/#results$/)
   await expect(page.locator('#results')).toBeInViewport()
 
-  // The next stop is inside the results, not back at the top of the page.
+  /*
+   * The next stop is at the names or past them, never back at the top of the page.
+   * Stated as document order rather than as "a link inside the results", because what
+   * is focusable in there depends on the build: a deployment with a verifier offers a
+   * tick box per row, and this one, with no read API, offers nothing at all. The
+   * requirement is the same either way - the skip link must not be undone by the next
+   * key press - and document order is what expresses it.
+   */
   await page.keyboard.press('Tab')
-  await expect(page.locator('#results').getByRole('link').first()).toBeFocused()
+  const wentForward = await page.evaluate(() => {
+    const results = document.querySelector('#results')
+    const target = document.activeElement
+    if (results === null || target === null) {
+      return false
+    }
+    // `CONTAINED_BY` is the verifier build, `FOLLOWING` this one. Both are forward.
+    const where = results.compareDocumentPosition(target)
+    return (
+      (where & Node.DOCUMENT_POSITION_CONTAINED_BY) !== 0 ||
+      (where & Node.DOCUMENT_POSITION_FOLLOWING) !== 0
+    )
+  })
+  expect(wentForward, 'the stop after the skip link is before the names').toBe(true)
 })
 
 test('every keyboard stop draws a focus indicator', async ({ page }) => {
   await visit(page, { view: 'all' })
-  // Opened, because a closed disclosure is one stop rather than eleven and the
-  // controls inside it are the ones most likely to be styled by hand.
-  await openMore(page)
+
+  /*
+   * Opened, because a closed disclosure is one stop rather than eleven and the controls
+   * inside it are the ones most likely to be styled by hand.
+   *
+   * Opened by setting the property the browser owns, not by clicking the summary the way
+   * `openMore` does. A click leaves that summary as the sequential focus navigation
+   * starting point, which blurring does not clear, so the walk below would begin in the
+   * middle of the toolbar and never reach the skip link or the views - and its count
+   * would then be made of whatever follows, which is how it came to rest on rows being
+   * links. The gesture is covered by the test below; what this one needs is the state.
+   */
+  await page
+    .locator('details')
+    .filter({ has: page.locator('summary').filter({ hasText: 'More filters' }) })
+    .evaluate((node: HTMLDetailsElement) => {
+      node.open = true
+    })
 
   const seen: string[] = []
   for (let step = 0; step < 200; step += 1) {
     await page.keyboard.press('Tab')
     const current = await focused(page)
     // Focus left the document, or wrapped back round to the skip link. Stopping on
-    // any repeated label would end the walk early instead: several stops share a
-    // label by design, because every row offers the same "View on ENS" link.
+    // any repeated label would end the walk early instead: a shared label is not
+    // evidence that the walk has come round, and stops here do share one.
     if (current === null || (seen.length > 0 && current.label === seen[0])) {
       break
     }
@@ -65,9 +100,10 @@ test('every keyboard stop draws a focus indicator', async ({ page }) => {
     expect(current.ringed, `${current.label} has no focus indicator`).toBe(true)
   }
 
-  // Guards against the loop ending early and passing vacuously. The skip link, the
-  // five views, the three visible filters, the two disclosures, and the ten controls
-  // inside the opened one already come to more than twenty, before any row.
+  // Guards against the loop ending early and passing vacuously. The skip link, the three
+  // links in the lines above the tabs, the five views, the three visible filters, the two
+  // disclosures, the ten controls inside the opened one, and the link out of the closed
+  // one come to more than twenty, none of them a row.
   expect(seen.length).toBeGreaterThan(20)
 })
 

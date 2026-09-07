@@ -115,8 +115,9 @@ internal/names/       input loading, normalization, and deduplication
 internal/report/      text, JSON Lines, and CSV output
 internal/snapshot/    deterministic snapshot contract, storage fakes, fixtures
 internal/scanner/     one scheduled scan, from event to published pointer
-internal/dynamo/      DynamoDB snapshot storage
-internal/api/         cached HTTP read API for the published snapshot
+internal/checkstore/  shared durable contract behind the fresh-check allowances
+internal/dynamo/      DynamoDB snapshot storage and fresh-check store
+internal/api/         cached HTTP read API, and the bounded fresh-check endpoint
 infra/                TypeScript AWS CDK definition of the publisher stack
 web/                  React website that browses a published snapshot
 data/words/           current candidate lists
@@ -234,9 +235,10 @@ filter, sort, and countdown itself, so ordinary browsing never reaches DynamoDB
 or The Graph.
 
 ```text
-GET /api/snapshot        the published snapshot, byte for byte
-GET /api/snapshot/meta   scan time, counts, sources, and staleness thresholds
-GET /health              whether a complete snapshot is being served
+GET  /api/snapshot       the published snapshot, byte for byte
+GET  /api/snapshot/meta  scan time, counts, sources, and staleness thresholds
+POST /api/check          a bounded fresh check of a short list of labels
+GET  /health             whether a complete snapshot is being served
 ```
 
 Only a complete, checksum-verified snapshot is served. Nothing is repaired and
@@ -255,6 +257,16 @@ word list as well as for the snapshot, so a client resolves it against its own
 clock. `/health` is the one endpoint that resolves an age itself, and it is the
 one endpoint that is never cacheable.
 
+`POST /api/check` is the one path here that reaches the subgraph, because a
+published snapshot is minutes to hours old and the website offers no link to
+register a name on the strength of it. It reuses the same normalization,
+batching, client, and classifier the CLI and the publisher use, and every
+allowance is charged before any work and before any network I/O. A deployment
+that injects no upstream client does not serve the path at all. The per-client
+allowance, the deployment-wide upstream budget, and the short-lived result cache
+live in `internal/checkstore`, backed by the publisher's own DynamoDB table, so
+they bound the whole deployment rather than one Lambda instance.
+
 Configuration is environment only:
 
 ```text
@@ -263,6 +275,11 @@ ENS_API_MAX_BODY_BYTES        bound on the snapshot body
 ENS_API_CACHE_SECONDS         max-age on a cacheable response
 ENS_API_RETRY_AFTER_SECONDS   Retry-After when nothing valid is published
 ```
+
+The fresh-check endpoint adds its own `ENS_API_CHECK_*` settings, one per bound,
+plus `ENS_API_CHECK_CLIENT_SECRET`, which keys the client identity and is the one
+secret this package reads. [docs/read-api.md](docs/read-api.md) lists each with
+its default and its accepted range.
 
 Neither this API nor the subgraph is the registration authority, so every
 response carries the scan time and an advisory to confirm availability and price
@@ -283,9 +300,13 @@ npm ci
 npm run dev
 ```
 
-The browser is a presentation layer only. It reads statuses and boundaries that the
-Go scanner computed, never queries The Graph or re-checks a name, and never decides
-whether a name is available. See [web/README.md](web/README.md).
+The browser is a presentation layer only. Every status and boundary on the page was
+computed by the Go scanner, either from a published snapshot or from one fresh check
+the read API made, so the browser never queries The Graph itself, never classifies a
+name, and never decides whether a name is available. A row offers no link to register
+a name until a fresh check has covered that exact name and has not expired, and the
+snapshot answer and the fresh answer stay visibly separate because they describe two
+different moments. See [web/README.md](web/README.md).
 
 ## Development
 
@@ -302,8 +323,9 @@ an 18 MB binary in the working tree, which is a build artifact and never belongs
 in a commit. The deployment build above is the one that writes a binary, and it
 names it `bootstrap` because that is what the runtime executes.
 
-No test contacts The Graph or AWS. The DynamoDB API and the storage interfaces
-are injected, so every path is exercised against local fakes.
+No test contacts The Graph or AWS. The DynamoDB API, the storage interfaces, the
+fresh-check store, the upstream client, and the clock are all injected, so every
+path is exercised against local fakes.
 
 For the website:
 

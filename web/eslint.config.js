@@ -6,7 +6,18 @@ import globals from 'globals'
 import tseslint from 'typescript-eslint'
 
 export default defineConfig(
-  globalIgnores(['dist', 'coverage', 'playwright-report', 'test-results', 'node_modules']),
+  // Both build outputs. `dist-verify` matters as much as `dist`: it is written by the
+  // Playwright web server rather than by `npm run build`, so it appears only after a
+  // browser run and lint would otherwise pass or fail depending on whether one has
+  // happened yet.
+  globalIgnores([
+    'dist',
+    'dist-verify',
+    'coverage',
+    'playwright-report',
+    'test-results',
+    'node_modules',
+  ]),
   js.configs.recommended,
   tseslint.configs.strictTypeChecked,
   tseslint.configs.stylisticTypeChecked,

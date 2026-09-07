@@ -5,9 +5,13 @@ import type { LatestDocument, SnapshotDocument } from '../snapshot/types'
  * The read API client.
  *
  * The browser reads one published snapshot from one origin. It never queries The
- * Graph, never reads DynamoDB, and never asks for a fresh check of a single name:
- * everything on screen came from the scan the snapshot records, which is the only
- * way the page can honestly say when its data is from.
+ * Graph and never reads DynamoDB: everything this module returns came from the scan
+ * the snapshot records, which is the only way the page can honestly say when its
+ * data is from.
+ *
+ * A fresh check is a different request to the same origin and lives in `verify/`. It
+ * is separate on purpose - it answers for a handful of names at an instant of its
+ * own, not for the snapshot - and nothing here reads or writes its result.
  */
 
 /** The snapshot resource. `ETag` carries the snapshot id and `If-None-Match` revalidates it. */

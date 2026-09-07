@@ -50,7 +50,10 @@ Read Lambda / HTTPS endpoint
 Static frontend cached by CloudFront
 ```
 
-An optional lookup endpoint will recheck a small set of names on demand.
+The read endpoint also rechecks a small set of names on demand, which is the one
+read path that reaches the subgraph.
+It is optional per deployment: one that configures no upstream client serves the
+snapshot alone.
 
 ## Repository layout
 
@@ -153,10 +156,44 @@ The live-check endpoint must normalize and deduplicate labels, limit request
 size, use bounded concurrency, and apply rate limiting. It must never expose
 the Graph API key or upstream endpoint.
 
-`internal/api` now implements the snapshot, metadata, and health endpoints, and
-[read-api.md](read-api.md) is the delivered contract. The live-check endpoint is
-not in that package: it queries The Graph, so it arrives with live verification
-in phase 3.
+`internal/api` implements all four endpoints, and
+[read-api.md](read-api.md) is the delivered contract.
+
+The check endpoint is the one path that leaves the process, so every bound it
+applies is charged before any work: the content type, the declared length, the
+client identity, that client's allowance, the body, the name count, the
+normalization, the cache, a concurrency slot, and the deployment-wide upstream
+budget, in that order. It reuses `names.Normalize`, `checker.Run`, and
+`ens.Classify` rather than adding a second classifier, and the upstream client is
+injected at cold start, so nothing a client sends can select an endpoint, a query
+shape, a retry policy, or an authorization. A deployment that injects no client
+does not serve the path at all.
+
+The Graph credential is not configuration of that package. No setting it reads
+holds a key or an endpoint, every failure body is composed from fixed literals,
+and its log records carry counts and a fixed code with no error text, because the
+gateway carries the credential in the request path that an upstream error would
+otherwise quote. The one secret it does read is
+`ENS_API_CHECK_CLIENT_SECRET`, which keys the client identity and never appears
+in a log line, an error, a response, or a stored item.
+
+Every allowance is held in a shared durable store rather than in process memory,
+because a Lambda deployment runs many instances at once and each cold start
+begins with an empty process. A per-instance allowance is really that allowance
+times however many instances a caller reaches, and a per-instance cache is one a
+caller misses by being routed elsewhere. `internal/checkstore` is the contract,
+`internal/dynamo` is the backend, and a process-local copy of what the shared
+store already accepted is only an optimization. A store that cannot be reached
+refuses the request, because an allowance nothing recorded is not an allowance.
+The one genuinely per-instance bound is the concurrency slot: a request in flight
+cannot be counted anywhere but in the process holding it.
+
+The client identity comes from the trusted API Gateway source, and from the
+transport peer when the adapter attaches none; never from a forwarding header a
+caller controls. It is keyed with HMAC-SHA256 under a stable deployment secret,
+so every instance derives the same key for the same caller and only the digest is
+ever stored or logged. The secret is configured rather than minted at cold start
+for exactly that reason, and a missing or too-short one fails at cold start.
 
 ## Frontend scope
 
@@ -169,7 +206,8 @@ The first polished release should include:
 - live countdowns calculated from snapshot timestamps;
 - memorable-word and acronym collections;
 - responsive, accessible layouts with shareable filter URLs;
-- a fresh-check action and a final link to the ENS app;
+- a fresh-check action, and a final link to the ENS app that only a successful
+  unexpired fresh check unlocks;
 - explicit wording that grace-period names may be renewed and premium names
   may be registered by someone else at any time.
 
@@ -288,7 +326,18 @@ previous list markup underneath it.
 
 ### Phase 3: live verification and operations
 
-- Add bounded on-demand name checks with throttling and caching.
+- Add bounded on-demand name checks with throttling and caching. Done, as
+`POST /api/check` and the frontend action that spends it.
+  The throttle, the upstream budget, and the result cache live in the publisher's
+  own DynamoDB table, so they bound the deployment rather than one instance.
+  A snapshot row offers no outbound ENS link until a fresh check covers that exact
+  name and has not expired, and the same gate will govern any future suggestion
+  the page produces.
+  The frontend keeps the snapshot answer and the fresh answer visibly separate and
+  states the instant the fresh one was obtained, because they are two different
+  claims about two different moments and only one of them is recent.
+  Neither is registration authority: a name the index does not hold may still fail
+  to register, so every outbound action says ENS decides.
 - Add stale-snapshot indicators, alarms, dashboards, and deployment checks.
 - Load-test the public endpoint and document rollback procedures.
 

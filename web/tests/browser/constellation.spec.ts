@@ -91,13 +91,18 @@ test('the background never reacts to the pointer, the hover target, or the focus
 
   expect(await optics(page), 'a dispatched pointer or focus moved the light').toEqual(before)
 
-  // And again through the browser's own input pipeline, which produces trusted
-  // events a dispatched one cannot imitate. The click lands on the title rather
-  // than on a name, because a name opens the ENS app in a new tab.
-  const names = page.locator('#results').getByRole('link')
+  /*
+   * And again through the browser's own input pipeline, which produces trusted
+   * events a dispatched one cannot imitate. The rows are hovered by their name
+   * cells rather than by a link: this build has no verifier, so no name in the
+   * table is a link at all, and hovering is what the concept forbids either way.
+   * Focus is taken on a control that has it in every build, and the click lands on
+   * the title, because a name that were a link would open a new tab.
+   */
+  const names = page.getByRole('table').getByRole('rowheader')
   await names.first().hover()
-  await names.first().focus()
   await names.nth(1).hover()
+  await page.getByRole('searchbox', { name: 'Search names' }).focus()
   await page.locator('#page-title').click()
 
   expect(await optics(page), 'hovering, focusing, or clicking moved the light').toEqual(before)

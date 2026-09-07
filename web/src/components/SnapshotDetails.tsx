@@ -132,12 +132,37 @@ export function SnapshotDetails({
               </a>{' '}
               before registering anything.
             </p>
-            <p className="prose">
-              Nothing on this page is re-checked in your browser. The countdowns move because your
-              clock does, and one reaching zero means the recorded moment has passed on this device
-              - not that the name moved on. Only a later scan can say that, so a passed boundary
-              says so in words instead of showing zeroes.
-            </p>
+            {/*
+              What re-reads the index, and what does not. The sentence used to say that
+              nothing on this page is re-checked, which a build with a verifier makes false:
+              a fresh check is exactly that. Both halves are stated either way, because the
+              countdowns are the scan's in both builds and a visitor reading a moving figure
+              has no way to tell which of the two produced it.
+            */}
+            {config.apiBaseUrl === null ? (
+              <p className="prose">
+                Nothing on this page is re-checked in your browser. The countdowns move because your
+                clock does, and one reaching zero means the recorded moment has passed on this
+                device - not that the name moved on. Only a later scan can say that, so a passed
+                boundary says so in words instead of showing zeroes.
+              </p>
+            ) : (
+              <>
+                <p className="prose">
+                  A fresh check is the one thing here that reads the ENS index again. Select names
+                  in the list and ask for one: the answer is labelled with the instant it was read,
+                  it is shown beside the scan&rsquo;s answer rather than replacing it, and it lasts
+                  a short while. A name links out to the ENS app only while a fresh check covers it,
+                  and a check reserves nothing.
+                </p>
+                <p className="prose">
+                  Everything else on this page is the scan. The countdowns move because your clock
+                  does, and one reaching zero means the recorded moment has passed on this device -
+                  not that the name moved on. Only a later scan or a fresh check can say that, so a
+                  passed boundary says so in words instead of showing zeroes.
+                </p>
+              </>
+            )}
             <p className="prose">
               Each source list is scanned on its own schedule and is called out above once it has
               missed more than one scheduled scan. The thresholds are published with the snapshot;
@@ -147,7 +172,9 @@ export function SnapshotDetails({
             {config.apiBaseUrl === null && (
               <p className="prose">
                 No read API is configured for this build, so the page is showing the committed{' '}
-                <code>{config.fixtureId}</code> fixture: {FIXTURE_DESCRIPTION[config.fixtureId]}
+                <code>{config.fixtureId}</code> fixture: {FIXTURE_DESCRIPTION[config.fixtureId]}{' '}
+                There is no verifier either, so nothing here can be re-checked and no name offers a
+                link to a registration page.
               </p>
             )}
           </div>
