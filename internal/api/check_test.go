@@ -427,6 +427,56 @@ func TestCheckSharedCacheIsReadableByEveryInstance(t *testing.T) {
 	}
 }
 
+// TestCheckSharedCacheIsScopedToTheWireVersion is the other half of sharing one
+// store. A stored entry is the rendered body, returned unchanged, so an entry a
+// different wire version wrote must be unreachable rather than served: a rolling
+// deployment has both versions reading the one store, and a client handed the other
+// shape refuses it until the entry lapses. The two instances here are one deployment
+// of this version, so what they share is still shared.
+func TestCheckSharedCacheIsScopedToTheWireVersion(t *testing.T) {
+	harness := newCheckHarness(t, func(check *CheckConfig) { check.ClientLimit = 10 })
+	harness.upstream.register("zap", checkTime.Add(365*24*time.Hour))
+
+	// What a deployment of the next wire version leaves in the store for the same set.
+	foreign := checkstore.Entry{
+		Body:      []byte(`{"format_version":2,"names":["zap.eth"]}`),
+		ExpiresAt: checkTime.Add(harness.config.CacheLifetime),
+	}
+	foreignKey := checkCacheKey(CheckFormatVersion+1, []string{"zap.eth"})
+	if err := harness.store.Store(context.Background(), foreignKey, foreign); err != nil {
+		t.Fatalf("seeding the shared store: %v", err)
+	}
+
+	first := checkNames(harness.handler, []string{"zap"})
+	document := decodeCheck(t, first)
+	if document.FormatVersion != CheckFormatVersion {
+		t.Errorf("format_version = %d, want %d: another version's entry was served",
+			document.FormatVersion, CheckFormatVersion)
+	}
+	if calls := harness.upstream.calls(); calls != 1 {
+		t.Errorf("upstream calls = %d, want 1: the index was not read for this version's answer", calls)
+	}
+	// Beside the other version's entry rather than over it, so neither version can be
+	// served the other's bytes.
+	entry, hit, err := harness.store.Load(context.Background(), foreignKey, checkTime)
+	if err != nil {
+		t.Fatalf("reading the other version's entry: %v", err)
+	}
+	if !hit || string(entry.Body) != string(foreign.Body) {
+		t.Errorf("the other version's entry was overwritten: hit = %t, body = %q", hit, entry.Body)
+	}
+
+	// And this version's own entry is still the one every instance of it serves.
+	second := checkNames(harness.instance(t, nil), []string{"zap"})
+	decodeCheck(t, second)
+	if calls := harness.upstream.calls(); calls != 1 {
+		t.Errorf("upstream calls = %d, want 1: a second instance did not serve the stored answer", calls)
+	}
+	if first.Body.String() != second.Body.String() {
+		t.Errorf("a shared hit rendered different bytes:\n%s\n%s", first.Body, second.Body)
+	}
+}
+
 func TestCheckThrottlesEachClientSeparately(t *testing.T) {
 	harness := newCheckHarness(t, nil)
 	allowance := harness.config.ClientLimit

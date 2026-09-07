@@ -197,7 +197,7 @@ func (h *Handler) runCheck(r *http.Request) (checkResult, *failure) {
 	// The local copy first, then the shared store. A local hit saves a store read and
 	// nothing else: it is the same bytes with the same expiry the store holds, because
 	// that is the only thing ever put there.
-	cacheKey := checkCacheKey(qualified)
+	cacheKey := checkCacheKey(CheckFormatVersion, qualified)
 	if body, hit := h.localResults.get(cacheKey, now); hit {
 		counts.body = body
 		counts.cache = cacheLocal
@@ -451,11 +451,21 @@ func normalizeCheckNames(requested []string, maxLabelBytes int) (labels, qualifi
 	return labels, qualified
 }
 
-// checkCacheKey is a digest of the exact set that was queried. The set is already
-// deduplicated and ordered, so two requests naming the same labels in any order
-// and with any repetition produce one key.
-func checkCacheKey(qualified []string) string {
+// checkCacheKey is a digest of the wire version and the exact set that was queried.
+// The set is already deduplicated and ordered, so two requests naming the same
+// labels in any order and with any repetition produce one key.
+//
+// The version is part of the key because an entry is the rendered response body and
+// is returned unchanged. A bumped version therefore has to orphan every key the
+// previous one wrote: a rolling deployment runs both versions over the one store at
+// once, and an instance that served the other version's bytes verbatim would hand a
+// client a document its own parser refuses, for as long as the entry lives. The
+// browser's own stored copy is keyed the same way and for the same reason - see
+// web/src/state/cache.ts.
+func checkCacheKey(version int, qualified []string) string {
 	digest := sha256.New()
+	digest.Write([]byte(strconv.Itoa(version)))
+	digest.Write([]byte{0})
 	for _, name := range qualified {
 		digest.Write([]byte(name))
 		// A separator no label can contain, so no two different sets can join into the

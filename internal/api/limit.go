@@ -95,9 +95,12 @@ func (c *localCache) get(key string, now time.Time) ([]byte, bool) {
 	return held.body, true
 }
 
-// put keeps a copy, making room by dropping expired entries first and then the one
-// closest to its own expiry. An entry that has already expired is not kept at all:
-// storing it would only cost a sweep later.
+// put keeps a copy. Room is made only for a key this layer does not already hold,
+// by dropping expired entries first and then the one closest to its own expiry.
+// Replacing an entry takes no new room, and making room for one would drop an
+// unrelated live copy that a re-read of an already held set has no reason to cost.
+// An entry that has already expired is not kept at all: storing it would only cost
+// a sweep later.
 func (c *localCache) put(key string, body []byte, expiresAt, now time.Time) {
 	if !now.Before(expiresAt) {
 		return
@@ -106,11 +109,13 @@ func (c *localCache) put(key string, body []byte, expiresAt, now time.Time) {
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
 
-	if _, exists := c.entries[key]; !exists && len(c.entries) >= c.maxEntries {
-		c.sweepExpired(now)
-	}
-	for len(c.entries) >= c.maxEntries {
-		c.evictOldest()
+	if _, exists := c.entries[key]; !exists {
+		if len(c.entries) >= c.maxEntries {
+			c.sweepExpired(now)
+		}
+		for len(c.entries) >= c.maxEntries {
+			c.evictOldest()
+		}
 	}
 	c.entries[key] = localEntry{body: body, expiresAt: expiresAt}
 }

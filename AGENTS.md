@@ -605,11 +605,17 @@ the rules behind all three.
   no setting here holds the credential or the endpoint, which is why the package needs
   no redactor of its own: the secret never reaches a log line, an error, a response, or
   a stored item, and a package that never receives the credential cannot leak it.
-- Cache the rendered response bytes, keyed on a digest of the sorted qualified names,
-  so a hit returns the instant the index was really read at. A hit that re-rendered
-  the document would stamp it with the time of the hit and claim a verification that
-  never happened. That holds across instances too, which is the point of storing the
-  bytes rather than the statuses.
+- Cache the rendered response bytes, keyed on a digest of `CheckFormatVersion` and the
+  sorted qualified names, so a hit returns the instant the index was really read at. A
+  hit that re-rendered the document would stamp it with the time of the hit and claim a
+  verification that never happened. That holds across instances too, which is the point
+  of storing the bytes rather than the statuses, and it is why the version is in the key:
+  a bumped version has to orphan every key the previous one wrote, because a rolling
+  deployment has both versions over the one store and an instance returning the other
+  shape verbatim would hand a client a document its own parser refuses for as long as the
+  entry lives. It is the same rule as the browser's local cache key under
+  `Website invariants`. The item format version `internal/dynamo` writes is a different
+  thing and does not cover this.
 - Resolve every window and every expiry against the injected clock. Nothing here
   sleeps, spawns a goroutine, or holds a timer: a window rolls over when the clock
   moves into the next one, so a test proves rollover and cache expiry by moving the

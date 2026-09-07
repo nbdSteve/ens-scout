@@ -141,13 +141,18 @@ func TestLocalCacheSweepsExpiredBeforeEvicting(t *testing.T) {
 
 // TestLocalCacheReplacesInPlace keeps a re-read answer for a set the layer already
 // holds from evicting an unrelated set, because replacing needs no room.
+//
+// The two expiries differ so the assertion is about replacement alone: if room were
+// made anyway, the entry dropped is the nearer one rather than whichever key map
+// iteration happened to reach first.
 func TestLocalCacheReplacesInPlace(t *testing.T) {
 	cache := newLocalCache(2)
-	expiresAt := checkTime.Add(time.Minute)
+	replaced := checkTime.Add(time.Minute)
+	other := checkTime.Add(30 * time.Second)
 
-	cache.put("a", []byte("first"), expiresAt, checkTime)
-	cache.put("b", []byte("other"), expiresAt, checkTime)
-	cache.put("a", []byte("second"), expiresAt, checkTime)
+	cache.put("a", []byte("first"), replaced, checkTime)
+	cache.put("b", []byte("other"), other, checkTime)
+	cache.put("a", []byte("second"), replaced, checkTime)
 
 	if cache.held() != 2 {
 		t.Fatalf("held = %d, want 2", cache.held())
