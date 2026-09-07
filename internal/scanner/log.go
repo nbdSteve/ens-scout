@@ -82,6 +82,7 @@ type Fields struct {
 	Names        int    `json:"names,omitempty"`
 	Scanned      int    `json:"scanned,omitempty"`
 	Carried      int    `json:"carried,omitempty"`
+	Dropped      int    `json:"dropped,omitempty"`
 	Batches      int    `json:"batches,omitempty"`
 	Lists        int    `json:"lists,omitempty"`
 	Chunks       int    `json:"chunks,omitempty"`

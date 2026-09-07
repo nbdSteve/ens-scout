@@ -96,7 +96,7 @@ func largeSnapshot(t *testing.T, count int) Snapshot {
 		results = append(results, ens.Classify(lookup, fixedNow, testSoon))
 	}
 
-	snapshot, err := Build("large-snapshot", fixedNow, testSources(len(results)), results)
+	snapshot, err := Build("large-snapshot", fixedNow, testSources(fixedNow, len(results)), results)
 	if err != nil {
 		t.Fatalf("Build large snapshot: %v", err)
 	}
@@ -343,9 +343,14 @@ func TestVerifyFailsClosedAgainstPointer(t *testing.T) {
 			want:   "belongs to snapshot",
 		},
 		{
-			name:   "scan time",
-			mutate: func(l *Latest) { l.ScannedAt = l.ScannedAt.Add(time.Hour) },
-			want:   "scan time disagrees",
+			// The scan time and the source instant that owns it move together, so the
+			// pointer stays internally valid and only the chunks can contradict it.
+			name: "scan time",
+			mutate: func(l *Latest) {
+				l.ScannedAt = l.ScannedAt.Add(time.Hour)
+				l.Sources[0].LastScannedAt = l.Sources[0].LastScannedAt.Add(time.Hour)
+			},
+			want: "scan time disagrees",
 		},
 		{
 			// The whole summary is moved together, so it stays internally
@@ -428,8 +433,8 @@ func TestVerifyFailsClosedAgainstPointer(t *testing.T) {
 			name: "unsorted sources",
 			mutate: func(l *Latest) {
 				l.Sources = []SourceList{
-					{ID: "b", Path: "b.txt", Cadence: CadenceThreeHourly, Names: 8},
-					{ID: "a", Path: "a.txt", Cadence: CadenceThreeHourly, Names: 0},
+					{ID: "b", Path: "b.txt", Cadence: CadenceThreeHourly, Names: 8, LastScannedAt: fixedNow},
+					{ID: "a", Path: "a.txt", Cadence: CadenceThreeHourly, Names: 0, LastScannedAt: fixedNow},
 				}
 			},
 			want: "source lists are not sorted by id",
@@ -446,6 +451,43 @@ func TestVerifyFailsClosedAgainstPointer(t *testing.T) {
 				t.Fatalf("error %q does not contain %q", err, test.want)
 			}
 		})
+	}
+}
+
+// TestVerifyRejectsAnEditedSourceScanTime covers the one summary field a pointer
+// can carry a lie about while still validating on its own: a carried list's
+// last-scanned instant. The pointer is what a client resolves per-source
+// staleness from without fetching a chunk, so a pointer claiming a carried list
+// was rescanned when the payload says otherwise has to be refused.
+//
+// It needs a merge-forward snapshot rather than the single-source one the table
+// above uses: with one source the instant must equal the scan time, so editing it
+// alone makes the pointer invalid before the comparison is reached.
+func TestVerifyRejectsAnEditedSourceScanTime(t *testing.T) {
+	carriedScan := fixedNow.Add(-20 * time.Hour)
+	results := lifecycleResults(t, fixedNow)
+	sources := []SourceList{
+		{ID: "carried", Path: "carried.txt", Cadence: CadenceDaily, Names: 1, LastScannedAt: carriedScan},
+		{ID: "fresh", Path: "fresh.txt", Cadence: CadenceThreeHourly, Names: len(results) - 1, LastScannedAt: fixedNow},
+	}
+	built, err := Build("merged-snapshot", fixedNow, sources, results)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	payload, err := Encode(built)
+	if err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+
+	latest := payload.Latest(fixedNow.Add(time.Minute))
+	latest.Sources[0].LastScannedAt = fixedNow
+	if err := latest.Validate(); err != nil {
+		t.Fatalf("the edited pointer is meant to validate on its own: %v", err)
+	}
+	if _, err := Verify(latest, CloneChunks(payload.Chunks)); err == nil {
+		t.Fatal("Verify accepted a pointer claiming a carried list was rescanned")
+	} else if !strings.Contains(err.Error(), "disagrees with its pointer") {
+		t.Fatalf("error %q does not report a source disagreement", err)
 	}
 }
 

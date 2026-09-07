@@ -197,13 +197,31 @@ function parseCounts(value: unknown, what: string): Record<Status, number> {
   return counts
 }
 
-function parseSources(value: unknown, what: string): SourceListDocument[] {
+/**
+ * Parses the source lists and checks each one's own last-scanned instant against
+ * the snapshot's scan time.
+ *
+ * Every list carries the instant it was really queried at, and a publisher that
+ * scans one group carries the other group's instant forward unchanged, so a
+ * carried instant is older than the snapshot's scan time and a scanned one equals
+ * it. Two rules follow, and both fail closed. No list may claim an instant after
+ * the scan time, because nothing in the snapshot was checked after it. And at
+ * least one list must have been scanned at it, because a snapshot whose scan time
+ * belongs to no list would let every list read as carried and the snapshot-wide
+ * age describe a scan that never happened.
+ *
+ * Nothing here substitutes the scan time for a missing instant. That substitution
+ * is the defect this field exists to remove: it made a list whose own schedule had
+ * stopped report the freshness of whichever group was still publishing.
+ */
+function parseSources(value: unknown, what: string, scannedAt: Date): SourceListDocument[] {
   const raw = asArray(value, what)
   if (raw.length === 0) {
     fail(`${what} must list at least one source list`)
   }
   const sources: SourceListDocument[] = []
   let previousId = ''
+  let scannedNow = false
   for (const [index, entry] of raw.entries()) {
     const where = `${what}[${String(index)}]`
     const record = asRecord(entry, where)
@@ -224,12 +242,24 @@ function parseSources(value: unknown, what: string): SourceListDocument[] {
       )
     }
     previousId = id
+    const lastScannedAt = asString(record['last_scanned_at'], `${where}.last_scanned_at`)
+    const instant = asInstant(lastScannedAt, `${where}.last_scanned_at`)
+    if (instant.getTime() > scannedAt.getTime()) {
+      fail(`${where}.last_scanned_at is after the snapshot scan time`)
+    }
+    if (instant.getTime() === scannedAt.getTime()) {
+      scannedNow = true
+    }
     sources.push({
       id,
       path,
       cadence: parseCadence(record['cadence'], `${where}.cadence`),
       names: asCount(record['names'], `${where}.names`),
+      last_scanned_at: lastScannedAt,
     })
+  }
+  if (!scannedNow) {
+    fail(`${what} holds no list that was scanned at the snapshot scan time`)
   }
   return sources
 }
@@ -328,9 +358,9 @@ export function parseSnapshotDocument(value: unknown): SnapshotDocument {
    * resolve, which is a document nothing downstream expects to have to cope with.
    */
   const scannedAt = asString(metadata['scanned_at'], 'snapshot.metadata.scanned_at')
-  asInstant(scannedAt, 'snapshot.metadata.scanned_at')
+  const scanTime = asInstant(scannedAt, 'snapshot.metadata.scanned_at')
 
-  const sources = parseSources(metadata['sources'], 'snapshot.metadata.sources')
+  const sources = parseSources(metadata['sources'], 'snapshot.metadata.sources', scanTime)
   const scanAge = parseScanAge(
     metadata['scan_age'],
     'snapshot.metadata.scan_age',
@@ -389,7 +419,20 @@ export function parseLatestDocument(value: unknown): LatestDocument {
     throw new SnapshotVersionError(version)
   }
 
-  const sources = parseSources(root['sources'], 'latest.sources')
+  /*
+   * The scan time is read before the sources, because each source's own instant is
+   * only meaningful against it. Reading the sources first would need the pointer's
+   * scan time to be validated twice or checked afterwards, and a check that runs
+   * after the value it guards has already been accepted is the shape this parser
+   * avoids everywhere else.
+   */
+  const scannedAt = asInstant(root['scanned_at'], 'latest.scanned_at')
+  const publishedAt = asInstant(root['published_at'], 'latest.published_at')
+  if (publishedAt.getTime() < scannedAt.getTime()) {
+    fail('latest.published_at precedes latest.scanned_at')
+  }
+
+  const sources = parseSources(root['sources'], 'latest.sources', scannedAt)
   const counts = parseCounts(root['counts'], 'latest.counts')
   const names = asCount(root['names'], 'latest.names')
   const sourceNames = sources.reduce((total, source) => total + source.names, 0)
@@ -404,12 +447,6 @@ export function parseLatestDocument(value: unknown): LatestDocument {
   }
   if (counted !== names) {
     fail(`latest.counts sum to ${String(counted)} but the pointer reports ${String(names)} names`)
-  }
-
-  const scannedAt = asInstant(root['scanned_at'], 'latest.scanned_at')
-  const publishedAt = asInstant(root['published_at'], 'latest.published_at')
-  if (publishedAt.getTime() < scannedAt.getTime()) {
-    fail('latest.published_at precedes latest.scanned_at')
   }
 
   const checksum = asString(root['checksum'], 'latest.checksum')
@@ -462,6 +499,21 @@ export function assertPointerMatches(document: SnapshotDocument, pointer: Latest
   if (pointer.names !== document.metadata.names) {
     fail(`the latest pointer name count disagrees with the snapshot body`)
   }
+  // Each list's own instant is what every per-list warning resolves against, and
+  // the pointer repeats it, so a disagreement here would let the disclosure and
+  // the summary describe two different scans of the same list.
+  if (pointer.sources.length !== document.metadata.sources.length) {
+    fail(`the latest pointer lists a different number of source lists than the snapshot body`)
+  }
+  for (const [index, source] of document.metadata.sources.entries()) {
+    const declared = pointer.sources[index]
+    if (declared === undefined) {
+      fail(`the latest pointer is missing source list ${JSON.stringify(source.id)}`)
+    }
+    if (declared.id !== source.id || declared.last_scanned_at !== source.last_scanned_at) {
+      fail(`the latest pointer source lists disagree with the snapshot body`)
+    }
+  }
 }
 
 /** Builds the browse-ready view of a validated document. */
@@ -485,7 +537,13 @@ export function toSnapshot(
     metadata: {
       snapshotId: document.metadata.snapshot_id,
       scannedAt: asInstant(document.metadata.scanned_at, 'snapshot.metadata.scanned_at'),
-      sources: document.metadata.sources.map((source) => ({ ...source })),
+      sources: document.metadata.sources.map((source) => ({
+        id: source.id,
+        path: source.path,
+        cadence: source.cadence,
+        names: source.names,
+        lastScannedAt: asInstant(source.last_scanned_at, `source ${source.id} last_scanned_at`),
+      })),
       expectedIntervalSeconds: document.metadata.scan_age.expected_interval_seconds,
       staleAfterSeconds: document.metadata.scan_age.stale_after_seconds,
       names: document.metadata.names,

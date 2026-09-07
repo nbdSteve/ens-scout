@@ -20,11 +20,69 @@ import type { LatestDocument, SnapshotDocument } from '../snapshot/types'
  * old it is.
  */
 
+/** The cache key without its version. Every version's key begins with this. */
+const CACHE_KEY_PREFIX = 'ens-scout.snapshot.v'
+
 /**
  * The format version is part of the key, so a `FormatVersion` bump cannot
  * resurrect bytes written by a build that read a different wire format.
  */
-export const CACHE_KEY = `ens-scout.snapshot.v${String(FORMAT_VERSION)}`
+export const CACHE_KEY = `${CACHE_KEY_PREFIX}${String(FORMAT_VERSION)}`
+
+/**
+ * Whether a key is one of these caches, from any wire version. It is built from
+ * the same prefix the key itself is, so the two cannot drift apart, and the tail
+ * has to be a version number and nothing else: the probe key and any other
+ * `ens-scout.snapshot.*` entry is not one of these and is left alone.
+ */
+function isCacheKey(key: string): boolean {
+  if (!key.startsWith(CACHE_KEY_PREFIX)) {
+    return false
+  }
+  return /^\d+$/.test(key.slice(CACHE_KEY_PREFIX.length))
+}
+
+/**
+ * Drops the caches written by a build that read a different wire format.
+ *
+ * A version bump changes the key, so those bytes are never read and never
+ * replaced: one snapshot-sized entry would sit in the origin's quota forever, and
+ * a current write that then hit the quota would give up the offline fallback to
+ * make room for nothing. Only keys of this exact shape are touched, and only the
+ * ones naming another version, so an unrelated entry from the same origin is
+ * never collateral.
+ *
+ * The keys are collected before any is removed, because removing during iteration
+ * reindexes the store and would skip the entry after each removal.
+ */
+function clearObsoleteCaches(storage: Storage): void {
+  try {
+    const obsolete: string[] = []
+    for (let index = 0; index < storage.length; index += 1) {
+      const key = storage.key(index)
+      if (key === null || key === CACHE_KEY || !isCacheKey(key)) {
+        continue
+      }
+      obsolete.push(key)
+    }
+    for (const key of obsolete) {
+      storage.removeItem(key)
+    }
+  } catch {
+    // A store that will not enumerate or will not remove keeps its orphan. That
+    // costs space and nothing else, so it never affects the current entry.
+  }
+}
+
+/** Writes the current entry, reporting whether the store accepted it. */
+function storeEntry(storage: Storage, serialized: string): boolean {
+  try {
+    storage.setItem(CACHE_KEY, serialized)
+    return true
+  } catch {
+    return false
+  }
+}
 
 export interface CacheEntry {
   readonly snapshot: SnapshotDocument
@@ -60,6 +118,11 @@ export function getLocalStorage(): Storage | null {
   }
 }
 
+/**
+ * Removes this build's cache, and any left behind by an older wire format along
+ * with it. Clearing is the one moment the whole family is known to be disposable,
+ * so it is where the orphans go.
+ */
 export function clearCache(storage: Storage | null): void {
   if (storage === null) {
     return
@@ -69,6 +132,7 @@ export function clearCache(storage: Storage | null): void {
   } catch {
     // A cache that cannot be cleared is still a cache that will be re-validated.
   }
+  clearObsoleteCaches(storage)
 }
 
 /**
@@ -139,12 +203,22 @@ export function writeCache(
     snapshot: entry.snapshot,
     latest: entry.latest,
   }
-  try {
-    storage.setItem(CACHE_KEY, JSON.stringify(payload))
-  } catch {
-    // A full or read-only store means no offline fallback, nothing worse. The
-    // stale entry that could not be replaced is dropped so it cannot be served
-    // as if it were this scan.
-    clearCache(storage)
+  const serialized = JSON.stringify(payload)
+  if (storeEntry(storage, serialized)) {
+    // The write proves this build's key is the only one it reads, so a cache under
+    // any other version is now unreachable: nothing will read it and nothing will
+    // replace it. Reclaiming its space is not conditional on the store being full.
+    clearObsoleteCaches(storage)
+    return
   }
+  // A full store may be full of exactly that, so make the room and try once more
+  // rather than give up the offline fallback to bytes nothing will ever serve.
+  clearObsoleteCaches(storage)
+  if (storeEntry(storage, serialized)) {
+    return
+  }
+  // A full or read-only store means no offline fallback, nothing worse. The stale
+  // entry that could not be replaced is dropped so it cannot be served as if it
+  // were this scan.
+  clearCache(storage)
 }

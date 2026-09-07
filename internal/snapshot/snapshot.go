@@ -27,7 +27,14 @@ import (
 //
 // Version 2 stores the fully-qualified name, "zap.eth", where version 1 stored
 // the bare label, "zap".
-const FormatVersion = 2
+//
+// Version 3 gives every source list its own last-scanned instant. Version 2
+// carried one scan time for the whole snapshot, so a reader had to measure every
+// source against it, and a merge-forward publication then reported a list whose
+// own schedule had stopped as freshly scanned. There is no fallback for a version
+// 2 payload: a reader rejects the version it does not know, and a publisher that
+// cannot read the stored pointer republishes past it, which is the migration.
+const FormatVersion = 3
 
 // NameSuffix is the parent zone every stored name carries. A snapshot records the
 // fully-qualified name that ens.Result, internal/report, and the CLI all use, so
@@ -81,6 +88,49 @@ type SourceList struct {
 	// Names is the number of unique labels this list contributed after
 	// cross-list deduplication, so the source counts sum to the result count.
 	Names int `json:"names"`
+	// LastScannedAt is the instant this list was last asked about, which is the
+	// snapshot scan time for a list the publishing run scanned and the older
+	// instant its own schedule last reached for a list carried forward. It is what
+	// makes each source's freshness its own: one pointer serves every group, so a
+	// reader measuring a carried list against the snapshot-wide scan time reports a
+	// list whose schedule has stopped as freshly scanned. It is always UTC with
+	// second precision and never after the snapshot scan time.
+	LastScannedAt time.Time `json:"last_scanned_at"`
+}
+
+// Equal reports whether two source lists describe the same list scanned at the
+// same instant.
+//
+// It exists because == on a struct holding a time.Time also compares the
+// location and the monotonic reading, neither of which a canonical snapshot may
+// depend on, and because a location that differs while the instant does not is
+// still not canonical form. Every comparison of stored sources goes through it.
+func (s SourceList) Equal(other SourceList) bool {
+	return s.ID == other.ID &&
+		s.Path == other.Path &&
+		s.Cadence == other.Cadence &&
+		s.Names == other.Names &&
+		s.LastScannedAt.Equal(other.LastScannedAt) &&
+		s.LastScannedAt.Location() == other.LastScannedAt.Location()
+}
+
+// ScanAgeInput reports the thresholds for this one list, from its own cadence
+// rather than from the slowest cadence in the snapshot.
+func (s SourceList) ScanAgeInput() (ScanAgeInput, error) {
+	return DeriveScanAgeInput([]SourceList{s})
+}
+
+// ResolveScanAge resolves this list's own staleness at now.
+//
+// It is the only way to resolve a source's age, so no caller can reach for the
+// snapshot-wide scan time by mistake. That substitution is the whole defect
+// LastScannedAt exists to remove.
+func (s SourceList) ResolveScanAge(now time.Time) (ScanAge, error) {
+	input, err := s.ScanAgeInput()
+	if err != nil {
+		return ScanAge{}, err
+	}
+	return input.At(s.LastScannedAt, now), nil
 }
 
 // Counts is the number of results in each lifecycle status. Every status in
@@ -203,7 +253,16 @@ func Build(snapshotID string, scannedAt time.Time, sources []SourceList, results
 		return Snapshot{}, err
 	}
 
-	normalizedSources, err := normalizeSources(sources)
+	scanTime := canonicalTime(scannedAt)
+	// Source instants are truncated here for the same reason scannedAt is, so a
+	// caller that passes a clock reading straight through gets canonical bytes.
+	// Validate is the strict half: it rejects an instant that is not already
+	// canonical rather than repairing a stored snapshot.
+	canonicalSources := cloneSources(sources)
+	for i := range canonicalSources {
+		canonicalSources[i].LastScannedAt = canonicalTime(canonicalSources[i].LastScannedAt)
+	}
+	normalizedSources, err := normalizeSources(canonicalSources, scanTime)
 	if err != nil {
 		return Snapshot{}, err
 	}
@@ -212,7 +271,6 @@ func Build(snapshotID string, scannedAt time.Time, sources []SourceList, results
 		return Snapshot{}, err
 	}
 
-	scanTime := canonicalTime(scannedAt)
 	normalizedResults := make([]ens.Result, 0, len(results))
 	for _, result := range results {
 		normalized, err := normalizeResult(result, scanTime)
@@ -271,12 +329,12 @@ func (s Snapshot) Validate() error {
 		return fmt.Errorf("snapshot scan time must be UTC with second precision")
 	}
 
-	expectedSources, err := normalizeSources(s.Metadata.Sources)
+	expectedSources, err := normalizeSources(s.Metadata.Sources, s.Metadata.ScannedAt)
 	if err != nil {
 		return err
 	}
 	for i, source := range s.Metadata.Sources {
-		if source != expectedSources[i] {
+		if !source.Equal(expectedSources[i]) {
 			return fmt.Errorf("snapshot source lists are not sorted by id")
 		}
 	}
@@ -352,10 +410,18 @@ func ValidateSnapshotID(snapshotID string) error {
 	return nil
 }
 
-func normalizeSources(sources []SourceList) ([]SourceList, error) {
+// normalizeSources validates a source set against the scan time it belongs to
+// and returns it in canonical order.
+//
+// scannedAt is required rather than optional because every rule about a source's
+// last-scanned instant is a rule about its relationship to the snapshot's own
+// scan time. A missing instant is refused instead of standing in for the scan
+// time, which is exactly the substitution that reported a stopped list as fresh.
+func normalizeSources(sources []SourceList, scannedAt time.Time) ([]SourceList, error) {
 	if len(sources) == 0 {
 		return nil, fmt.Errorf("at least one source list is required")
 	}
+	scanTime := canonicalTime(scannedAt)
 	normalized := make([]SourceList, 0, len(sources))
 	seen := make(map[string]struct{}, len(sources))
 	for _, source := range sources {
@@ -375,7 +441,34 @@ func normalizeSources(sources []SourceList) ([]SourceList, error) {
 			return nil, fmt.Errorf("duplicate source list id %q", source.ID)
 		}
 		seen[source.ID] = struct{}{}
+		if source.LastScannedAt.IsZero() {
+			return nil, fmt.Errorf("source %q needs a last scanned time", source.ID)
+		}
+		if !source.LastScannedAt.Equal(canonicalTime(source.LastScannedAt)) || source.LastScannedAt.Location() != time.UTC {
+			return nil, fmt.Errorf("source %q last scanned time must be UTC with second precision", source.ID)
+		}
+		// A list cannot have been scanned after the scan this snapshot records. Such
+		// an instant means the sources were assembled from a newer publication than
+		// the one being built, and carrying it would let a client resolve a source
+		// age against a moment that had not happened when the results were classified.
+		if source.LastScannedAt.After(scanTime) {
+			return nil, fmt.Errorf("source %q was last scanned after the snapshot scan time", source.ID)
+		}
 		normalized = append(normalized, source)
+	}
+	// The snapshot scan time is the instant a fresh scan classified at, so some
+	// list has to own it. A set where every instant is older describes a snapshot
+	// that scanned nothing and would still advance the pointer's scan time, which
+	// is how a snapshot-wide age could keep reading fresh with no list behind it.
+	scanned := false
+	for _, source := range normalized {
+		if source.LastScannedAt.Equal(scanTime) {
+			scanned = true
+			break
+		}
+	}
+	if !scanned {
+		return nil, fmt.Errorf("no source list was scanned at the snapshot scan time")
 	}
 	sort.Slice(normalized, func(i, j int) bool {
 		return normalized[i].ID < normalized[j].ID

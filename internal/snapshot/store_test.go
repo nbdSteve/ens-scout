@@ -94,7 +94,7 @@ func TestPutChunksIsIdempotentButNeverRevises(t *testing.T) {
 	// own but hold different bytes under the same id.
 	otherResults := lifecycleResults(t, fixedNow)
 	otherResults = otherResults[:len(otherResults)-1]
-	other, err := Build(snapshot.Metadata.SnapshotID, fixedNow, testSources(len(otherResults)), otherResults)
+	other, err := Build(snapshot.Metadata.SnapshotID, fixedNow, testSources(fixedNow, len(otherResults)), otherResults)
 	if err != nil {
 		t.Fatalf("Build the other snapshot: %v", err)
 	}
@@ -641,7 +641,7 @@ func TestFailedPublicationKeepsThePreviousSnapshot(t *testing.T) {
 
 	later := fixedNow.Add(3 * time.Hour)
 	secondResults := lifecycleResults(t, later)
-	second, err := Build("second-snapshot", later, testSources(len(secondResults)), secondResults)
+	second, err := Build("second-snapshot", later, testSources(later, len(secondResults)), secondResults)
 	if err != nil {
 		t.Fatalf("Build second snapshot: %v", err)
 	}
@@ -701,7 +701,7 @@ func TestSupersededSnapshotsAreRemovableAfterPublication(t *testing.T) {
 
 	later := fixedNow.Add(3 * time.Hour)
 	secondResults := lifecycleResults(t, later)
-	second, err := Build("second-snapshot", later, testSources(len(secondResults)), secondResults)
+	second, err := Build("second-snapshot", later, testSources(later, len(secondResults)), secondResults)
 	if err != nil {
 		t.Fatalf("Build second snapshot: %v", err)
 	}
@@ -895,7 +895,7 @@ func TestStoresKeepThePointerMonotonic(t *testing.T) {
 
 	earlier := fixedNow.Add(-3 * time.Hour)
 	earlierResults := lifecycleResults(t, earlier)
-	earlierSnapshot, err := Build("earlier-snapshot", earlier, testSources(len(earlierResults)), earlierResults)
+	earlierSnapshot, err := Build("earlier-snapshot", earlier, testSources(earlier, len(earlierResults)), earlierResults)
 	if err != nil {
 		t.Fatalf("Build earlier snapshot: %v", err)
 	}
@@ -903,7 +903,7 @@ func TestStoresKeepThePointerMonotonic(t *testing.T) {
 
 	later := fixedNow.Add(3 * time.Hour)
 	laterResults := lifecycleResults(t, later)
-	laterSnapshot, err := Build("later-snapshot", later, testSources(len(laterResults)), laterResults)
+	laterSnapshot, err := Build("later-snapshot", later, testSources(later, len(laterResults)), laterResults)
 	if err != nil {
 		t.Fatalf("Build later snapshot: %v", err)
 	}
@@ -912,7 +912,7 @@ func TestStoresKeepThePointerMonotonic(t *testing.T) {
 	// A second scan of the same instant under a different id: the same-time
 	// conflict a real backend has to refuse.
 	rivalResults := lifecycleResults(t, fixedNow)
-	rivalSnapshot, err := Build("rival-snapshot", fixedNow, testSources(len(rivalResults)), rivalResults)
+	rivalSnapshot, err := Build("rival-snapshot", fixedNow, testSources(fixedNow, len(rivalResults)), rivalResults)
 	if err != nil {
 		t.Fatalf("Build the rival snapshot: %v", err)
 	}
@@ -1014,7 +1014,7 @@ func TestPublishRefusesAnOutOfOrderScan(t *testing.T) {
 
 	earlier := fixedNow.Add(-3 * time.Hour)
 	earlierResults := lifecycleResults(t, earlier)
-	older, err := Build("earlier-snapshot", earlier, testSources(len(earlierResults)), earlierResults)
+	older, err := Build("earlier-snapshot", earlier, testSources(earlier, len(earlierResults)), earlierResults)
 	if err != nil {
 		t.Fatalf("Build the earlier snapshot: %v", err)
 	}
@@ -1215,8 +1215,11 @@ func TestFileStoreDetectsTamperedFiles(t *testing.T) {
 			want: "checksum mismatch",
 		},
 		{
-			name:   "pointer file edited",
-			damage: editLatestFile(`"format_version":2`, `"format_version":99`),
+			name: "pointer file edited",
+			// The version to damage is read from the constant rather than written out,
+			// so a FormatVersion bump does not turn this case into one that edits a
+			// field the pointer no longer holds.
+			damage: editLatestFile(fmt.Sprintf(`"format_version":%d`, FormatVersion), `"format_version":99`),
 			want:   "unsupported latest pointer format version",
 		},
 		{
@@ -1239,8 +1242,10 @@ func TestFileStoreDetectsTamperedFiles(t *testing.T) {
 			want:   "counts sum to 105 but the pointer reports 8 names",
 		},
 		{
-			name:   "pointer source name total edited",
-			damage: editLatestFile(`"names":8}]`, `"names":99}]`),
+			name: "pointer source name total edited",
+			// The trailing last_scanned_at is what makes this the source's own count
+			// rather than the pointer's snapshot-wide one, which holds the same number.
+			damage: editLatestFile(`"names":8,"last_scanned_at"`, `"names":99,"last_scanned_at"`),
 			want:   "source lists account for 99 names but the pointer reports 8",
 		},
 		{
@@ -1319,7 +1324,7 @@ func TestFileStorePutLatestReplacesAnUnreadablePointer(t *testing.T) {
 		},
 		{
 			name:     "truncated json",
-			contents: `{"format_version":2,"snapshot_id":"test-sna`,
+			contents: fmt.Sprintf(`{"format_version":%d,"snapshot_id":"test-sna`, FormatVersion),
 			wantRead: "read latest snapshot pointer",
 		},
 		{
@@ -1333,8 +1338,11 @@ func TestFileStorePutLatestReplacesAnUnreadablePointer(t *testing.T) {
 			wantRead: "unsupported latest pointer format version",
 		},
 		{
+			// The supported version is read from the constant, so this case keeps
+			// exercising a pointer that parses and then fails validation rather than
+			// one that a FormatVersion bump has quietly turned into the case above.
 			name:     "a valid version that fails validation",
-			contents: `{"format_version":2,"snapshot_id":"old-snapshot"}`,
+			contents: fmt.Sprintf(`{"format_version":%d,"snapshot_id":"old-snapshot"}`, FormatVersion),
 			wantRead: "latest pointer needs a scan time",
 		},
 	}
@@ -1400,7 +1408,7 @@ func TestFileStorePutLatestReplacesAnUnreadablePointer(t *testing.T) {
 
 			// A second publication over a valid pointer quarantines nothing more.
 			laterResults := lifecycleResults(t, fixedNow.Add(3*time.Hour))
-			later, err := Build("later-snapshot", fixedNow.Add(3*time.Hour), testSources(len(laterResults)), laterResults)
+			later, err := Build("later-snapshot", fixedNow.Add(3*time.Hour), testSources(fixedNow.Add(3*time.Hour), len(laterResults)), laterResults)
 			if err != nil {
 				t.Fatalf("Build the later snapshot: %v", err)
 			}
@@ -1488,7 +1496,7 @@ func TestFileStorePutLatestStillRefusesAnOlderReadablePointer(t *testing.T) {
 
 	earlier := fixedNow.Add(-3 * time.Hour)
 	earlierResults := lifecycleResults(t, earlier)
-	older, err := Build("earlier-snapshot", earlier, testSources(len(earlierResults)), earlierResults)
+	older, err := Build("earlier-snapshot", earlier, testSources(earlier, len(earlierResults)), earlierResults)
 	if err != nil {
 		t.Fatalf("Build the earlier snapshot: %v", err)
 	}

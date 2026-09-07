@@ -28,19 +28,30 @@ import {
 
 /*
  * The module runs under jsdom, where `import.meta.url` is an `http:` URL and
- * cannot be resolved to a path, so the repository is found by walking up to
- * `go.mod`. That also makes the test indifferent to which directory the runner
- * was started from.
+ * cannot be resolved to a path, so the repository is found by walking up to the
+ * `go.mod` that declares the root module. That also makes the test indifferent to
+ * which directory the runner was started from.
+ *
+ * The nearest `go.mod` up is not the root: `web/` and `infra/` each hold one whose
+ * only job is to prune that directory from the root module's package walk. Naming
+ * the module is what tells those apart from the module that owns the Go sources
+ * read below, and stopping at one of them would fail this test on a path that does
+ * not exist rather than on a drift.
  */
+const ROOT_MODULE = /^module\s+ens-scrape\s*$/m
+
 function repositoryRoot(): string {
   let current = resolve(process.cwd())
   for (;;) {
-    if (existsSync(join(current, 'go.mod'))) {
+    const candidate = join(current, 'go.mod')
+    if (existsSync(candidate) && ROOT_MODULE.test(readFileSync(candidate, 'utf8'))) {
       return current
     }
     const parent = dirname(current)
     if (parent === current) {
-      throw new Error('no go.mod above the working directory, so the Go sources cannot be read')
+      throw new Error(
+        'no go.mod declaring the root module above the working directory, so the Go sources cannot be read',
+      )
     }
     current = parent
   }

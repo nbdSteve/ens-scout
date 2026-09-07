@@ -34,6 +34,15 @@ var (
 	fixtureStaleAge = 72 * time.Hour
 	// fixturePublishDelay is the gap between a fixture scan and its pointer.
 	fixturePublishDelay = 2 * time.Minute
+	// fixtureCarriedAge is how long before a fixture's scan time its daily list was
+	// last scanned. Every fixture is therefore a merge-forward publication, which is
+	// what almost every real snapshot is: the three-hourly lists carry the scan time
+	// of the run that published, and the daily list carries the older instant its own
+	// schedule last reached. It is under the daily stale threshold of 48 hours, so a
+	// fixture is fresh in every list by default, and it is large enough that moving a
+	// simulated clock forward can make the daily list stale while the snapshot as a
+	// whole still reads fresh - the case a shared scan time could not express.
+	fixtureCarriedAge = 20 * time.Hour
 )
 
 // FixtureNames lists the bundled fixtures in a stable order.
@@ -70,7 +79,7 @@ func Fixture(name string) (Snapshot, error) {
 	}
 
 	candidates := fixtureCandidates()
-	sources := fixtureSources(candidates)
+	sources := fixtureSources(candidates, scannedAt)
 	results := make([]ens.Result, 0, len(candidates))
 	for _, candidate := range candidates {
 		// ens.Client hands the classifier the fully-qualified name, so the fixture
@@ -127,11 +136,11 @@ func fixtureCandidates() []fixtureCandidate {
 	}
 }
 
-func fixtureSources(candidates []fixtureCandidate) []SourceList {
+func fixtureSources(candidates []fixtureCandidate, scannedAt time.Time) []SourceList {
 	definitions := []SourceList{
-		{ID: "three-letters", Path: "data/words/3-letters.txt", Cadence: CadenceThreeHourly},
-		{ID: "four-letters", Path: "data/words/4-letters.txt", Cadence: CadenceThreeHourly},
-		{ID: "five-letters", Path: "data/words/5-letters.txt", Cadence: CadenceDaily},
+		{ID: "three-letters", Path: "data/words/3-letters.txt", Cadence: CadenceThreeHourly, LastScannedAt: scannedAt},
+		{ID: "four-letters", Path: "data/words/4-letters.txt", Cadence: CadenceThreeHourly, LastScannedAt: scannedAt},
+		{ID: "five-letters", Path: "data/words/5-letters.txt", Cadence: CadenceDaily, LastScannedAt: scannedAt.Add(-fixtureCarriedAge)},
 	}
 	for i := range definitions {
 		for _, candidate := range candidates {

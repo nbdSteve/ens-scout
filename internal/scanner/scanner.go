@@ -542,10 +542,43 @@ func Run(ctx context.Context, deps Dependencies, event Event) (Result, error) {
 		return Result{}, deps.fail(logger, "previous_snapshot_read_failed", Fields{Group: group}, err)
 	}
 
+	// A stored snapshot scanned later than this run's own instant means the other
+	// schedule has already published past it. That is a lost pointer race, which the
+	// pointer write would refuse anyway, and it is classified here rather than left
+	// to surface further down: a carried list keeps the instant the previous snapshot
+	// recorded for it, so every one of those instants is later than this scan's, and
+	// the contract would refuse the whole build over a source timestamp. Refusing
+	// there is correct for a malformed payload and misleading for a benign overlap,
+	// so the run says which one this is while it can still tell.
+	if previous != nil && previous.Metadata.ScannedAt.After(stats.ClassifiedAt) {
+		err := fmt.Errorf("%w: snapshot %s was scanned at %s, before the published snapshot %s at %s",
+			snapshot.ErrPointerConflict,
+			snapshotID(group, stats.ClassifiedAt), stats.ClassifiedAt.Format(time.RFC3339),
+			previous.Metadata.SnapshotID, previous.Metadata.ScannedAt.Format(time.RFC3339))
+		return Result{}, deps.fail(logger, "publish_failed", Fields{
+			Group:      group,
+			SnapshotID: snapshotID(group, stats.ClassifiedAt),
+			PreviousID: previous.Metadata.SnapshotID,
+		}, err)
+	}
+
+	// Each list the previous snapshot published, with the instant that list was
+	// last actually asked about. A carried list keeps its own instant, so a list
+	// whose schedule has stopped goes stale on the site while this group keeps
+	// publishing. Nothing here substitutes this run's scan time for a missing one.
+	previousScans := previousScanTimes(previous)
+
 	// Every published status is checked against the instant the scan classified
 	// at, so carried results are re-derived at that same instant and the snapshot
 	// is built with it rather than with a freshly sampled clock.
-	carried, err := snapshot.CarryForward(carryForwardResults(previous, owner, group), stats.ClassifiedAt, deps.Config.Soon)
+	kept, unattributed := carryForwardResults(previous, owner, group, previousScans)
+	if unattributed > 0 {
+		// A carried name whose owning list the previous snapshot never published has
+		// no instant to keep, so it is dropped rather than published with a freshness
+		// this run cannot support. It returns on its own list's next schedule.
+		logger.Log(LevelWarn, "carry_forward_unattributed", Fields{Group: group, Dropped: unattributed})
+	}
+	carried, err := snapshot.CarryForward(kept, stats.ClassifiedAt, deps.Config.Soon)
 	if err != nil {
 		return Result{}, deps.fail(logger, "carry_forward_failed", Fields{Group: group}, err)
 	}
@@ -554,7 +587,7 @@ func Run(ctx context.Context, deps Dependencies, event Event) (Result, error) {
 	combined = append(combined, results...)
 	combined = append(combined, carried...)
 
-	sources, err := deriveSources(inputs, owner, combined)
+	sources, err := deriveSources(inputs, owner, combined, group, stats.ClassifiedAt, previousScans)
 	if err != nil {
 		return Result{}, deps.fail(logger, "source_attribution_failed", Fields{Group: group}, err)
 	}
@@ -732,21 +765,44 @@ func freshLabels(inputs []listInput, group Group) []string {
 	return fresh
 }
 
+// previousScanTimes maps each list the previous snapshot published to the instant
+// that list was last actually scanned. A nil snapshot yields a nil map, which is a
+// bootstrap: nothing is carried, so nothing needs an instant.
+func previousScanTimes(previous *snapshot.Snapshot) map[string]time.Time {
+	if previous == nil {
+		return nil
+	}
+	scans := make(map[string]time.Time, len(previous.Metadata.Sources))
+	for _, source := range previous.Metadata.Sources {
+		scans[source.ID] = source.LastScannedAt
+	}
+	return scans
+}
+
 // carryForwardResults selects the previously published results this run keeps
 // without rescanning: the ones owned by a list some other schedule scans.
 //
 // A result whose name no longer belongs to any list is dropped, so removing a
 // label from a word list removes it from the next snapshot rather than pinning it
 // forever.
-func carryForwardResults(previous *snapshot.Snapshot, owner map[string]string, group Group) []ens.Result {
+//
+// A result whose owning list has no instant in previousScans is dropped for a
+// related reason. That list contributed nothing to the previous snapshot, so there
+// is no record of when it was last scanned, and the only alternatives would be to
+// publish it as freshly scanned - the false-fresh report this timestamp exists to
+// remove - or to fail the whole publication over a label that moved between lists.
+// Dropping it loses the name from the site until that list's own next schedule,
+// which is at most one cadence away, and the count is returned so the run says so.
+func carryForwardResults(previous *snapshot.Snapshot, owner map[string]string, group Group, previousScans map[string]time.Time) ([]ens.Result, int) {
 	if previous == nil {
-		return nil
+		return nil, 0
 	}
 	carriedGroups := make(map[string]Group, len(Lists))
 	for _, spec := range Lists {
 		carriedGroups[spec.ID] = spec.Group
 	}
 	carried := make([]ens.Result, 0, len(previous.Results))
+	unattributed := 0
 	for _, result := range previous.Results {
 		listID, known := owner[result.Name]
 		if !known {
@@ -755,9 +811,13 @@ func carryForwardResults(previous *snapshot.Snapshot, owner map[string]string, g
 		if carriedGroups[listID] == group {
 			continue
 		}
+		if _, scanned := previousScans[listID]; !scanned {
+			unattributed++
+			continue
+		}
 		carried = append(carried, result)
 	}
-	return carried
+	return carried, unattributed
 }
 
 // deriveSources counts what each list contributed to the published results.
@@ -770,7 +830,23 @@ func carryForwardResults(previous *snapshot.Snapshot, owner map[string]string, g
 // A result no list claims is an error rather than an uncounted extra, because the
 // counts are what a client reads without fetching a chunk, and snapshot.Build
 // requires them to sum to the result count.
-func deriveSources(inputs []listInput, owner map[string]string, results []ens.Result) ([]snapshot.SourceList, error) {
+//
+// Each source also carries when its own list was last scanned. A list this run
+// scanned carries scannedAt, the instant checker.Run classified against; a list
+// carried forward keeps the instant the previous snapshot recorded for it, so its
+// timestamp advances only when its own schedule runs. There is no fallback to
+// scannedAt for a carried list with no recorded instant: that substitution is what
+// reported a stopped list as fresh, so it is refused. carryForwardResults has
+// already dropped every result such a list owned, so a list with no instant
+// contributes no name and is skipped before the check can reach it.
+func deriveSources(
+	inputs []listInput,
+	owner map[string]string,
+	results []ens.Result,
+	group Group,
+	scannedAt time.Time,
+	previousScans map[string]time.Time,
+) ([]snapshot.SourceList, error) {
 	counts := make(map[string]int, len(inputs))
 	for _, result := range results {
 		listID, known := owner[result.Name]
@@ -785,11 +861,20 @@ func deriveSources(inputs []listInput, owner map[string]string, results []ens.Re
 		if count == 0 {
 			continue
 		}
+		lastScannedAt := scannedAt
+		if input.Spec.Group != group {
+			previous, scanned := previousScans[input.Spec.ID]
+			if !scanned {
+				return nil, fmt.Errorf("carried list %q has no previously published scan time", input.Spec.ID)
+			}
+			lastScannedAt = previous
+		}
 		sources = append(sources, snapshot.SourceList{
-			ID:      input.Spec.ID,
-			Path:    input.Spec.Path,
-			Cadence: input.Spec.Cadence,
-			Names:   count,
+			ID:            input.Spec.ID,
+			Path:          input.Spec.Path,
+			Cadence:       input.Spec.Cadence,
+			Names:         count,
+			LastScannedAt: lastScannedAt,
 		})
 	}
 	if len(sources) == 0 {

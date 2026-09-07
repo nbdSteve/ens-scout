@@ -14,9 +14,11 @@ import type { SnapshotOrigin } from '../state/useSnapshot'
  * derived from so a wrong local clock cannot make the page lie without also
  * showing the evidence.
  *
- * Each source list is then shown against its own schedule, because a snapshot
- * carries lists on different cadences and a three-hourly list is overdue long
- * before a daily one.
+ * Each source list is then shown against its own schedule and its own last-scanned
+ * instant, because a snapshot carries lists on different cadences and a
+ * three-hourly list is overdue long before a daily one. The instant is per list
+ * rather than the scan time above: a publisher scans one group and carries the
+ * other forward, so the two differ whenever the list shown was not the one queried.
  */
 export interface SnapshotStatusProps {
   readonly snapshot: Snapshot
@@ -140,6 +142,15 @@ export function SnapshotStatus({
                 <span>
                   {group.source.names.toLocaleString('en-GB')}{' '}
                   {group.source.names === 1 ? 'name' : 'names'}, scanned {group.cadenceLabel}
+                </span>
+                {/* Its own instant, which is what the line below is measured from.
+                    A carried list is older than the scan above, so stating the
+                    schedule without the instant would leave the two unrelatable. */}
+                <span>
+                  Last scanned{' '}
+                  <time className="mono" dateTime={toIsoSecond(group.source.lastScannedAt)}>
+                    {formatAbsolute(group.source.lastScannedAt)}
+                  </time>
                 </span>
                 <span>
                   {group.scanAge.isStale
