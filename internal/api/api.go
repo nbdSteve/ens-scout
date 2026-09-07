@@ -2,22 +2,33 @@
 //
 // It is the read half of the website. A browser fetches one snapshot, keeps it
 // locally, and does every filter, sort, and countdown itself, so ordinary
-// browsing never reaches DynamoDB or The Graph. This package therefore does two
-// things and no more: it resolves the snapshot the latest pointer names, and it
-// answers conditionally so an unchanged snapshot is never retransmitted.
+// browsing never reaches DynamoDB or The Graph. The snapshot paths therefore do
+// two things and no more: they resolve the snapshot the latest pointer names, and
+// they answer conditionally so an unchanged snapshot is never retransmitted.
 //
-// It adds no ENS logic. Lifecycle classification, checksums, chunk assembly, and
-// canonical serialization are all internal/snapshot. The body returned for
-// GET /api/snapshot is byte-identical to the canonical JSON that was published,
-// so its SHA-256 is the checksum the latest pointer carries.
+// PathCheck is the one path that leaves the process, because a published snapshot
+// is minutes to hours old and no outbound registration link may rest on it. Its
+// bounds, its allowances, and the shared store that holds them are in
+// checkconfig.go and check.go; a deployment that configures no upstream client
+// does not serve it at all.
+//
+// It adds no ENS logic of its own. Lifecycle classification, checksums, chunk
+// assembly, and canonical serialization are all internal/snapshot, and a fresh
+// check reuses names.Normalize, checker.Run, and ens.Classify rather than adding
+// a second classifier. The body returned for GET /api/snapshot is byte-identical
+// to the canonical JSON that was published, so its SHA-256 is the checksum the
+// latest pointer carries.
 //
 // It is not an availability authority. The subgraph is an index rather than the
-// registration authority, and a snapshot is one scan of that index at one
-// instant, so every response carries the scan time and the Advisory below.
+// registration authority, and neither a snapshot nor a fresh check is more than
+// one scan of that index at one instant, so every response carries the instant it
+// describes and the Advisory below.
 //
-// Nothing here depends on AWS or on any outbound HTTP client. The store is the
-// read-only half of the snapshot contract, so the whole surface is exercised
-// against snapshot.MemoryStore with no network and no credentials.
+// Nothing here depends on AWS, and the snapshot store is the read-only half of
+// the snapshot contract. The upstream client, the shared allowance store, and the
+// clock are all injected, so the whole surface is exercised against
+// snapshot.MemoryStore, checkstore.MemoryStore, and local fakes, with no network
+// and no credentials.
 package api
 
 import (

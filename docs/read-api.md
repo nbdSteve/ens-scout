@@ -464,9 +464,11 @@ The window is derived from the clock rather than from when a key was first seen,
 That is what makes two instances agree, and it is also why a counter whose TTL has not yet swept it is harmless: it belongs to a window nothing live addresses.
 A refused charge advertises the end of the window that refused it.
 
-The result cache holds rendered response bytes, keyed on a SHA-256 digest of the deduplicated, sorted, fully-qualified names.
+The result cache holds rendered response bytes, keyed on a SHA-256 digest of `format_version` and the deduplicated, sorted, fully-qualified names.
 Caching the bytes rather than the results is the point: a hit returns the `checked_at` the miss returned, so a client polling a cached answer is told when the answer was really taken and not when it asked.
 That holds across instances too, because the bytes one instance stored are the bytes any other serves.
+It is also why the version is part of the key: a rolling deployment runs both versions over one store, and an entry written by one shape would otherwise be returned verbatim by an instance of the other, handing a client a document its own parser refuses for as long as the entry lives.
+Bumping the response version therefore orphans every key the previous one wrote, which is the same rule the browser's own local cache key follows.
 Two requests naming the same labels in any order, with any repetition, produce one key.
 An expired entry is a miss on both the store's own expiry judgement and its TTL, so a stale answer is never served under a fresh instant.
 
