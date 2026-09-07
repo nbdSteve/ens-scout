@@ -139,6 +139,10 @@ definition instead of copying it:
 - the table's key and TTL attribute names, from `internal/dynamo/item.go`;
 - the DynamoDB action set the scanner's role allows, derived from the method names on
   `internal/dynamo`'s `API` interface, one per action;
+- the actions the fresh-check store calls, derived from `CheckAPI` the same way, which
+  has to stay a subset of `API` so serving the read API needs no wider policy;
+- the environment variable that names the check client secret, from
+  `internal/api/checkconfig.go`, which this stack must not set;
 - the scanner's environment variable names, from `internal/scanner/scanner.go`;
 - the two scan group strings, from the same file;
 - the word lists the bundle must ship, from that file's `Lists`;
@@ -263,3 +267,18 @@ knob would be dead configuration.
 Issue #4 asks for a parameterized recovery TTL; the parameter that exists is the TTL
 attribute name, which has to match the publisher.
 Changing the window means changing the staleness thresholds in `internal/snapshot`.
+
+**One table, and the fresh-check allowances live in it too.** `internal/checkstore` is
+the authority for the per-client throttle, the upstream budget, and the short-lived
+result cache, because a Lambda deployment runs many instances at once and a per-instance
+allowance is that allowance times however many instances a caller reaches.
+`internal/dynamo.CheckStore` puts all three in this table under their own partition
+prefixes, which cannot collide with a snapshot key, so nothing here provisions a second
+table.
+What the table owes them is the two string keys and TTL on the same attribute the
+publisher uses, and `test/check-store.test.ts` asserts exactly that against the Go
+definitions.
+The read API that will charge those allowances is a later phase, so this stack sets no
+`ENS_API_CHECK_*` variable and defines no second secret; the same suite asserts both,
+because the check client secret has to be stable across instances and a stack that put
+one in a scanner environment would be materializing a credential nothing reads.
