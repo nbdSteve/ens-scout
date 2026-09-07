@@ -2,22 +2,33 @@
 //
 // It is the read half of the website. A browser fetches one snapshot, keeps it
 // locally, and does every filter, sort, and countdown itself, so ordinary
-// browsing never reaches DynamoDB or The Graph. This package therefore does two
-// things and no more: it resolves the snapshot the latest pointer names, and it
-// answers conditionally so an unchanged snapshot is never retransmitted.
+// browsing never reaches DynamoDB or The Graph. The snapshot paths therefore do
+// two things and no more: they resolve the snapshot the latest pointer names, and
+// they answer conditionally so an unchanged snapshot is never retransmitted.
 //
-// It adds no ENS logic. Lifecycle classification, checksums, chunk assembly, and
-// canonical serialization are all internal/snapshot. The body returned for
-// GET /api/snapshot is byte-identical to the canonical JSON that was published,
-// so its SHA-256 is the checksum the latest pointer carries.
+// PathCheck is the one path that leaves the process, because a published snapshot
+// is minutes to hours old and no outbound registration link may rest on it. Its
+// bounds, its allowances, and the shared store that holds them are in
+// checkconfig.go and check.go; a deployment that configures no upstream client
+// does not serve it at all.
+//
+// It adds no ENS logic of its own. Lifecycle classification, checksums, chunk
+// assembly, and canonical serialization are all internal/snapshot, and a fresh
+// check reuses names.Normalize, checker.Run, and ens.Classify rather than adding
+// a second classifier. The body returned for GET /api/snapshot is byte-identical
+// to the canonical JSON that was published, so its SHA-256 is the checksum the
+// latest pointer carries.
 //
 // It is not an availability authority. The subgraph is an index rather than the
-// registration authority, and a snapshot is one scan of that index at one
-// instant, so every response carries the scan time and the Advisory below.
+// registration authority, and neither a snapshot nor a fresh check is more than
+// one scan of that index at one instant, so every response carries the instant it
+// describes and the Advisory below.
 //
-// Nothing here depends on AWS or on any outbound HTTP client. The store is the
-// read-only half of the snapshot contract, so the whole surface is exercised
-// against snapshot.MemoryStore with no network and no credentials.
+// Nothing here depends on AWS, and the snapshot store is the read-only half of
+// the snapshot contract. The upstream client, the shared allowance store, and the
+// clock are all injected, so the whole surface is exercised against
+// snapshot.MemoryStore, checkstore.MemoryStore, and local fakes, with no network
+// and no credentials.
 package api
 
 import (
@@ -29,11 +40,14 @@ import (
 	"sync"
 	"time"
 
+	"ens-scrape/internal/checkstore"
 	"ens-scrape/internal/snapshot"
 )
 
-// Request paths. There are three, and an unknown path is a 404 rather than a
-// prefix match, so no future path can be reached by accident.
+// Request paths. An unknown path is a 404 rather than a prefix match, so no future
+// path can be reached by accident. PathCheck is in checkconfig.go, beside the
+// bounds that govern it, and a deployment that configures no upstream client does
+// not serve it at all.
 const (
 	// PathSnapshot returns the whole published snapshot.
 	PathSnapshot = "/api/snapshot"
@@ -114,8 +128,19 @@ type Config struct {
 	// RetrySeconds is the Retry-After on a response that has no snapshot to serve.
 	RetrySeconds int
 
-	// Now is the clock. It is used only for the resolved age on /health, which is
-	// uncacheable for exactly that reason; nothing cacheable depends on it.
+	// Check configures PathCheck. A nil value means this deployment serves the
+	// published snapshot only, and PathCheck is then a 404 like any other path this
+	// API does not serve, so a read-only deployment cannot be made to reach The Graph
+	// by request.
+	Check *CheckConfig
+
+	// Now is the clock.
+	//
+	// Nothing cacheable depends on it. It resolves the age on /health, which is
+	// uncacheable for exactly that reason, and it drives the check path's throttle
+	// windows, result-cache expiry, and classification instant, none of which reach a
+	// cacheable response either: a check response is no-store, and the instant it
+	// carries is stated rather than resolved.
 	Now func() time.Time
 }
 
@@ -191,6 +216,24 @@ func (c Config) Validate() error {
 	if c.Store == nil {
 		return fmt.Errorf("a snapshot store is required")
 	}
+	if c.Check != nil {
+		// A configured check path with no client would answer every request with an
+		// upstream failure. Refusing at cold start says so once instead.
+		if c.Check.Upstream == nil {
+			return fmt.Errorf("%s needs an upstream ENS client", PathCheck)
+		}
+		// And one with no shared store would answer every request with a store failure,
+		// which is the right refusal but the wrong place to discover it. The store is
+		// required rather than optional deliberately: a deployment must not be able to
+		// serve this path with its limits held in process, because that is the bypass a
+		// shared store exists to close.
+		if c.Check.Store == nil {
+			return fmt.Errorf("%s needs a shared check store", PathCheck)
+		}
+		if err := c.Check.validate(); err != nil {
+			return err
+		}
+	}
 	return c.validateSettings()
 }
 
@@ -256,11 +299,31 @@ type Handler struct {
 	config       Config
 	cacheControl string
 
+	// corsMethods and corsHeaders are the union of what this deployment serves, so a
+	// browser is told about PathCheck only where it exists.
+	corsMethods string
+	corsHeaders string
+
 	// mutex is held across the whole resolve, including the store reads. That
 	// bounds concurrent chunk fetches to one per instance: a burst against a cold
 	// cache costs one read of the snapshot rather than one per request.
 	mutex  sync.Mutex
 	cached *cachedSnapshot
+
+	// The check path, or nil where the deployment does not offer one. Every piece of
+	// it is built once, at cold start, so no request allocates one and no request can
+	// widen one.
+	//
+	// checkStore is the authority for both allowances and for the result cache, and it
+	// is shared and durable. localResults is a copy of what it holds and upstreamGate
+	// counts this instance's in-flight requests; those two are the only per-instance
+	// state here, and neither is an allowance.
+	check        *CheckConfig
+	checkStore   checkstore.Store
+	localResults *localCache
+	upstreamGate *gate
+	clientHash   *clientHasher
+	checkLog     *checkLogger
 }
 
 // New returns a Handler for a validated configuration.
@@ -271,12 +334,39 @@ func New(config Config) (*Handler, error) {
 	if config.Now == nil {
 		config.Now = time.Now
 	}
-	return &Handler{
+	handler := &Handler{
 		config: config,
 		// must-revalidate keeps a shared cache from serving a stale snapshot without
 		// asking, which is what makes a short max-age safe rather than a guess.
 		cacheControl: fmt.Sprintf("public, max-age=%d, must-revalidate", config.CacheSeconds),
-	}, nil
+		corsMethods:  allowedMethods,
+		corsHeaders:  corsRequestHeaders,
+	}
+	if config.Check == nil {
+		return handler, nil
+	}
+
+	check := *config.Check
+	hasher, err := newClientHasher(check.ClientSecret)
+	if err != nil {
+		// Failing closed rather than falling back to an unkeyed or a per-process key.
+		// An unkeyed digest of an address is undone by hashing the address space, and a
+		// per-process key hands every new instance a fresh set of allowances.
+		return nil, err
+	}
+	handler.check = &check
+	handler.checkStore = check.Store
+	handler.clientHash = hasher
+	handler.upstreamGate = newGate(check.UpstreamConcurrency)
+	handler.localResults = newLocalCache(check.LocalCacheEntries)
+	handler.checkLog = newCheckLogger(check.Log, config.Now)
+
+	// A browser sending a JSON body needs Content-Type through the preflight, and it
+	// needs POST among the methods. Both are advertised only here, so a deployment
+	// serving the snapshot alone does not describe a surface it does not have.
+	handler.corsMethods = allowedMethods + ", " + http.MethodPost
+	handler.corsHeaders = corsRequestHeaders + ", Content-Type"
+	return handler, nil
 }
 
 // ServeHTTP routes one request.
@@ -287,17 +377,26 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	header.Set("Vary", "Origin")
 	h.applyCORS(header, r.Header.Get("Origin"))
 
+	// The path is resolved before the method, so an unknown path is a 404 on every
+	// method including OPTIONS. A preflight that answered 204 for a path this API
+	// does not serve would let a browser discover a future endpoint before it exists.
+	serves, known := h.routeFor(r.URL.Path)
+	if !known {
+		h.writeFailure(w, r, failureNotFound)
+		return
+	}
+
 	if r.Method == http.MethodOptions {
 		// A preflight from a disallowed origin still gets 204 and simply carries no
 		// grant, which is what the browser needs to refuse the real request. Saying
 		// more would only tell an unknown origin which origins are configured.
-		header.Set("Allow", allowedMethods)
+		header.Set("Allow", serves.methods)
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
-	if r.Method != http.MethodGet && r.Method != http.MethodHead {
-		header.Set("Allow", allowedMethods)
-		h.writeFailure(w, r, failureMethodNotAllowed)
+	if !methodAllowed(serves.methods, r.Method) {
+		header.Set("Allow", serves.methods)
+		h.writeFailure(w, r, serves.notAllowed)
 		return
 	}
 
@@ -308,17 +407,62 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.serveMeta(w, r)
 	case PathHealth:
 		h.serveHealth(w, r)
-	default:
-		h.writeFailure(w, r, failureNotFound)
+	case PathCheck:
+		h.serveCheck(w, r)
 	}
 }
 
+// route is what this API serves at one path.
+type route struct {
+	// methods is the Allow header, and it is also what methodAllowed reads, so the
+	// header and the decision cannot disagree.
+	methods string
+	// notAllowed is the 405 for this path, worded for the methods above.
+	notAllowed failure
+}
+
+// routeFor reports what this API serves at path, and whether it serves it at all.
+func (h *Handler) routeFor(path string) (route, bool) {
+	switch path {
+	case PathSnapshot, PathMeta, PathHealth:
+		return route{methods: allowedMethods, notAllowed: failureMethodNotAllowed}, true
+	case PathCheck:
+		if h.check == nil {
+			// A deployment with no upstream client does not offer this path. It is a 404
+			// rather than a 405, because a 405 would say the endpoint exists and was
+			// merely addressed with the wrong method.
+			return route{}, false
+		}
+		return route{methods: checkMethods, notAllowed: failureCheckMethodNotAllowed}, true
+	}
+	return route{}, false
+}
+
+// methodAllowed reads the same list the Allow header carries.
+func methodAllowed(methods, method string) bool {
+	for _, allowed := range strings.Split(methods, ", ") {
+		if allowed == method {
+			return true
+		}
+	}
+	return false
+}
+
 const allowedMethods = "GET, HEAD, OPTIONS"
+
+// checkMethods is what PathCheck serves. A fresh check is a POST and deliberately
+// not a GET: a GET is cacheable and shareable by URL, so a shared cache or a link
+// would hand a later visitor a verification instant nothing verified for them.
+const checkMethods = "POST, OPTIONS"
 
 // corsExposedHeaders are the response headers a browser may read. ETag is the one
 // a conditional request depends on, and a browser cannot see it unless it is
 // exposed explicitly.
 const corsExposedHeaders = "ETag, Last-Modified, Retry-After, " + AdvisoryHeader
+
+// corsRequestHeaders are the request headers a browser may send on a read. New
+// appends Content-Type where PathCheck is served.
+const corsRequestHeaders = "If-None-Match, If-Modified-Since"
 
 // applyCORS grants access to a configured origin and to nothing else. A request
 // with no Origin, or one this API was not configured for, gets no grant at all
@@ -328,8 +472,8 @@ func (h *Handler) applyCORS(header http.Header, origin string) {
 		return
 	}
 	header.Set("Access-Control-Allow-Origin", origin)
-	header.Set("Access-Control-Allow-Methods", allowedMethods)
-	header.Set("Access-Control-Allow-Headers", "If-None-Match, If-Modified-Since")
+	header.Set("Access-Control-Allow-Methods", h.corsMethods)
+	header.Set("Access-Control-Allow-Headers", h.corsHeaders)
 	header.Set("Access-Control-Expose-Headers", corsExposedHeaders)
 	header.Set("Access-Control-Max-Age", "600")
 }

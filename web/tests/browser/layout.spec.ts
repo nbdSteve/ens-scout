@@ -107,9 +107,14 @@ test('the table keeps its roles rather than becoming a list of blocks', async ({
 test('a name is never broken across two lines to make room for the columns', async ({ page }) => {
   await visit(page, { view: 'all' })
 
-  // The visible label, not the whole link: the link also carries a visually hidden
-  // announcement, which is out of flow and would count as a second line on its own.
-  const names = page.getByRole('table').locator('.ens-link .mono')
+  /*
+   * The visible label, not the whole cell. The cell also carries the length, the
+   * fresh-check note, and - once a check covers the name - a link with a visually
+   * hidden announcement, and each of those is a line of its own. Addressed through
+   * the name cell rather than through the link, because whether the name is a link
+   * depends on the verifier and the wrapping requirement does not.
+   */
+  const names = page.getByRole('table').locator('.results__name .mono')
   await expect(names).toHaveCount(10)
   for (const name of await names.all()) {
     const lines = await name.evaluate((node) => node.getClientRects().length)

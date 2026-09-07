@@ -1,5 +1,8 @@
 node_modules/
 dist/
+# The second production build, with a read API configured, that the `verify`
+# Playwright project runs against. See playwright.config.ts.
+dist-verify/
 coverage/
 playwright-report/
 test-results/

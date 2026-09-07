@@ -21,10 +21,15 @@ and correct ENS lifecycle classification are core requirements.
   storage interfaces, local fakes, and fixture builders.
 - `internal/scanner/`: one scheduled run, from schedule event to published
   pointer, and the redacting structured logger.
+- `internal/checkstore/`: the shared durable contract behind the fresh-check
+  allowances - the counting window, the result cache, and the local fake that
+  stands in for one table shared by several instances.
 - `internal/dynamo/`: the DynamoDB implementation of the snapshot storage
-  interfaces, plus the TTL call that expires a superseded snapshot.
+  interfaces and of `checkstore`, plus the TTL call that expires a superseded
+  snapshot.
 - `internal/api/`: the cached read API that serves the published snapshot over
-  HTTP, documented in `docs/read-api.md`.
+  HTTP, and the bounded fresh-check endpoint that reads the ENS index on demand.
+  Both are documented in `docs/read-api.md`.
 - `web/`: the React website that reads a published snapshot. It is a separate npm
   project with its own README; the Go module ignores it. Its own invariants are
   below, and `web/README.md` documents how to run it.
@@ -103,8 +108,9 @@ npm run verify
 ```
 
 That is format check, lint, typecheck, unit tests, production build, and the
-Playwright suite, in that order. The browser tests need Chromium once:
-`npm run browser:install`.
+Playwright suite, in that order. The Playwright step builds and serves a second
+bundle of its own, so the explicit build is the fixture one. The browser tests need
+Chromium once: `npm run browser:install`.
 
 ## Behavioral invariants
 
@@ -507,6 +513,128 @@ contract; these are the rules behind it.
 - Never widen the surface by prefix. An unknown path is a 404, so no future
   endpoint can be reached before it exists.
 
+## Fresh check invariants
+
+`POST /api/check` is the one path in this repository that queries The Graph for a
+visitor. `docs/read-api.md` is the wire contract, `internal/api` holds the code, and
+`internal/checkstore` is the shared durable contract behind its allowances; these are
+the rules behind all three.
+
+- Charge every allowance before any work and before any network I/O, in the order
+  `runCheck` applies them: content type, declared length, client identity, that
+  client's allowance, the body, the name count, normalization, the cache, a
+  concurrency slot, then the deployment-wide upstream budget. The count is charged
+  before deduplication deliberately, because deduplication is work a client would
+  otherwise get for free by repeating one label.
+- Take the concurrency slot before the upstream budget. A refused slot is a request
+  that never reaches the index, so spending budget on it would let a burst exhaust a
+  whole window's allowance on requests that did nothing. The budget is charged in
+  upstream calls rather than in requests, so a request costing several batches pays
+  for several, and the slot advertises its own timeout as the wait rather than the far
+  longer budget window.
+- Reuse `names.Normalize`, `checker.Run`, and `ens.Classify`. There is no second
+  classifier and no second definition of a valid label, which is also why
+  `ENS_API_CHECK_SOON_DAYS` has to match the publisher's window: otherwise a fresh
+  status and a published status disagree for a name near a boundary.
+- Nothing a client sends may select the endpoint, the query shape, the retry policy,
+  or the authorization. The upstream is an injected `checker.Client`, and the request
+  document is closed, so anything other than `{"names": [...]}` is refused by
+  `DisallowUnknownFields` rather than interpreted.
+- A deployment that injects no client does not serve the path at all, and it is then a
+  404 like any other path this API does not serve. A 405 would say the endpoint exists
+  and was merely addressed with the wrong method.
+- Refuse the whole request when the upstream answer does not cover exactly the
+  normalized set that was asked for. Answering only the names that came back would
+  report a verification instant for names nothing verified.
+- Compose every failure body from fixed literals and quote nothing the request sent.
+  `internal/ens` folds the request URL and a slice of the gateway's body into its
+  errors, and that URL carries the credential, so the text that described a failure is
+  exactly the part that cannot be written down. The cost is that an upstream failure
+  is reported as its code and nothing more.
+- A check log record carries counts, a status, a duration, and one fixed code, and no
+  error text at all. `checkFields` is a fixed struct for the same reason the scanner's
+  is: adding a field is the moment to decide a candidate label cannot reach a log line
+  through it. Severity is a property of the code rather than of the call site, so one
+  refusal cannot be logged at two levels from two places.
+- The shared store is the authority for the per-client allowance, the upstream budget,
+  and the result cache. `internal/checkstore` is the contract, `internal/dynamo` is the
+  backend, and `checkstore.MemoryStore` is the local fake. A process-local layer is
+  only an optimization and may only hold what the shared store already accepted. The
+  alternative was tried and is wrong: a Lambda deployment runs many instances at once
+  and every cold start begins with an empty process, so a per-instance allowance is
+  really that allowance times however many instances a caller reaches, and a
+  per-instance cache is one a caller misses by being routed elsewhere. Anything new
+  that bounds a caller goes in the store too, and no document may describe a
+  process-local map as a deployment-wide limit.
+- The concurrency slot is the one genuinely per-instance bound, and it stays that way.
+  A request in flight cannot be counted anywhere but in the process holding it, and
+  charging a shared store for it would need a release the store cannot be trusted to
+  receive. The deployment-wide form of that bound is reserved concurrency in `infra/`.
+- Count in a fixed window, not in a token bucket. One atomic conditional increment is
+  the whole charge, so there is no read-modify-write, no compare-and-swap loop, and no
+  stored version to contend on; a bucket would need all three and would still lose
+  writes under contention. The documented cost is a burst of up to twice the limit
+  across a window boundary, and it is accepted rather than mitigated.
+- Derive the window start from the clock and put it in the sort key. That is what makes
+  a cold instance and a warm one charge the same counter without coordinating, and what
+  makes a counter DynamoDB has not swept yet harmless: a lapsed window's counter is
+  addressed by nothing. TTL therefore bounds table growth and is never what enforces a
+  window.
+- Fail closed on every store failure, including a failed cache read, as
+  `check_store_unavailable`. An allowance nothing recorded is not an allowance. The one
+  exception is the cache write after an answer was obtained: the index was really read,
+  so refusing then would throw away a verification the visitor already paid for.
+- Derive the client identity from the trusted API Gateway source the adapter attaches,
+  and from the transport peer with the port dropped when it attaches none. Never from
+  `X-Forwarded-For` or any other forwarding header: a caller chooses a header, so
+  throttling on one lets a client mint a fresh identity per request and defeats the
+  limit entirely. The identity arrives through an unexported context key, so no caller
+  and no handler outside the package can set one. Neither source available is
+  `client_unidentified` and a refusal, never an unmetered request. The port is dropped
+  because it changes per connection.
+- Never store, log, or return a raw client address. It is keyed with HMAC-SHA256 under
+  `ENS_API_CHECK_CLIENT_SECRET`, and only the hex digest is ever written down. HMAC
+  rather than a bare digest is what makes it irreversible, because an unkeyed digest of
+  an address is undone by hashing the address space. The secret is configuration rather
+  than a cold-start random value, because every instance has to derive the same key for
+  the same caller or the shared counter is not shared at all; the same reason rules out
+  a fixed one, which would be public. Both `LoadCheckConfig` and `New` refuse a secret
+  shorter than 32 bytes rather than degrading, so a mistyped one fails at cold start,
+  and the refusal names the variable and never the value or a prefix of it.
+- That secret is the one secret this package reads. It is not the Graph credential, and
+  no setting here holds the credential or the endpoint, which is why the package needs
+  no redactor of its own: the secret never reaches a log line, an error, a response, or
+  a stored item, and a package that never receives the credential cannot leak it.
+- Cache the rendered response bytes, keyed on a digest of `CheckFormatVersion` and the
+  sorted qualified names, so a hit returns the instant the index was really read at. A
+  hit that re-rendered the document would stamp it with the time of the hit and claim a
+  verification that never happened. That holds across instances too, which is the point
+  of storing the bytes rather than the statuses, and it is why the version is in the key:
+  a bumped version has to orphan every key the previous one wrote, because a rolling
+  deployment has both versions over the one store and an instance returning the other
+  shape verbatim would hand a client a document its own parser refuses for as long as the
+  entry lives. It is the same rule as the browser's local cache key under
+  `Website invariants`. The item format version `internal/dynamo` writes is a different
+  thing and does not cover this.
+- Resolve every window and every expiry against the injected clock. Nothing here
+  sleeps, spawns a goroutine, or holds a timer: a window rolls over when the clock
+  moves into the next one, so a test proves rollover and cache expiry by moving the
+  clock rather than by waiting, and a clock that goes backwards adds nothing.
+  `ENS_API_CHECK_RETRIES` is parsed and bounded here so a mistyped value fails at cold
+  start in tested code, but the backoff itself belongs to the injected client.
+- Prove the deployment behaviour with two or more handlers over one
+  `checkstore.MemoryStore`, which is what a fresh process and a concurrent instance
+  really are. A test that exercises one handler proves nothing about either.
+- There is deliberately no request coalescing. Two concurrent requests for the same
+  set both reach the index, because serving one of them an instant it did not obtain
+  is the one thing this path exists to avoid, and the slot and the budget already
+  bound what the duplication costs.
+- A cancelled or expired context is never evidence about what the index holds. It is
+  neither an empty answer nor an upstream failure, and the three are three codes.
+- Widen CORS only where the path exists. `New` adds `POST` and `Content-Type` only
+  when a check endpoint is served, so a snapshot-only deployment does not advertise a
+  surface it does not have.
+
 ## Infrastructure invariants
 
 `infra/` is the TypeScript AWS CDK definition of the stack the publisher runs in.
@@ -621,6 +749,54 @@ never the ENS availability authority.
   wire carries only the slowest one, which is why the duplication exists at all.
   `contract.drift.test.ts` parses the Go sources and fails on drift; keep it
   passing rather than relaxing it.
+- `src/verify/contract.ts` is the same arrangement for the check wire, with the same
+  drift test, and it separates the two groups on purpose. The first group is what Go
+  owns and a client has to know before it reads a response: the version it accepts,
+  and the source and authority a genuine answer declares. The second is the page's own
+  bounds, which are not a mirror of the server's - those are per deployment and
+  configurable - so this page keeps its own smaller ones and still handles a refusal
+  from a deployment that set one lower. No advisory or `message` wording is copied
+  here: text from a response is text an unexpected answer could put on screen.
+  `src/test/goSource.ts` is the one reader for the Go sources, and a parse that finds
+  nothing fails rather than passing vacuously.
+- `src/wire/read.ts` holds the primitive readers both parsers are built from, and
+  `fail` is bound once per parser rather than passed to every call so each keeps
+  raising its own error class. That distinction is load-bearing: the snapshot loader
+  branches on `SnapshotFormatError` to decide whether to delete the local copy, so one
+  shared class would make a check's refusal look like a reason to throw away a
+  visitor's offline snapshot.
+- `verify/gate.ts` is the one place a name is judged fit for an outbound registration
+  link, and the only thing that opens it is a fresh check covering that name which has
+  not expired. Not an `available` status, not a recent scan, not a countdown that has
+  run down. There is no parameter for the caller and no way to pass one, which is the
+  enforcement: the generation seam `docs/website-plan.md` describes has to come through
+  here too, because a suggested name is less verified than a scanned one. Expiry is
+  judged against the instant the caller renders at, so `?now=` moves it and an expired
+  check is demonstrable.
+- `components/verification.ts` is the one per-row derivation, and the table is handed a
+  binding or nothing. Nothing means the deployment has no verifier, and then there are
+  no tick boxes and no outbound links at all, because a link the gate cannot judge is
+  one this page cannot stand behind.
+- A snapshot answer and a fresh answer are two claims about two different moments, so
+  the page shows them as two and states the instant the fresh one was obtained. When a
+  fresh check fails, the row keeps saying what the snapshot said and says the check did
+  not happen; it never presents the snapshot status as the verified one, and it never
+  clears the visitor's selection or their draft. Every outbound action says ENS decides,
+  because a name the index does not hold may still fail to register.
+- Every failure sentence about a check is a fixed literal in `verify/failure.ts`, chosen
+  by kind, and no `advisory` or `message` from a response reaches a screen. The kinds
+  are separate because the honest sentences differ: a spent allowance, an index that did
+  not answer, a deployment with no verifier, and an answer this build refused are four
+  different things. `KIND_BY_CODE` is a total map over `CheckCode` rather than a switch
+  with a default, so a code Go adds is a type error here instead of silently becoming
+  the vaguest kind. There is deliberately no rendered countdown to a retry: the wait is
+  a decision the page acts on, not a number on screen that keeps aging.
+- A fixture-mode name is therefore never a link, so a browser test reads row headers
+  rather than links. Reading links collected nothing and quietly turned every order
+  comparison in `url-state.spec.ts` into `[]` against `[]`.
+- No comment anywhere in `web/src/` may name a forbidden literal. Vite ships source
+  maps, so every comment there is a file `dist/` serves and the `assets` project scans;
+  reword the comment rather than narrowing the pattern.
 - `resolveSourceGroups` is the one place a list's freshness is decided, and it
   measures each list from that list's own `lastScannedAt`. The trust line, the
   banner, and the per-list tile all read it, so a stopped schedule is reported the
@@ -749,17 +925,42 @@ never the ENS availability authority.
   the viewport meta tag, so Chrome answers content that is too wide by zooming
   out rather than scrolling, and a reflow check passes on a layout that really
   does overflow.
+- There are two production bundles on two ports: `dist` in fixture mode, and
+  `dist-verify` built with `VITE_API_BASE_URL` set, which only `verify.spec.ts` runs
+  against. Keep the split. The fixture build is what proves the page needs no endpoint,
+  and the second is the only place the check action exists to be driven. That base URL
+  is the page's own origin deliberately, so a fulfilled route is same-origin and CORS
+  never enters into a browser assertion; CORS is Go's and `internal/api` tests it. Both
+  origins come from `tests/browser/servers.ts` rather than being restated, because
+  `assets.spec.ts` reads the directories those servers built and a copied literal would
+  let it pass while scanning the wrong bundle. The `assets` project runs no browser.
+  Write the stub's check responses by hand rather than by importing a builder from
+  `src/`. A document the production parser helped construct agrees with it by
+  construction, and what those specs are for is the parser refusing one: a different
+  covered set, a newer format version, a refusal body carrying text.
 - Separate inline metadata with space, not with a separator element. The trust line
   and the clock notice wrap at ordinary widths, and an interpunct or bullet of its
   own becomes the last glyph of a wrapped line, pointing at nothing.
 - Never set `display: block` on a table part. It silently removes the table
   roles a screen reader navigates by. Do responsive work with column widths and
   wrapping instead.
+- `.results__scroll` is `position: relative` because it has to clip, not because
+  anything in it is positioned against it. An `overflow` ancestor clips an absolutely
+  positioned descendant only when it is in that descendant's containing-block chain,
+  and the table is full of them: left static, the `visually-hidden` announcements and
+  the caption resolved against an ancestor above it, escaped the clip, and put a whole
+  column's width back into the document - a page that scrolls sideways at 320px with
+  nothing out there to find. Its `overflow-y` is `hidden` rather than left alone for a
+  second reason: `visible` computes to `auto` beside an `auto` on the other axis, and
+  the rows arrive by translating upwards, so the vertical axis would grow a scrollbar
+  for the length of every entry animation.
 - Pin dependencies exactly and commit `package-lock.json`. ESLint and TypeScript
   sit below the current latest on purpose; `web/README.md` records which upstream
   ranges hold them there.
 - Do not delete `web/go.mod`. `Development workflow` above says what it is for.
-- No AWS, deployment, WebLLM, or fresh-check code belongs in `web/`.
+- No AWS, deployment, or WebLLM code belongs in `web/`. Fresh checks now do, but only
+  as a client: `web/` asks `POST /api/check` and reads the answer, and it holds no
+  Graph endpoint, no credential, and no lifecycle arithmetic of its own.
 
 ## ENS lifecycle rules
 

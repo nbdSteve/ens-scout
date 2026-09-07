@@ -11,6 +11,8 @@ import { StaleWarning } from './components/StaleWarning'
 import { StoredCopyNotice } from './components/StoredCopyNotice'
 import { Toolbar } from './components/Toolbar'
 import { TrustLine } from './components/TrustLine'
+import { VerifyBar } from './components/VerifyBar'
+import type { VerifyBinding } from './components/verification'
 import { ViewTabs } from './components/ViewTabs'
 import { appConfig, type AppConfig } from './config/env'
 import { Optics } from './optics/Optics'
@@ -18,6 +20,7 @@ import type { Status } from './snapshot/contract'
 import { deriveAttribution } from './snapshot/attribution'
 import { applyQuery, countByStatus, filterResults } from './state/filter'
 import { CLEAR_FILTERS, isFiltered } from './state/query'
+import { useFreshCheck, type FreshCheckDeps } from './state/useFreshCheck'
 import { useLengthDrafts } from './state/useLengthDrafts'
 import { useNow } from './state/useNow'
 import { useSnapshot, type SnapshotDeps } from './state/useSnapshot'
@@ -51,12 +54,14 @@ export interface AppProps {
   /** Overridden in tests. Defaults to the build-time configuration. */
   readonly config?: AppConfig
   readonly deps?: SnapshotDeps
+  readonly verifyDeps?: FreshCheckDeps
 }
 
-export function App({ config = appConfig, deps }: AppProps): ReactNode {
+export function App({ config = appConfig, deps, verifyDeps }: AppProps): ReactNode {
   const { query, warnings, setQuery, hrefFor } = useUrlState()
   const now = useNow(query.now)
   const store = useSnapshot(config, deps)
+  const check = useFreshCheck(config, verifyDeps)
 
   const snapshot = store.snapshot
   const attribution = useMemo(
@@ -108,6 +113,28 @@ export function App({ config = appConfig, deps }: AppProps): ReactNode {
    */
   const lengthDrafts = useLengthDrafts(query.length)
   const notApplied = warnings.length + lengthDrafts.advisories.length
+
+  /*
+   * What the table needs to know about fresh checks, or null when there is no verifier.
+   *
+   * Null is fixture mode, and it turns off the tick boxes and every outbound link. That
+   * is the honest reading of a build with no read API configured: nothing here can be
+   * re-checked, so nothing here has earned a link to a registration page. `SnapshotDetails`
+   * says so once, rather than every row saying it.
+   */
+  const verify = useMemo<VerifyBinding | null>(
+    () =>
+      check.available
+        ? {
+            selected: check.selected,
+            full: check.full,
+            pending: check.pending,
+            verified: check.verified,
+            onToggle: check.toggle,
+          }
+        : null,
+    [check.available, check.selected, check.full, check.pending, check.verified, check.toggle],
+  )
 
   /**
    * What is wrong with the chosen source list, or null when nothing is.
@@ -300,6 +327,21 @@ export function App({ config = appConfig, deps }: AppProps): ReactNode {
                   statusCounts={statusCounts}
                 />
                 <section aria-labelledby="page-title" className="results-panel" id="results">
+                  {/*
+                   * The fresh-check action, above the names and inside the panel. It draws
+                   * nothing until the visitor ticks something or a check fails, so the
+                   * first screen still opens on the answer.
+                   */}
+                  {check.available && (
+                    <VerifyBar
+                      checking={check.checking}
+                      failure={check.failure}
+                      onCheck={check.check}
+                      onClear={check.clearSelection}
+                      onDismiss={check.dismissFailure}
+                      selected={check.selected}
+                    />
+                  )}
                   {page.total === 0 ? (
                     <EmptyState filtered={filtered} resetHref={resetHref} viewLabel={view.label} />
                   ) : (
@@ -309,6 +351,7 @@ export function App({ config = appConfig, deps }: AppProps): ReactNode {
                         now={now}
                         rows={page.rows}
                         sort={query.sort}
+                        verify={verify}
                       />
                       <Pagination
                         firstRow={page.firstRow}
