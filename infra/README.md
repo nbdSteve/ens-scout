@@ -241,8 +241,9 @@ an invocation that ran and published nothing looks identical to a healthy one on
 metric.
 It has to be per source, because the two groups run on different cadences and one
 snapshot is fresh against one group's threshold and stale against the other's, which a
-single aggregate timestamp cannot express - `internal/snapshot` already carries the
-per-source thresholds.
+single aggregate timestamp cannot express - `internal/snapshot` already carries each
+source's own last-scanned instant and its own thresholds, so a stopped group is
+measurable from a published snapshot without any new field.
 And it has to carry an explicit deployment grace period, so a first deploy or a
 redeploy does not read as staleness before the first scheduled scan has had a chance to
 publish.

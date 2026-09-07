@@ -183,12 +183,18 @@ between the response and the render. The snapshot and the latest pointer instead
 publish the expected scan interval and the stale threshold, and the client
 resolves staleness against its own clock every time it renders.
 
-The slowest source cadence governs, because a snapshot is only as fresh as its
-least frequently scanned list. The threshold is twice the expected interval, so
-exactly one missed scheduled scan is tolerated before the interface warns. With
-the five-letter list on a daily cadence, that is a 48-hour threshold. A scan
-time in the future indicates clock skew rather than freshness, so it resolves to
-a zero age instead of a negative one.
+The slowest source cadence governs the snapshot as a whole, because a snapshot is
+only as fresh as its least frequently scanned list. The threshold is twice the
+expected interval, so exactly one missed scheduled scan is tolerated before the
+interface warns. With the five-letter list on a daily cadence, that is a 48-hour
+threshold. A scan time in the future indicates clock skew rather than freshness,
+so it resolves to a zero age instead of a negative one.
+
+Each source list is judged on its own, not against that aggregate.
+Every list publishes the instant it was itself last scanned, which a merge-forward
+publication carries unchanged for the group it did not scan, so one stopped schedule
+goes stale on its own threshold while the other group keeps publishing.
+[read-api.md](read-api.md) is the wire contract for both readings.
 
 ## Local name suggestions
 
