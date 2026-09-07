@@ -95,3 +95,74 @@ describe('resolveSourceGroups', () => {
     expect(hasStaleGroup(groups)).toBe(false)
   })
 })
+
+/**
+ * The case per-list resolution exists for: one schedule stops while the other keeps
+ * publishing.
+ *
+ * A publisher merges forward, so a snapshot published by the group that is still
+ * running carries a fresh snapshot-wide scan time. Measuring every list against that
+ * time reported the stopped list as on schedule, which is the one answer a visitor
+ * cannot recover from: it says a status was checked when it was not. Each list is
+ * therefore resolved against its own instant, and these tests hold the aggregate
+ * fresh at the same time so a regression cannot pass by making everything stale.
+ */
+describe('resolveSourceGroups per-list scan instants', () => {
+  const STOPPED = new Date(SCANNED_AT.getTime() - (DAILY * STALE_FACTOR + 2 * 3600) * 1000)
+
+  /** A snapshot whose daily list was last scanned at `dailyScannedAt`. */
+  function withDailyScan(dailyScannedAt: Date) {
+    return buildSnapshot({
+      sources: [
+        {
+          id: 'five-letters',
+          path: 'data/words/5-letters.txt',
+          cadence: 'daily',
+          names: 1,
+          lastScannedAt: dailyScannedAt,
+        },
+        {
+          id: 'four-letters',
+          path: 'data/words/4-letters.txt',
+          cadence: 'three-hourly',
+          names: 3,
+        },
+      ],
+    }).metadata
+  }
+
+  it('stales a list whose own schedule stopped while the snapshot stays fresh', () => {
+    const metadata = withDailyScan(STOPPED)
+    const now = at(3600)
+
+    // The group that is still publishing keeps the snapshot-wide time moving.
+    expect(resolveSnapshotAge(metadata, now).isStale).toBe(false)
+
+    const groups = resolveSourceGroups(metadata, now)
+    const daily = groups.find((group) => group.source.id === 'five-letters')
+    const threeHourly = groups.find((group) => group.source.id === 'four-letters')
+    expect(daily?.scanAge.isStale).toBe(true)
+    expect(daily?.scanAge.ageSeconds).toBe(DAILY * STALE_FACTOR + 3 * 3600)
+    expect(threeHourly?.scanAge.isStale).toBe(false)
+  })
+
+  it('freshens a rescanned list from its own new instant alone', () => {
+    const groups = resolveSourceGroups(withDailyScan(SCANNED_AT), at(3600))
+    const daily = groups.find((group) => group.source.id === 'five-letters')
+
+    expect(daily?.scanAge.isStale).toBe(false)
+    expect(daily?.scanAge.ageSeconds).toBe(3600)
+    expect(hasStaleGroup(groups)).toBe(false)
+  })
+
+  it('measures a carried list from the scan that produced it, not the one that published it', () => {
+    // Carried 20 hours back, so the daily list is inside its own window at a moment
+    // the snapshot-wide time would have put it 20 hours younger.
+    const carried = new Date(SCANNED_AT.getTime() - 20 * 3600 * 1000)
+    const groups = resolveSourceGroups(withDailyScan(carried), at(3600))
+    const daily = groups.find((group) => group.source.id === 'five-letters')
+
+    expect(daily?.scanAge.ageSeconds).toBe(21 * 3600)
+    expect(daily?.scanAge.isStale).toBe(false)
+  })
+})

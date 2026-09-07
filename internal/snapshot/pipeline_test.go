@@ -105,7 +105,7 @@ func TestScanToSnapshotThroughTheRealClient(t *testing.T) {
 		}
 	}
 
-	snapshot, err := Build("real-client", stats.ClassifiedAt, testSources(len(results)), results)
+	snapshot, err := Build("real-client", stats.ClassifiedAt, testSources(stats.ClassifiedAt, len(results)), results)
 	if err != nil {
 		t.Fatalf("Build rejected results from the real client: %v", err)
 	}

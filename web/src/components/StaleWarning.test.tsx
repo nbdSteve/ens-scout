@@ -55,3 +55,42 @@ describe('StaleWarning', () => {
     expect(screen.getByRole('alert')).toHaveTextContent('overdue by 1 hour 2 minutes')
   })
 })
+
+/**
+ * The alert a stopped schedule has to raise.
+ *
+ * One group publishes every three hours and one every day, and a publication by
+ * either merges the other group forward, so a snapshot can be minutes old while one
+ * of its lists has not been queried for days. The warning is what tells a visitor
+ * which of the two they are looking at.
+ */
+describe('StaleWarning with one stopped schedule', () => {
+  it('warns about the stopped list while the snapshot itself was just published', () => {
+    const { metadata } = buildSnapshot({
+      sources: [
+        {
+          id: 'five-letters',
+          path: 'data/words/5-letters.txt',
+          cadence: 'daily',
+          names: 1,
+          lastScannedAt: new Date(SCANNED_AT.getTime() - 50 * 60 * 60 * 1000),
+        },
+        {
+          id: 'four-letters',
+          path: 'data/words/4-letters.txt',
+          cadence: 'three-hourly',
+          names: 3,
+        },
+      ],
+    })
+    render(<StaleWarning metadata={metadata} now={at(3600)} />)
+
+    const alert = screen.getByRole('alert')
+    expect(alert).toHaveTextContent('One source list is out of date')
+    expect(alert).toHaveTextContent(
+      'data/words/5-letters.txt is scanned every 24 hours and is overdue by 3 hours.',
+    )
+    // The list this run did scan is an hour old, so it must not be named.
+    expect(alert).not.toHaveTextContent('data/words/4-letters.txt')
+  })
+})

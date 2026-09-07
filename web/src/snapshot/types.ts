@@ -11,6 +11,12 @@ export interface SourceListDocument {
   readonly path: string
   readonly cadence: Cadence
   readonly names: number
+  /**
+   * When this list was last really queried, which is not the snapshot-wide scan
+   * time: a publisher scans one group and carries the other group's results
+   * forward, and a carried list keeps the instant of the scan that produced it.
+   */
+  readonly last_scanned_at: string
 }
 
 export interface ScanAgeDocument {
@@ -62,12 +68,13 @@ export interface LatestDocument {
   readonly scan_age: ScanAgeDocument
 }
 
-/** A source list, with its parsed cadence. */
+/** A source list, with its parsed cadence and its own last-scanned instant. */
 export interface SourceList {
   readonly id: string
   readonly path: string
   readonly cadence: Cadence
   readonly names: number
+  readonly lastScannedAt: Date
 }
 
 /** One lifecycle result, with timestamps parsed and the bare label extracted. */

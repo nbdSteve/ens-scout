@@ -64,7 +64,7 @@ export interface SourceGroup {
 }
 
 /**
- * Resolves every source list against its own cadence.
+ * Resolves every source list against its own cadence and its own scan instant.
  *
  * The aggregate `scan_age` on the wire is derived from the slowest cadence,
  * because a snapshot as a whole is only as fresh as its least frequently scanned
@@ -72,12 +72,18 @@ export interface SourceGroup {
  * per-group warning: a three-hourly list is overdue long before a daily one, and
  * folding them together would hide exactly the group a visitor should not trust.
  * So each group is resolved against its own interval here.
+ *
+ * The instant is the list's own `lastScannedAt`, not the snapshot-wide scan time.
+ * A publisher scans one group and carries the other group's results forward at the
+ * fresh scan's instant, so measuring every list against the snapshot-wide time
+ * made a list whose own schedule had stopped report the freshness of whichever
+ * group was still publishing - which is the one case these warnings exist for.
  */
 export function resolveSourceGroups(metadata: SnapshotMetadata, now: Date): SourceGroup[] {
   return metadata.sources.map((source) => ({
     source,
     cadenceLabel: CADENCE_LABEL[source.cadence],
-    scanAge: cadenceScanAge(source.cadence, metadata.scannedAt, now),
+    scanAge: cadenceScanAge(source.cadence, source.lastScannedAt, now),
   }))
 }
 

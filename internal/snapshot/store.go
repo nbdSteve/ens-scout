@@ -173,13 +173,13 @@ func (l Latest) Validate() error {
 		return fmt.Errorf("latest pointer reports a negative name count")
 	}
 
-	expectedSources, err := normalizeSources(l.Sources)
+	expectedSources, err := normalizeSources(l.Sources, l.ScannedAt)
 	if err != nil {
 		return err
 	}
 	sourceNames := 0
 	for i, source := range l.Sources {
-		if source != expectedSources[i] {
+		if !source.Equal(expectedSources[i]) {
 			return fmt.Errorf("latest pointer source lists are not sorted by id")
 		}
 		sourceNames += source.Names

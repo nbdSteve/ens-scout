@@ -48,18 +48,23 @@ func lifecycleResults(t *testing.T, now time.Time) []ens.Result {
 	return results
 }
 
-func testSources(names int) []SourceList {
+// testSources is the one-list source set most tests publish. scannedAt is
+// required rather than defaulted because a source set has to name the instant the
+// snapshot scanned at, so a helper that guessed it would build snapshots that
+// disagree with their own scan time.
+func testSources(scannedAt time.Time, names int) []SourceList {
 	return []SourceList{{
-		ID:      "test-list",
-		Path:    "data/words/test.txt",
-		Cadence: CadenceThreeHourly,
-		Names:   names,
+		ID:            "test-list",
+		Path:          "data/words/test.txt",
+		Cadence:       CadenceThreeHourly,
+		Names:         names,
+		LastScannedAt: scannedAt.UTC().Truncate(time.Second),
 	}}
 }
 
 func TestBuildProducesCanonicalOrderAndCounts(t *testing.T) {
 	results := lifecycleResults(t, fixedNow)
-	snapshot, err := Build("test-snapshot", fixedNow, testSources(len(results)), results)
+	snapshot, err := Build("test-snapshot", fixedNow, testSources(fixedNow, len(results)), results)
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -95,7 +100,7 @@ func TestBuildProducesCanonicalOrderAndCounts(t *testing.T) {
 
 func TestBuildDerivesLifecycleTimestamps(t *testing.T) {
 	results := lifecycleResults(t, fixedNow)
-	snapshot, err := Build("test-snapshot", fixedNow, testSources(len(results)), results)
+	snapshot, err := Build("test-snapshot", fixedNow, testSources(fixedNow, len(results)), results)
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -248,13 +253,13 @@ func TestBuildAcceptsTheCheckerClassificationInstant(t *testing.T) {
 		t.Fatalf("results are %+v, want one expiring-soon result", results)
 	}
 
-	if _, err := Build("test-snapshot", stats.ClassifiedAt, testSources(len(results)), results); err != nil {
+	if _, err := Build("test-snapshot", stats.ClassifiedAt, testSources(stats.ClassifiedAt, len(results)), results); err != nil {
 		t.Fatalf("Build rejected the instant checker classified against: %v", err)
 	}
 
 	// Two seconds later the expiry has passed, so the stored status no longer
 	// describes the scan time and the whole snapshot is refused.
-	if _, err := Build("test-snapshot", classifyAt.Add(2*time.Second), testSources(len(results)), results); err == nil {
+	if _, err := Build("test-snapshot", classifyAt.Add(2*time.Second), testSources(classifyAt.Add(2*time.Second), len(results)), results); err == nil {
 		t.Fatal("Build accepted a scan time on the far side of a lifecycle boundary")
 	} else if !strings.Contains(err.Error(), "at the scan time") {
 		t.Fatalf("error %q does not mention the scan time", err)
@@ -283,7 +288,7 @@ func TestBuildStoresTheFullyQualifiedName(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			result := ens.Result{Name: test.given, Status: ens.StatusAvailable}
-			snapshot, err := Build("test-snapshot", fixedNow, testSources(1), []ens.Result{result})
+			snapshot, err := Build("test-snapshot", fixedNow, testSources(fixedNow, 1), []ens.Result{result})
 			if err != nil {
 				t.Fatalf("Build rejected %q: %v", test.given, err)
 			}
@@ -311,7 +316,7 @@ func TestValidateRejectsABareStoredName(t *testing.T) {
 
 func TestBuildRejectsInvalidInput(t *testing.T) {
 	results := lifecycleResults(t, fixedNow)
-	sources := testSources(len(results))
+	sources := testSources(fixedNow, len(results))
 
 	tests := []struct {
 		name       string
@@ -351,7 +356,7 @@ func TestBuildRejectsInvalidInput(t *testing.T) {
 		{
 			name:       "unknown cadence",
 			snapshotID: "test-snapshot",
-			sources:    []SourceList{{ID: "a", Path: "a.txt", Cadence: "weekly", Names: len(results)}},
+			sources:    []SourceList{{ID: "a", Path: "a.txt", Cadence: "weekly", Names: len(results), LastScannedAt: fixedNow}},
 			results:    results,
 			want:       "unknown cadence",
 		},
@@ -359,65 +364,98 @@ func TestBuildRejectsInvalidInput(t *testing.T) {
 			name:       "duplicate source id",
 			snapshotID: "test-snapshot",
 			sources: []SourceList{
-				{ID: "a", Path: "a.txt", Cadence: CadenceDaily, Names: len(results)},
-				{ID: "a", Path: "b.txt", Cadence: CadenceDaily, Names: 0},
+				{ID: "a", Path: "a.txt", Cadence: CadenceDaily, Names: len(results), LastScannedAt: fixedNow},
+				{ID: "a", Path: "b.txt", Cadence: CadenceDaily, Names: 0, LastScannedAt: fixedNow},
 			},
 			results: results,
 			want:    "duplicate source list id",
 		},
 		{
+			// A missing instant is the version 2 payload shape, and it is refused
+			// rather than filled in from the scan time. That substitution is the
+			// false-fresh defect LastScannedAt exists to remove, so it must not
+			// reappear as a decoder convenience.
+			name:       "source without a last scanned time",
+			snapshotID: "test-snapshot",
+			sources:    []SourceList{{ID: "a", Path: "a.txt", Cadence: CadenceThreeHourly, Names: len(results)}},
+			results:    results,
+			want:       "needs a last scanned time",
+		},
+		{
+			name:       "source scanned after the snapshot",
+			snapshotID: "test-snapshot",
+			sources: []SourceList{{
+				ID: "a", Path: "a.txt", Cadence: CadenceThreeHourly, Names: len(results),
+				LastScannedAt: fixedNow.Add(time.Second),
+			}},
+			results: results,
+			want:    "last scanned after the snapshot scan time",
+		},
+		{
+			// Every instant older than the scan time describes a snapshot that asked
+			// the subgraph nothing and would still advance the pointer's scan time.
+			name:       "no source scanned at the snapshot scan time",
+			snapshotID: "test-snapshot",
+			sources: []SourceList{{
+				ID: "a", Path: "a.txt", Cadence: CadenceThreeHourly, Names: len(results),
+				LastScannedAt: fixedNow.Add(-time.Hour),
+			}},
+			results: results,
+			want:    "no source list was scanned at the snapshot scan time",
+		},
+		{
 			name:       "source counts disagree",
 			snapshotID: "test-snapshot",
-			sources:    testSources(len(results) + 1),
+			sources:    testSources(fixedNow, len(results)+1),
 			results:    results,
 			want:       "account for",
 		},
 		{
 			name:       "duplicate result",
 			snapshotID: "test-snapshot",
-			sources:    testSources(len(results) + 1),
+			sources:    testSources(fixedNow, len(results)+1),
 			results:    append(append([]ens.Result(nil), results...), results[0]),
 			want:       "sorted by name without duplicates",
 		},
 		{
 			name:       "empty name",
 			snapshotID: "test-snapshot",
-			sources:    testSources(1),
+			sources:    testSources(fixedNow, 1),
 			results:    []ens.Result{{Name: "", Status: ens.StatusAvailable}},
 			want:       "empty ENS label",
 		},
 		{
 			name:       "name with whitespace",
 			snapshotID: "test-snapshot",
-			sources:    testSources(1),
+			sources:    testSources(fixedNow, 1),
 			results:    []ens.Result{{Name: "two words.eth", Status: ens.StatusAvailable}},
 			want:       "contains whitespace",
 		},
 		{
 			name:       "subdomain rather than a second-level name",
 			snapshotID: "test-snapshot",
-			sources:    testSources(1),
+			sources:    testSources(fixedNow, 1),
 			results:    []ens.Result{{Name: "sub.zap.eth", Status: ens.StatusAvailable}},
 			want:       "expected a label or second-level .eth name",
 		},
 		{
 			name:       "unknown status",
 			snapshotID: "test-snapshot",
-			sources:    testSources(1),
+			sources:    testSources(fixedNow, 1),
 			results:    []ens.Result{{Name: "zap", Status: "renewed"}},
 			want:       "unknown status",
 		},
 		{
 			name:       "grace end without expiry",
 			snapshotID: "test-snapshot",
-			sources:    testSources(1),
+			sources:    testSources(fixedNow, 1),
 			results:    []ens.Result{{Name: "zap", Status: ens.StatusGracePeriod, GraceEnds: &fixedNow}},
 			want:       "grace or premium end without an expiry",
 		},
 		{
 			name:       "premium end without expiry",
 			snapshotID: "test-snapshot",
-			sources:    testSources(1),
+			sources:    testSources(fixedNow, 1),
 			results:    []ens.Result{{Name: "zap", Status: ens.StatusPremium, PremiumEnds: &fixedNow}},
 			want:       "grace or premium end without an expiry",
 		},
@@ -426,7 +464,7 @@ func TestBuildRejectsInvalidInput(t *testing.T) {
 			// owns, so the mismatch surfaces as a disagreement with the expiry.
 			name:       "grace end breaks the lifecycle rules",
 			snapshotID: "test-snapshot",
-			sources:    testSources(1),
+			sources:    testSources(fixedNow, 1),
 			results: []ens.Result{{
 				Name:      "zap",
 				Status:    ens.StatusGracePeriod,
@@ -439,7 +477,7 @@ func TestBuildRejectsInvalidInput(t *testing.T) {
 			// A premium end with no grace end under it cannot come from Classify.
 			name:       "premium end without a grace end",
 			snapshotID: "test-snapshot",
-			sources:    testSources(1),
+			sources:    testSources(fixedNow, 1),
 			results: []ens.Result{{
 				Name:        "zap",
 				Status:      ens.StatusPremium,
@@ -545,7 +583,7 @@ func TestBuildRejectsStatusThatContradictsItsTimestamps(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			_, err := Build("test-snapshot", fixedNow, testSources(1), []ens.Result{test.result})
+			_, err := Build("test-snapshot", fixedNow, testSources(fixedNow, 1), []ens.Result{test.result})
 			if err == nil {
 				t.Fatalf("Build accepted invalid input")
 			}
@@ -595,7 +633,7 @@ func TestBuildAcceptsEverySoonWindowLabel(t *testing.T) {
 			if test.result.Status != test.wantStatus {
 				t.Fatalf("test case classifies as %q, want %q", test.result.Status, test.wantStatus)
 			}
-			snapshot, err := Build("test-snapshot", fixedNow, testSources(1), []ens.Result{test.result})
+			snapshot, err := Build("test-snapshot", fixedNow, testSources(fixedNow, 1), []ens.Result{test.result})
 			if err != nil {
 				t.Fatalf("Build rejected a %q result produced by ens.Classify: %v", test.wantStatus, err)
 			}
@@ -635,8 +673,8 @@ func TestValidateRejectsNonCanonicalSnapshot(t *testing.T) {
 			name: "unsorted sources",
 			mutate: func(s *Snapshot) {
 				s.Metadata.Sources = []SourceList{
-					{ID: "b", Path: "b.txt", Cadence: CadenceThreeHourly, Names: 8},
-					{ID: "a", Path: "a.txt", Cadence: CadenceThreeHourly, Names: 0},
+					{ID: "b", Path: "b.txt", Cadence: CadenceThreeHourly, Names: 8, LastScannedAt: fixedNow},
+					{ID: "a", Path: "a.txt", Cadence: CadenceThreeHourly, Names: 0, LastScannedAt: fixedNow},
 				}
 			},
 			want: "not sorted by id",
@@ -690,7 +728,13 @@ func TestValidateRejectsNonCanonicalSnapshot(t *testing.T) {
 			// period has ended, so the stored grace-period label no longer holds.
 			name: "scan time moved past the lifecycle boundaries",
 			mutate: func(s *Snapshot) {
-				s.Metadata.ScannedAt = s.Metadata.ScannedAt.Add(365 * 24 * time.Hour)
+				// The sources move with the scan time, so the source set stays
+				// consistent with it and only the stored statuses can contradict it.
+				later := 365 * 24 * time.Hour
+				s.Metadata.ScannedAt = s.Metadata.ScannedAt.Add(later)
+				for i := range s.Metadata.Sources {
+					s.Metadata.Sources[i].LastScannedAt = s.Metadata.Sources[i].LastScannedAt.Add(later)
+				}
 			},
 			want: "at the scan time",
 		},
@@ -773,7 +817,7 @@ func TestUnknownCadenceHasNoInterval(t *testing.T) {
 
 func mustBuild(t *testing.T, results []ens.Result) Snapshot {
 	t.Helper()
-	snapshot, err := Build("test-snapshot", fixedNow, testSources(len(results)), results)
+	snapshot, err := Build("test-snapshot", fixedNow, testSources(fixedNow, len(results)), results)
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}

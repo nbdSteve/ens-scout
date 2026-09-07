@@ -27,12 +27,15 @@ const testSoon = 7 * 24 * time.Hour
 // a failure.
 var errInjected = errors.New("injected storage failure")
 
-func testSources(names int) []snapshot.SourceList {
+// testSources is the one-list source set these tests publish. scannedAt is
+// required because a source set has to name the instant the snapshot scanned at.
+func testSources(scannedAt time.Time, names int) []snapshot.SourceList {
 	return []snapshot.SourceList{{
-		ID:      "test-list",
-		Path:    "data/words/test.txt",
-		Cadence: snapshot.CadenceThreeHourly,
-		Names:   names,
+		ID:            "test-list",
+		Path:          "data/words/test.txt",
+		Cadence:       snapshot.CadenceThreeHourly,
+		Names:         names,
+		LastScannedAt: scannedAt.UTC().Truncate(time.Second),
 	}}
 }
 
@@ -49,7 +52,7 @@ func testSnapshot(t *testing.T, id string, scannedAt time.Time, labels ...string
 		}
 		results = append(results, ens.Classify(lookup, scannedAt, testSoon))
 	}
-	built, err := snapshot.Build(id, scannedAt, testSources(len(results)), results)
+	built, err := snapshot.Build(id, scannedAt, testSources(scannedAt, len(results)), results)
 	if err != nil {
 		t.Fatalf("Build %s: %v", id, err)
 	}
@@ -83,7 +86,7 @@ func largeSnapshot(t *testing.T, id string, scannedAt time.Time) snapshot.Snapsh
 		}
 		results = append(results, ens.Classify(lookup, scannedAt, testSoon))
 	}
-	built, err := snapshot.Build(id, scannedAt, testSources(len(results)), results)
+	built, err := snapshot.Build(id, scannedAt, testSources(scannedAt, len(results)), results)
 	if err != nil {
 		t.Fatalf("Build %s: %v", id, err)
 	}

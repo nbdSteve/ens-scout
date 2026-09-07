@@ -54,10 +54,15 @@ type metaSource struct {
 	Path    string           `json:"path"`
 	Cadence snapshot.Cadence `json:"cadence"`
 	Names   int              `json:"names"`
-	// ScanAge is this list's own cadence expressed as thresholds. Every source in
-	// one snapshot shares the scan time, because a carried-forward result is
-	// re-derived at the fresh scan's instant rather than copied, so the sources
-	// differ in how long that shared scan time may stand and not in what it is.
+	// LastScannedAt is when this list itself was last asked about, which is the
+	// snapshot scan time for the group the publishing run scanned and an older
+	// instant for a list carried forward. A client resolves this list's age against
+	// this instant and never against the snapshot's, because one pointer serves
+	// every group and the snapshot-wide instant advances whenever any group
+	// publishes.
+	LastScannedAt time.Time `json:"last_scanned_at"`
+	// ScanAge is this list's own cadence expressed as thresholds, so a client
+	// judges this list against the schedule it is actually on.
 	ScanAge snapshot.ScanAgeInput `json:"scan_age"`
 }
 
@@ -74,16 +79,17 @@ func encodeMeta(metadata snapshot.Metadata, latest snapshot.Latest) ([]byte, err
 		// cadence, so this cannot fail here. It is still checked rather than
 		// discarded, because a summary with a silently zeroed threshold would tell
 		// a client a fresh snapshot is stale.
-		scanAge, err := snapshot.DeriveScanAgeInput([]snapshot.SourceList{source})
+		scanAge, err := source.ScanAgeInput()
 		if err != nil {
 			return nil, err
 		}
 		sources = append(sources, metaSource{
-			ID:      source.ID,
-			Path:    source.Path,
-			Cadence: source.Cadence,
-			Names:   source.Names,
-			ScanAge: scanAge,
+			ID:            source.ID,
+			Path:          source.Path,
+			Cadence:       source.Cadence,
+			Names:         source.Names,
+			LastScannedAt: source.LastScannedAt.UTC(),
+			ScanAge:       scanAge,
 		})
 	}
 
@@ -139,24 +145,38 @@ type healthScanAge struct {
 // healthSource is one contributing list's resolved staleness. A snapshot whose
 // fast lists are fresh and whose slow list is overdue reports exactly that,
 // rather than collapsing to one flag governed by the slowest list.
+//
+// Each age resolves against that list's own LastScannedAt, so a list whose
+// schedule has stopped goes stale here even while the other group keeps
+// publishing new snapshots. Resolving against the snapshot-wide scan time
+// reported such a list as freshly scanned, because a merge-forward publication
+// re-derives the other group's results at the fresh scan's instant.
 type healthSource struct {
 	ID      string           `json:"id"`
 	Cadence snapshot.Cadence `json:"cadence"`
 	Names   int              `json:"names"`
-	ScanAge healthScanAge    `json:"scan_age"`
+	// LastScannedAt is the instant this list's age below was resolved from, so a
+	// reader can check the arithmetic without fetching PathMeta.
+	LastScannedAt time.Time     `json:"last_scanned_at"`
+	ScanAge       healthScanAge `json:"scan_age"`
 }
 
-// resolveScanAge renders a ScanAge for the wire. Seconds are the unit because
-// they are what the published thresholds use, so nothing here introduces a second
-// precision a client has to reconcile.
-func resolveScanAge(input snapshot.ScanAgeInput, scannedAt, now time.Time) healthScanAge {
-	age := input.At(scannedAt, now)
+// renderScanAge renders a resolved ScanAge for the wire. Seconds are the unit
+// because they are what the published thresholds use, so nothing here introduces
+// a second precision a client has to reconcile.
+func renderScanAge(age snapshot.ScanAge) healthScanAge {
 	return healthScanAge{
 		AgeSeconds:        int64(age.Age / time.Second),
 		ExpectedSeconds:   int64(age.Expected / time.Second),
 		StaleAfterSeconds: int64(age.StaleAfter / time.Second),
 		Stale:             age.Stale,
 	}
+}
+
+// resolveScanAge renders the snapshot-wide reading, which is the one age that is
+// still measured from the snapshot's own scan time.
+func resolveScanAge(input snapshot.ScanAgeInput, scannedAt, now time.Time) healthScanAge {
+	return renderScanAge(input.At(scannedAt, now))
 }
 
 // serveHealth reports on the snapshot that would be served now.
@@ -182,7 +202,9 @@ func (h *Handler) serveHealth(w http.ResponseWriter, r *http.Request) {
 
 	sources := make([]healthSource, 0, len(latest.Sources))
 	for _, source := range latest.Sources {
-		scanAge, err := snapshot.DeriveScanAgeInput([]snapshot.SourceList{source})
+		// ResolveScanAge is the only way to age a source, so nothing here can reach
+		// for the snapshot-wide scan time by mistake.
+		scanAge, err := source.ResolveScanAge(now)
 		if err != nil {
 			// Unreachable for a validated pointer, and reported rather than
 			// silently zeroed for the same reason encodeMeta reports it.
@@ -190,10 +212,11 @@ func (h *Handler) serveHealth(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		sources = append(sources, healthSource{
-			ID:      source.ID,
-			Cadence: source.Cadence,
-			Names:   source.Names,
-			ScanAge: resolveScanAge(scanAge, latest.ScannedAt, now),
+			ID:            source.ID,
+			Cadence:       source.Cadence,
+			Names:         source.Names,
+			LastScannedAt: source.LastScannedAt.UTC(),
+			ScanAge:       renderScanAge(scanAge),
 		})
 	}
 

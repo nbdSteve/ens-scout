@@ -120,3 +120,54 @@ describe('SnapshotStatus', () => {
     expect(screen.getByText(/Publication is when the scan was stored/)).toBeInTheDocument()
   })
 })
+
+/**
+ * A list whose own schedule has stopped, in a snapshot the other group is still
+ * publishing. The card has to say the stopped list is out of date and has to show
+ * the instant that makes that verifiable, because the scan time at the top of the
+ * card belongs to the group that is still running.
+ */
+describe('SnapshotStatus per-list scan instants', () => {
+  const STOPPED = new Date(SCANNED_AT.getTime() - 50 * 60 * 60 * 1000)
+
+  function stoppedDailyList() {
+    return buildSnapshot({
+      sources: [
+        {
+          id: 'five-letters',
+          path: 'data/words/5-letters.txt',
+          cadence: 'daily',
+          names: 1,
+          lastScannedAt: STOPPED,
+        },
+        {
+          id: 'four-letters',
+          path: 'data/words/4-letters.txt',
+          cadence: 'three-hourly',
+          names: 3,
+        },
+      ],
+    })
+  }
+
+  it('calls out the stopped list and dates it from its own scan', () => {
+    render(
+      <SnapshotStatus
+        cachedAt={null}
+        confirmedCurrent={false}
+        now={at(3600)}
+        origin="fixture"
+        snapshot={stoppedDailyList()}
+      />,
+    )
+
+    const groups = screen.getAllByRole('listitem')
+    expect(groups[0]).toHaveTextContent('Out of date')
+    expect(groups[0]).toHaveTextContent('Last scanned 2026-02-27 10:00:00 UTC')
+    expect(groups[0]).toHaveTextContent('Overdue by 3 hours.')
+
+    // The list the run did scan is dated from the scan time and stays on schedule.
+    expect(groups[1]).toHaveTextContent('On schedule')
+    expect(groups[1]).toHaveTextContent('Last scanned 2026-03-01 12:00:00 UTC')
+  })
+})

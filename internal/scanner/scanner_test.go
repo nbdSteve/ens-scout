@@ -306,6 +306,7 @@ type logRecord struct {
 	Attempted  int    `json:"attempted"`
 	Reclaimed  int    `json:"reclaimed"`
 	Skipped    int    `json:"skipped"`
+	Dropped    int    `json:"dropped"`
 	Error      string `json:"error"`
 }
 
@@ -422,12 +423,18 @@ func writeLists(t *testing.T, three, four, five []string) string {
 		"5-letters.txt": five,
 	}
 	for name, labels := range files {
-		body := "# generated for tests\n" + strings.Join(labels, "\n") + "\n"
-		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
-			t.Fatalf("write %s: %v", name, err)
-		}
+		writeList(t, dir, name, labels)
 	}
 	return dir
+}
+
+// writeList rewrites one word list, so a test can move a label between lists.
+func writeList(t *testing.T, dir, name string, labels []string) {
+	t.Helper()
+	body := "# generated for tests\n" + strings.Join(labels, "\n") + "\n"
+	if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
+		t.Fatalf("write %s: %v", name, err)
+	}
 }
 
 func defaultLists(t *testing.T) string {
@@ -511,6 +518,20 @@ func publishedNames(t *testing.T, store *fakeStore) []string {
 	}
 	sort.Strings(names)
 	return names
+}
+
+// sourceScan returns one published list's own last-scanned instant, and fails when
+// the pointer names no such list, so an assertion about an instant is bound to a
+// list that really was published.
+func sourceScan(t *testing.T, latest snapshot.Latest, id string) time.Time {
+	t.Helper()
+	for _, source := range latest.Sources {
+		if source.ID == id {
+			return source.LastScannedAt
+		}
+	}
+	t.Fatalf("the published pointer names no source %q", id)
+	return time.Time{}
 }
 
 func sourceIDs(latest snapshot.Latest) []string {
@@ -927,6 +948,127 @@ func TestRunDropsCarriedNamesRemovedFromTheirList(t *testing.T) {
 	published := statuses(t, store)
 	if _, found := published[longLabels[2]+".eth"]; found {
 		t.Errorf("a label removed from its list is still published")
+	}
+}
+
+// TestRunAdvancesOnlyTheScannedListsScanTime is the publisher half of the
+// per-source instant. One pointer serves every group, so a publication that
+// advanced every list's instant would report the group it did not scan as freshly
+// scanned - and the more often the fast group publishes, the longer a stopped daily
+// schedule would stay hidden.
+func TestRunAdvancesOnlyTheScannedListsScanTime(t *testing.T) {
+	store := newFakeStore()
+	dir := defaultLists(t)
+	short := []string{"3-letters", "4-letters"}
+
+	first := newTestRun(t, dir, newFakeGraph(nil), store)
+	bootstrap, err := Run(context.Background(), first.deps, Event{Group: GroupShort})
+	if err != nil {
+		t.Fatalf("first Run: %v", err)
+	}
+	for _, id := range short {
+		if got := sourceScan(t, bootstrap.Latest, id); !got.Equal(fixedNow) {
+			t.Errorf("bootstrap: %s was last scanned at %s, want %s", id, got, fixedNow)
+		}
+	}
+
+	// The daily schedule runs next and carries the three-hourly group forward.
+	dailyAt := fixedNow.Add(3 * time.Hour)
+	second := newTestRun(t, dir, newFakeGraph(nil), store).at(dailyAt)
+	daily, err := Run(context.Background(), second.deps, Event{Group: GroupLong})
+	if err != nil {
+		t.Fatalf("daily Run: %v", err)
+	}
+	if got := sourceScan(t, daily.Latest, "5-letters"); !got.Equal(dailyAt) {
+		t.Errorf("the scanned list was last scanned at %s, want %s", got, dailyAt)
+	}
+	for _, id := range short {
+		if got := sourceScan(t, daily.Latest, id); !got.Equal(fixedNow) {
+			t.Errorf("the daily run moved %s to %s, want the earlier %s", id, got, fixedNow)
+		}
+	}
+	// The snapshot itself is as fresh as this run, which is exactly why a carried
+	// list cannot be judged by the snapshot-wide instant.
+	if !daily.Latest.ScannedAt.Equal(dailyAt) {
+		t.Fatalf("the snapshot scan time is %s, want %s", daily.Latest.ScannedAt, dailyAt)
+	}
+
+	// And back the other way: the three-hourly schedule runs again and must leave
+	// the daily list on the instant its own schedule reached.
+	shortAt := dailyAt.Add(3 * time.Hour)
+	third := newTestRun(t, dir, newFakeGraph(nil), store).at(shortAt)
+	rescan, err := Run(context.Background(), third.deps, Event{Group: GroupShort})
+	if err != nil {
+		t.Fatalf("second short Run: %v", err)
+	}
+	for _, id := range short {
+		if got := sourceScan(t, rescan.Latest, id); !got.Equal(shortAt) {
+			t.Errorf("the rescanned %s was last scanned at %s, want %s", id, got, shortAt)
+		}
+	}
+	if got := sourceScan(t, rescan.Latest, "5-letters"); !got.Equal(dailyAt) {
+		t.Errorf("the short run moved 5-letters to %s, want the daily run's %s", got, dailyAt)
+	}
+}
+
+// TestRunDropsACarriedNameWhoseListWasNeverPublished covers the one case where a
+// carried result has no instant to keep: a label that moved into a list the
+// previous snapshot never published. Publishing it under this run's scan time is
+// the false-fresh report the field exists to remove, and failing the publication
+// would wedge a schedule over one moved label, so the result is dropped and the
+// count is reported.
+func TestRunDropsACarriedNameWhoseListWasNeverPublished(t *testing.T) {
+	store := newFakeStore()
+	dir := defaultLists(t)
+
+	// The daily list has never been scanned, so the bootstrap snapshot names only
+	// the two three-hourly lists and records no instant for the daily one.
+	first := newTestRun(t, dir, newFakeGraph(nil), store)
+	bootstrap, err := Run(context.Background(), first.deps, Event{Group: GroupShort})
+	if err != nil {
+		t.Fatalf("first Run: %v", err)
+	}
+	for _, source := range bootstrap.Latest.Sources {
+		if source.ID == "5-letters" {
+			t.Fatalf("the bootstrap snapshot already published the daily list")
+		}
+	}
+
+	// One published label moves from the three-hourly list into the daily one.
+	moved := shortLabels[0]
+	writeList(t, dir, "3-letters.txt", shortLabels[1:3])
+	writeList(t, dir, "5-letters.txt", append(append([]string(nil), longLabels...), moved))
+
+	second := newTestRun(t, dir, newFakeGraph(nil), store).at(fixedNow.Add(3 * time.Hour))
+	result, err := Run(context.Background(), second.deps, Event{Group: GroupShort})
+	if err != nil {
+		t.Fatalf("second Run: %v", err)
+	}
+
+	if _, published := statuses(t, store)[moved+".eth"]; published {
+		t.Errorf("%s.eth was published under a list with no recorded scan time", moved)
+	}
+	for _, source := range result.Latest.Sources {
+		if source.ID == "5-letters" {
+			t.Errorf("the daily list became a source without ever being scanned")
+		}
+	}
+	record := requireRecordAt(t, second, "carry_forward_unattributed", LevelWarn)
+	if record.Dropped != 1 {
+		t.Errorf("the run reported %d dropped results, want 1", record.Dropped)
+	}
+	// The label returns on the daily schedule's own next run, with that run's
+	// instant, so nothing is lost for longer than one cadence.
+	third := newTestRun(t, dir, newFakeGraph(nil), store).at(fixedNow.Add(6 * time.Hour))
+	daily, err := Run(context.Background(), third.deps, Event{Group: GroupLong})
+	if err != nil {
+		t.Fatalf("daily Run: %v", err)
+	}
+	if _, published := statuses(t, store)[moved+".eth"]; !published {
+		t.Errorf("%s.eth did not return on its new list's own schedule", moved)
+	}
+	if got, want := sourceScan(t, daily.Latest, "5-letters"), fixedNow.Add(6*time.Hour); !got.Equal(want) {
+		t.Errorf("the daily list was last scanned at %s, want %s", got, want)
 	}
 }
 
@@ -2161,6 +2303,57 @@ func TestRunRefusesToWriteChunksItCannotStage(t *testing.T) {
 	}
 	if _, latest, err := snapshot.Read(context.Background(), store); err != nil || latest.SnapshotID != live.Latest.SnapshotID {
 		t.Errorf("readers no longer see %q: %v", live.Latest.SnapshotID, err)
+	}
+}
+
+// A run that reads a snapshot scanned after its own instant has lost the pointer
+// race, and has to say so. Carrying that snapshot's source scan times forward would
+// hand snapshot.Build an instant later than the scan time it is building with, and
+// the contract refuses that as a malformed payload: correct for one, and a
+// misleading report of a benign schedule overlap for the other.
+func TestARunThatReadsANewerSnapshotLosesThePointerRace(t *testing.T) {
+	store := newFakeStore()
+	dir := defaultLists(t)
+
+	// The daily schedule publishes one minute into the three-hourly run's scan, so
+	// the pointer the short run then reads is newer than its own classification.
+	daily := newTestRun(t, dir, newFakeGraph(nil), store).at(fixedNow.Add(time.Minute))
+	published, err := Run(context.Background(), daily.deps, Event{Group: GroupLong})
+	if err != nil {
+		t.Fatalf("the daily run: %v", err)
+	}
+
+	short := newTestRun(t, dir, newFakeGraph(nil), store).at(fixedNow)
+	result, err := Run(context.Background(), short.deps, Event{Group: GroupShort})
+	if !errors.Is(err, snapshot.ErrPointerConflict) {
+		t.Fatalf("the older run returned %v, want an ErrPointerConflict", err)
+	}
+	if result.Latest.SnapshotID != "" {
+		t.Errorf("the refused run reported publishing %q", result.Latest.SnapshotID)
+	}
+
+	// The lost race is reported as one, at the level and event the pointer write's
+	// own refusal already uses, and not as a build error about a source timestamp.
+	record := requireRecordAt(t, short, "publish_failed", LevelError)
+	if record.PreviousID != published.Latest.SnapshotID {
+		t.Errorf("the refusal names %q as the published snapshot, want %q",
+			record.PreviousID, published.Latest.SnapshotID)
+	}
+	if hasRecord(t, short, "snapshot_build_failed") {
+		t.Errorf("the overlap was reported as a malformed snapshot: %s", short.logs.String())
+	}
+
+	// Nothing was published, staged, or written.
+	if _, latest, err := snapshot.Read(context.Background(), store); err != nil {
+		t.Errorf("the published snapshot is not readable: %v", err)
+	} else if latest.SnapshotID != published.Latest.SnapshotID {
+		t.Errorf("the pointer names %q, want %q", latest.SnapshotID, published.Latest.SnapshotID)
+	}
+	if got := store.SnapshotIDs(); !equalStrings(sortedCopy(got), []string{published.Latest.SnapshotID}) {
+		t.Errorf("the store holds %v, want only %q", got, published.Latest.SnapshotID)
+	}
+	if staged := stagedIDs(t, store); len(staged) != 0 {
+		t.Errorf("the refused run staged %v", staged)
 	}
 }
 
