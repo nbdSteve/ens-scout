@@ -1,0 +1,7 @@
+# Repository-scoped no-mistakes configuration.
+#
+# The reviewer agent for this repository. Set here rather than globally so the
+# choice applies to ens-scout alone and leaves every other repository on the
+# global default. no-mistakes only honours this value once it is on the trusted
+# default branch, so a feature branch cannot select its own reviewer.
+agent: opencode
