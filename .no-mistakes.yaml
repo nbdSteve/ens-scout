@@ -7,4 +7,4 @@
 # repository on the global default. no-mistakes only honours this value once it
 # is on the trusted default branch, so a feature branch cannot select its own
 # pipeline agent.
-agent: pi
+agent: codex
