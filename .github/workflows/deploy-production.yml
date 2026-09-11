@@ -1,0 +1,126 @@
+# The only workflow that deploys, and the only one that may hold AWS credentials.
+#
+# It is manual on purpose. There is one environment, the stack publishes real
+# snapshots on a schedule, and the first release has no promotion path to catch a
+# bad change downstream, so a deployment is a decision someone makes rather than a
+# consequence of a merge.
+#
+# Three things restrict what it can do, and all three have to hold:
+#
+#   1. `environment: production` requires the approval configured on that
+#      environment and refuses any ref its branch policy does not name.
+#   2. The AWS role trusts exactly one subject,
+#      `repo:nbdSteve/ens-scout:environment:production`, so a token minted by any
+#      other repository, branch, or environment cannot assume it.
+#   3. The role passes exactly one CloudFormation execution role, which is scoped
+#      to this stack's own resources.
+#
+# `docs/deployment.md` records the permission sets and what they deliberately
+# exclude. No AWS access key is stored in this repository.
+name: deploy production
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Never two deployments at once, and never cancel one in flight: a cancelled
+# CloudFormation deployment leaves the stack mid-update.
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: deploy to ap-southeast-2
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      contents: read
+      # The OIDC token this requests is the whole credential path. It is granted on
+      # this job alone.
+      id-token: write
+    steps:
+      # The environment's branch policy already refuses another ref, but that policy
+      # is configuration outside this repository, and this is the check a reviewer
+      # can see. `workflow_dispatch` also cannot be triggered on a pull request ref,
+      # so nothing a pull request produces reaches this job.
+      - name: refuse any ref but the default branch
+        env:
+          REF: ${{ github.ref }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          if [ "$REF" != "refs/heads/$DEFAULT_BRANCH" ]; then
+            echo "::error::refusing to deploy $REF; production deploys from refs/heads/$DEFAULT_BRANCH only"
+            exit 1
+          fi
+
+      - uses: actions/checkout@v7
+
+      # cdk.json bundles the scanner before every CDK command, so the Go toolchain
+      # is what produces the artifact this job deploys.
+      - uses: actions/setup-go@v7
+        with:
+          go-version: stable
+          cache-dependency-path: go.sum
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: infra/package-lock.json
+
+      - run: npm ci
+        working-directory: infra
+
+      # Build and verify once. `npm run check` is tsc --noEmit, the assertion suite,
+      # and a synth, and the synth leaves the whole cloud assembly in infra/cdk.out.
+      # The deploy step below reads that assembly rather than synthesizing again, so
+      # the template and the Lambda bundle that go to AWS are the ones these checks
+      # just passed. The bundle is reproducible, so a second synth would produce the
+      # same bytes - but "would" is not the same as "did", and this is the step that
+      # makes it the same artifact rather than an equal one.
+      - name: build and verify the artifact
+        working-directory: infra
+        run: npm run check
+
+      - name: record what is about to be deployed
+        working-directory: infra
+        run: |
+          echo "### Artifact" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "commit  $GITHUB_SHA" >> "$GITHUB_STEP_SUMMARY"
+          sha256sum cdk.out/EnsScout-prod.template.json >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: assume the deployment role
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+          audience: sts.amazonaws.com
+          # The role's trust policy already pins the account, so this is a second,
+          # local statement of the same fact: a variable edited to name another
+          # account's role fails here instead of somewhere inside a deployment.
+          allowed-account-ids: ${{ vars.AWS_ACCOUNT_ID }}
+          role-session-name: ens-scout-deploy-${{ github.run_id }}
+
+      # `--app cdk.out` deploys the assembly built above and synthesizes nothing new.
+      #
+      # `--role-arn` is what keeps the deployment identity narrow: CloudFormation
+      # creates and updates the stack's resources as EnsScoutCloudFormationExecutionRole,
+      # so this job's own role needs no permission over DynamoDB, Lambda, IAM, or
+      # anything else the stack contains. It is also the only role the deployment
+      # role is permitted to pass, and only to CloudFormation.
+      #
+      # `--require-approval never` answers the CLI's own prompt about IAM changes,
+      # which cannot be answered in CI. The human approval is the production
+      # environment's, recorded against the deployment.
+      - name: deploy
+        working-directory: infra
+        run: |
+          npx cdk deploy EnsScout-prod \
+            --app cdk.out \
+            --role-arn arn:aws:iam::289866763058:role/EnsScoutCloudFormationExecutionRole \
+            --require-approval never

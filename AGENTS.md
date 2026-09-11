@@ -41,6 +41,11 @@ and correct ENS lifecycle classification are core requirements.
 - `data/archive/`: superseded input lists retained for provenance.
 - `infra/`: the TypeScript AWS CDK application that defines the publisher stack.
   It is a separate npm project with its own README; the Go module ignores it.
+- `infra/iam/`: the four documents applied to the two deployment roles. They are
+  configuration in an AWS account rather than resources in the stack, and
+  `docs/deployment.md` explains them.
+- `.github/workflows/`: the pull-request gates and the one manual production
+  deployment. `docs/deployment.md` is the whole description of the deployment path.
 
 ## Development workflow
 
@@ -729,9 +734,72 @@ section holds only the rules that a change here could quietly break.
 - The chunk recovery window is not configurable from here, so the only TTL knob in
   context is the attribute name. `infra/README.md`'s design note on chunk retention
   says why.
-- The stack defines the publisher and nothing else. The read API, the frontend, the
-  OIDC deployment role, and the environment protections are later phases of
-  `docs/website-plan.md`, and a test asserts their resource types are absent.
+- The stack defines the publisher and nothing else. The read API and the frontend are
+  later phases of `docs/website-plan.md`, and a test asserts their resource types are
+  absent. That test also refuses an `AWS::IAM::OIDCProvider`, and that one is not a
+  deferral: the provider and the two deployment roles are what deploys this stack, so
+  defining them here would need something else to deploy them first, and a deployment
+  identity CloudFormation may rewrite during a deployment is one a bad template can
+  widen. `Deployment invariants` below has the rest.
+- `lib/deployment.ts` owns the bootstrap qualifier, the asset bucket name, and the
+  synthesizer, because all three have to agree with an IAM policy that lives outside
+  CDK. Nothing else may name the qualifier or build that bucket name, and
+  `test/deployment.test.ts` is what ties the committed policy documents to it.
+
+## Deployment invariants
+
+`.github/workflows/` and `infra/iam/` are the deployment path, and
+`docs/deployment.md` is the whole description of it. These are the rules a change
+there could quietly break.
+
+- The stack deploys with the caller's own credentials, through
+  `CliCredentialsStackSynthesizer`, and never through the CDK bootstrap roles. Those
+  roles are the reason: `cdk-hnb659fds-deploy-role` may pass
+  `cdk-hnb659fds-cfn-exec-role`, that role carries `AdministratorAccess` and can be
+  passed to any stack, and the deploy role's own `iam:PassRole` is restricted to
+  exactly it, so a narrower execution role cannot be substituted through the chain.
+  Anything permitted to assume the deploy role is an account administrator by another
+  name, whatever its own policy says. A test asserts the stack artifact carries no
+  `assumeRoleArn`, no `cloudFormationExecutionRoleArn`, and no `lookupRole`, because
+  those three fields are how the hop comes back.
+- The trust policy matches the GitHub subject with `StringEquals`, never `StringLike`,
+  and never with a `*` anywhere in it. That single subject,
+  `repo:nbdSteve/ens-scout:environment:production`, is the whole restriction: a
+  pattern such as `repo:nbdSteve/ens-scout:*` admits every branch and every pull
+  request of the repository and bypasses the environment protection entirely. The
+  audience is pinned the same way, because a missing `aud` admits a token minted for
+  another audience.
+- The deployment role holds no permission over anything the stack contains. It
+  deploys one CloudFormation stack, publishes assets, reads the bootstrap version, and
+  passes one execution role to CloudFormation alone. Solving a denied deployment by
+  adding a service permission here rather than to the execution role is the mistake to
+  refuse: it puts the privilege on the identity GitHub can assume instead of on the
+  one only CloudFormation can.
+- The execution role can attach no managed policy, create no policy, and create no
+  user or access key. The scanner's role takes an inline policy only, so nothing is
+  lost, and the exclusion is what stops that role from attaching
+  `AdministratorAccess` to a role it may also pass to Lambda.
+- Neither role may be widened to solve a problem by granting broad administration, and
+  neither may carry a wildcard action. The residual escalation path that remains -
+  `iam:PutRolePolicy` on `EnsScout-prod-*` plus Lambda creation - is recorded in
+  `docs/deployment.md` and is bounded only by the protected environment; a permissions
+  boundary is the follow-up, not a reason to stop worrying about the next grant.
+- The production workflow builds once and deploys that artifact. `npm run check`
+  leaves the verified assembly in `infra/cdk.out` and the deploy step reads it with
+  `--app cdk.out`, so what reaches AWS is the artifact the checks passed rather than an
+  equal one synthesized again. The bundle is reproducible, so a second synth would
+  produce the same bytes, and that is still not the same thing.
+- Only the deploy job requests `id-token: write`, and it declares
+  `environment: production`. The pull-request checks request no OIDC token at all, so
+  nothing on that path can reach the account.
+- No AWS access key or other long-lived cloud credential goes in the repository or in
+  its GitHub settings. The account, the region, and the role ARN are non-secret
+  repository variables.
+- `infra/iam/` holds the documents that are applied, dumped from the live roles.
+  Nothing synthesizes them and nothing detects drift, so that copy plus
+  `test/deployment.test.ts` is the only thing keeping them honest: change the account,
+  the region, the qualifier, the stack name, or the secret name in context and the test
+  fails until the documents follow.
 
 ## Website invariants
 

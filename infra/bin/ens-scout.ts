@@ -2,6 +2,7 @@
 import * as cdk from 'aws-cdk-lib';
 
 import { resolveConfig } from '../lib/config';
+import { deploymentSynthesizer } from '../lib/deployment';
 import { EnsScoutStack } from '../lib/ens-scout-stack';
 import { scannerCode } from '../lib/scanner-bundle';
 
@@ -17,4 +18,8 @@ new EnsScoutStack(app, `EnsScout-${config.environmentName}`, {
   scannerCode: scannerCode(),
   env: { account: config.account, region: config.region },
   description: `ENS Scout scheduled snapshot publisher (${config.environmentName})`,
+  // Deploy with the caller's own credentials rather than through the CDK bootstrap
+  // roles, which are admin-capable. `lib/deployment.ts` explains why, and
+  // `docs/deployment.md` records the permission set that replaces them.
+  synthesizer: deploymentSynthesizer(),
 });
