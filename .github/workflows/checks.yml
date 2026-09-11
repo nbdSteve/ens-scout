@@ -1,0 +1,120 @@
+# The gate every change passes before it can be merged or deployed.
+#
+# It runs the three commands AGENTS.md documents as the development workflow, so a
+# check that passes here is the same check a developer runs locally: the Go
+# commands, `npm run check` in infra/, and `npm run verify` in web/. Nothing here
+# needs AWS credentials, and no job requests an id-token, so a pull request from a
+# fork can run the whole gate and still reach nothing.
+name: checks
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# Read the checkout and nothing else. Deployment lives in deploy-production.yml,
+# which is the only workflow in this repository that may request an OIDC token.
+permissions:
+  contents: read
+
+concurrency:
+  group: checks-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  go:
+    name: go
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # `stable` rather than the go.mod directive. go.mod declares 1.18 because the
+      # module keeps 1.18 compatibility, but gofmt's output depends on the toolchain
+      # that runs it - 1.19 changed doc comment formatting - so a check running an
+      # older gofmt than developers do would disagree with a correctly formatted
+      # tree. The 1.18 floor is still enforced: a modern toolchain rejects language
+      # features newer than the `go` directive in this module's own source.
+      - uses: actions/setup-go@v7
+        with:
+          go-version: stable
+          cache-dependency-path: go.sum
+
+      - name: gofmt
+        run: |
+          unformatted="$(gofmt -l cmd internal)"
+          if [ -n "$unformatted" ]; then
+            echo "::error::gofmt would rewrite these files; run 'gofmt -w cmd internal'"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - run: go vet ./...
+
+      - run: go test ./...
+
+      - run: go build ./...
+
+      # The deployed artifact is a Linux arm64 binary, so a change that only
+      # compiles for the developer's own platform has to fail here rather than at
+      # the next bundle. The output is discarded: this proves the code compiles and
+      # builds nothing anyone deploys.
+      - name: cross-compile the Lambda for its runtime
+        env:
+          GOOS: linux
+          GOARCH: arm64
+        run: go build -o /dev/null ./cmd/scan-lambda
+
+  infra:
+    name: infra
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # The Go toolchain is not optional here: cdk.json bundles the scanner before
+      # every CDK command, so `npm run check` cross-compiles the Lambda.
+      - uses: actions/setup-go@v7
+        with:
+          go-version: stable
+          cache-dependency-path: go.sum
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: infra/package-lock.json
+
+      - run: npm ci
+        working-directory: infra
+
+      # tsc --noEmit, the assertion suite, and a synth. The synth resolves its
+      # account and region from cdk.json rather than from the environment, so it
+      # needs no credentials and cannot target a different account here than it
+      # does under review.
+      - run: npm run check
+        working-directory: infra
+
+  web:
+    name: web
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - run: npm ci
+        working-directory: web
+
+      # Every Playwright project in web/ is Chromium, including the phone-sized
+      # ones, so one browser download covers the whole suite.
+      - run: npm run browser:install
+        working-directory: web
+
+      # Format check, lint, typecheck, unit tests, production build, and the
+      # browser suite, in that order. The browser suite builds and serves its own
+      # bundles and reaches no external service.
+      - run: npm run verify
+        working-directory: web

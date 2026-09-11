@@ -310,7 +310,15 @@ and secrets. Done.
   The Graph API key stays in Secrets Manager and reaches the function as a
   CloudFormation dynamic reference, so it is in neither the repository nor the
   synthesized template; `infra/README.md` records the trade-off that choice makes.
-- Add GitHub Actions workflows that deploy through a GitHub OIDC role.
+- Add GitHub Actions workflows that deploy through a GitHub OIDC role. Done.
+  `checks.yml` runs the three repository gates on a pull request, and
+  `deploy-production.yml` is a manual run through a protected `production` environment
+  that federates into one narrow role and passes one CloudFormation execution role.
+  It builds and verifies once and deploys that assembly rather than synthesizing a
+  second one.
+  `docs/deployment.md` records the two roles, the GitHub configuration, and the
+  residual risks; the roles are configuration in the account rather than resources in
+  this stack, because they are what deploys it.
 
 ### Phase 2: read API and frontend
 

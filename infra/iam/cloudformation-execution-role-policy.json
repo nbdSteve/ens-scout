@@ -1,0 +1,207 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "SnapshotTable",
+      "Effect": "Allow",
+      "Action": [
+        "dynamodb:CreateTable",
+        "dynamodb:DeleteTable",
+        "dynamodb:DescribeContinuousBackups",
+        "dynamodb:DescribeContributorInsights",
+        "dynamodb:DescribeKinesisStreamingDestination",
+        "dynamodb:DescribeTable",
+        "dynamodb:DescribeTimeToLive",
+        "dynamodb:ListTagsOfResource",
+        "dynamodb:TagResource",
+        "dynamodb:UntagResource",
+        "dynamodb:UpdateContinuousBackups",
+        "dynamodb:UpdateContributorInsights",
+        "dynamodb:UpdateTable",
+        "dynamodb:UpdateTimeToLive"
+      ],
+      "Resource": "arn:aws:dynamodb:ap-southeast-2:289866763058:table/EnsScout-prod-*"
+    },
+    {
+      "Sid": "ScannerFunction",
+      "Effect": "Allow",
+      "Action": [
+        "lambda:AddPermission",
+        "lambda:CreateFunction",
+        "lambda:DeleteFunction",
+        "lambda:DeleteFunctionConcurrency",
+        "lambda:DeleteFunctionEventInvokeConfig",
+        "lambda:GetFunction",
+        "lambda:GetFunctionCodeSigningConfig",
+        "lambda:GetFunctionConcurrency",
+        "lambda:GetFunctionConfiguration",
+        "lambda:GetFunctionEventInvokeConfig",
+        "lambda:GetPolicy",
+        "lambda:GetRuntimeManagementConfig",
+        "lambda:ListTags",
+        "lambda:PutFunctionConcurrency",
+        "lambda:PutFunctionEventInvokeConfig",
+        "lambda:PutRuntimeManagementConfig",
+        "lambda:RemovePermission",
+        "lambda:TagResource",
+        "lambda:UntagResource",
+        "lambda:UpdateFunctionCode",
+        "lambda:UpdateFunctionConfiguration",
+        "lambda:UpdateFunctionEventInvokeConfig"
+      ],
+      "Resource": [
+        "arn:aws:lambda:ap-southeast-2:289866763058:function:EnsScout-prod-*",
+        "arn:aws:lambda:ap-southeast-2:289866763058:function:EnsScout-prod-*:*"
+      ]
+    },
+    {
+      "Sid": "ScannerRoleAndItsInlinePolicy",
+      "Effect": "Allow",
+      "Action": [
+        "iam:CreateRole",
+        "iam:DeleteRole",
+        "iam:DeleteRolePolicy",
+        "iam:GetRole",
+        "iam:GetRolePolicy",
+        "iam:ListAttachedRolePolicies",
+        "iam:ListRolePolicies",
+        "iam:ListRoleTags",
+        "iam:PutRolePolicy",
+        "iam:TagRole",
+        "iam:UntagRole",
+        "iam:UpdateAssumeRolePolicy",
+        "iam:UpdateRole",
+        "iam:UpdateRoleDescription"
+      ],
+      "Resource": "arn:aws:iam::289866763058:role/EnsScout-prod-*"
+    },
+    {
+      "Sid": "PassTheScannerRoleToLambdaOnly",
+      "Effect": "Allow",
+      "Action": "iam:PassRole",
+      "Resource": "arn:aws:iam::289866763058:role/EnsScout-prod-*",
+      "Condition": {
+        "StringEquals": {
+          "iam:PassedToService": "lambda.amazonaws.com"
+        }
+      }
+    },
+    {
+      "Sid": "ScannerLogGroup",
+      "Effect": "Allow",
+      "Action": [
+        "logs:CreateLogGroup",
+        "logs:DeleteLogGroup",
+        "logs:DeleteRetentionPolicy",
+        "logs:ListTagsForResource",
+        "logs:PutRetentionPolicy",
+        "logs:TagResource",
+        "logs:UntagResource"
+      ],
+      "Resource": [
+        "arn:aws:logs:ap-southeast-2:289866763058:log-group:EnsScout-prod-*",
+        "arn:aws:logs:ap-southeast-2:289866763058:log-group:EnsScout-prod-*:*"
+      ]
+    },
+    {
+      "Sid": "DescribeLogGroupsTakesTheWholeRegion",
+      "Effect": "Allow",
+      "Action": "logs:DescribeLogGroups",
+      "Resource": "arn:aws:logs:ap-southeast-2:289866763058:log-group:*"
+    },
+    {
+      "Sid": "ScanSchedules",
+      "Effect": "Allow",
+      "Action": [
+        "events:DeleteRule",
+        "events:DescribeRule",
+        "events:DisableRule",
+        "events:EnableRule",
+        "events:ListTagsForResource",
+        "events:ListTargetsByRule",
+        "events:PutRule",
+        "events:PutTargets",
+        "events:RemoveTargets",
+        "events:TagResource",
+        "events:UntagResource"
+      ],
+      "Resource": "arn:aws:events:ap-southeast-2:289866763058:rule/EnsScout-prod-*"
+    },
+    {
+      "Sid": "UndeliveredEventQueue",
+      "Effect": "Allow",
+      "Action": [
+        "sqs:CreateQueue",
+        "sqs:DeleteQueue",
+        "sqs:GetQueueAttributes",
+        "sqs:GetQueueUrl",
+        "sqs:ListQueueTags",
+        "sqs:SetQueueAttributes",
+        "sqs:TagQueue",
+        "sqs:UntagQueue"
+      ],
+      "Resource": "arn:aws:sqs:ap-southeast-2:289866763058:EnsScout-prod-*"
+    },
+    {
+      "Sid": "AlarmTopic",
+      "Effect": "Allow",
+      "Action": [
+        "sns:CreateTopic",
+        "sns:DeleteTopic",
+        "sns:GetTopicAttributes",
+        "sns:ListTagsForResource",
+        "sns:SetTopicAttributes",
+        "sns:TagResource",
+        "sns:UntagResource"
+      ],
+      "Resource": "arn:aws:sns:ap-southeast-2:289866763058:EnsScout-prod-*"
+    },
+    {
+      "Sid": "Alarms",
+      "Effect": "Allow",
+      "Action": [
+        "cloudwatch:DeleteAlarms",
+        "cloudwatch:ListTagsForResource",
+        "cloudwatch:PutMetricAlarm",
+        "cloudwatch:TagResource",
+        "cloudwatch:UntagResource"
+      ],
+      "Resource": "arn:aws:cloudwatch:ap-southeast-2:289866763058:alarm:EnsScout-prod-*"
+    },
+    {
+      "Sid": "DescribeAlarmsTakesNoResource",
+      "Effect": "Allow",
+      "Action": "cloudwatch:DescribeAlarms",
+      "Resource": "*"
+    },
+    {
+      "Sid": "ResolveTheGraphCredentialDynamicReference",
+      "Effect": "Allow",
+      "Action": "secretsmanager:GetSecretValue",
+      "Resource": "arn:aws:secretsmanager:ap-southeast-2:289866763058:secret:ens-scout/thegraph-api-key-*"
+    },
+    {
+      "Sid": "ReadTheScannerBundleAsset",
+      "Effect": "Allow",
+      "Action": [
+        "s3:GetObject",
+        "s3:GetObjectVersion"
+      ],
+      "Resource": "arn:aws:s3:::cdk-hnb659fds-assets-289866763058-ap-southeast-2/*",
+      "Condition": {
+        "StringEquals": {
+          "aws:ResourceAccount": "289866763058"
+        }
+      }
+    },
+    {
+      "Sid": "ReadTheBootstrapVersion",
+      "Effect": "Allow",
+      "Action": [
+        "ssm:GetParameter",
+        "ssm:GetParameters"
+      ],
+      "Resource": "arn:aws:ssm:ap-southeast-2:289866763058:parameter/cdk-bootstrap/hnb659fds/version"
+    }
+  ]
+}

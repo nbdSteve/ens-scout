@@ -6,9 +6,13 @@ One stack, `EnsScout-prod`, holds the DynamoDB snapshot table, the Go scanner
 Lambda, the two offset EventBridge schedules, the undelivered-event queue, the log
 group, the alarms and the topic they raise into, and the scanner's IAM role.
 Nothing else.
-The public read API, the frontend distribution, and the deployment pipeline are
-later phases of [docs/website-plan.md](../docs/website-plan.md) and are
-deliberately absent.
+The public read API and the frontend distribution are later phases of
+[docs/website-plan.md](../docs/website-plan.md) and are deliberately absent.
+The two deployment roles are absent from the stack too, and for a different reason:
+they are what deploys it, so a stack that defined them would have to be deployed by
+something else first.
+They live in `iam/` as the documents applied to the account, and
+[docs/deployment.md](../docs/deployment.md) explains them.
 
 ## Requirements
 
@@ -49,15 +53,24 @@ from whichever profile is logged in.
 
 ## Deployment
 
-This repository does not deploy.
-`npm run diff` and `cdk deploy` are run by a person with credentials for account
-`289866763058` in `ap-southeast-2`, and two things must exist first.
+Deployment is one manual GitHub Actions run against account `289866763058` in
+`ap-southeast-2`, through a GitHub OIDC role and a protected `production` environment.
+[docs/deployment.md](../docs/deployment.md) is the whole description: the two roles,
+what they may and may not do, the GitHub configuration, and the residual risks.
+`.github/workflows/deploy-production.yml` is the only workflow that deploys, and no
+command run during development here touches AWS.
+
+`npm run diff` and an interactive `cdk deploy` still work for someone holding
+credentials directly, and three things must exist before either.
 
 1. The CDK bootstrap stack in that account and region, `cdk bootstrap`.
+   The four bootstrap roles go unused, for the reason `lib/deployment.ts` records, but
+   the bucket and the version parameter the qualifier names are both required.
 2. The Secrets Manager secret named by `ens-scout:graphApiKeySecretName`, holding a
    JSON document with the field named by `ens-scout:graphApiKeySecretField`.
    Create it out of band.
    This stack references the secret and never creates, rotates, or overwrites it.
+3. The two roles in `iam/`, if the deployment goes through the workflow.
 
 The stack creates the alarm topic and deliberately adds no subscription to it, so
 subscribing is a deployment step rather than something the template does.
@@ -171,20 +184,50 @@ Matching the script's text would not: its own header comment names every flag, w
 is how a dropped `-buildvcs=false` went unnoticed once already.
 `npm test` never compiles the binary.
 
+`test/deployment.test.ts` is the one suite that asserts on things outside CDK.
+The two role documents in `iam/` are configuration in an AWS account, and the two
+workflows are configuration in GitHub, so no template can describe either, and both have
+to agree with `lib/deployment.ts` and with the committed context.
+It derives the asset bucket, the bootstrap version parameter, the stack ARN, and the
+secret ARN from those two sources and requires the documents to name exactly them; it
+pins the trust policy's subject, audience, and condition operator; it pins the statements
+that grant anything on `*`; it synthesizes with `deploymentSynthesizer()` and requires
+the stack artifact to name none of the bootstrap roles; and it requires the deploy
+workflow to pass exactly the one role the deployment policy permits passing.
+It matches the workflow text after stripping full-line comments, which is the one place
+here that asserts on text: there is no YAML parser in the dependency set, and adding a
+dependency is a decision rather than a convenience.
+Stripping the comments is what keeps that match honest, because a comment naming
+`aws-access-key-id` to say it is absent must not decide the assertion that it is absent.
+
 ## Layout
 
 ```text
 bin/ens-scout.ts              app entry point; resolves context and the environment
 lib/config.ts                 context keys, validation, and the scan tuning
+lib/deployment.ts             the bootstrap qualifier, the asset bucket, and the synthesizer
 lib/schedules.ts              the two schedules and the cron expansion used to prove the offset
 lib/ens-scout-stack.ts        the stack
 lib/scanner-bundle.ts         locates the bundle the CDK app packages
+iam/                          the four documents applied to the two deployment roles
 scripts/bundle-scanner.js     reproducible cross-compile of cmd/scan-lambda
 test/                         the assertion suite
 test/fixtures/scan-lambda/    fixed-hash stand-in for the compiled scanner
 ```
 
 ## Design notes
+
+**The caller's own credentials, not the CDK bootstrap roles.** The default synthesizer
+makes every deployment assume `cdk-hnb659fds-deploy-role`, which may pass
+`cdk-hnb659fds-cfn-exec-role`, and that role carries `AdministratorAccess` and can be
+passed to any stack.
+An identity permitted to assume the deploy role is therefore an account administrator by
+another name, and the deploy role's own `iam:PassRole` is restricted to exactly that
+admin-capable role, so a narrower execution role cannot be substituted through the chain.
+`lib/deployment.ts` selects `CliCredentialsStackSynthesizer` to remove the hop, which is
+what makes the two narrow roles in `iam/` reachable at all.
+The cost is that the bootstrap roles go unused while the bootstrap stack is still
+required, because the qualifier names the asset bucket and the version parameter.
 
 **EventBridge Rules, not the Scheduler L2.** `aws-scheduler` is still an alpha
 module, and two fixed cron schedules need nothing it adds.

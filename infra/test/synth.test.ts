@@ -50,8 +50,15 @@ describe('synthesis', () => {
   });
 
   test('adds none of the resources issue #4 defers', () => {
-    // The read API, the frontend, and the deployment pipeline are later phases. This
-    // is the assertion that keeps a well-meant addition out of this stack.
+    // The read API and the frontend are later phases. This is the assertion that keeps
+    // a well-meant addition out of this stack.
+    //
+    // The OIDC provider is in the list for a different reason, and it stays refused
+    // rather than arriving with a later phase: it and the two deployment roles are
+    // what deploys this stack, so a stack that defined them would need something else
+    // to deploy it first, and a deployment identity CloudFormation may rewrite during
+    // a deployment is one a bad template can widen. `docs/deployment.md` records them
+    // instead.
     const template = synth().template;
     for (const type of [
       'AWS::ApiGateway::RestApi',
