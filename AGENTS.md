@@ -13,6 +13,9 @@ and correct ENS lifecycle classification are core requirements.
 - `cmd/scan-lambda/`: the Lambda entrypoint for the scheduled publisher.
   Wiring only; it builds the real Graph client and the real DynamoDB store and
   adds no behavior of its own.
+- `cmd/api-lambda/`: the Lambda/API Gateway adapter for `internal/api`.
+  It authenticates the CloudFront origin request, attaches CloudFront's trusted
+  viewer identity, and otherwise remains wiring only.
 - `internal/ens/`: typed GraphQL client and ENS registration lifecycle logic.
 - `internal/checker/`: batching and bounded concurrent execution.
 - `internal/names/`: input loading, normalization, and deduplication.
@@ -39,8 +42,9 @@ and correct ENS lifecycle classification are core requirements.
 - `data/results/`: historical output from the original utility; treat as
   reference data, not golden test fixtures.
 - `data/archive/`: superseded input lists retained for provenance.
-- `infra/`: the TypeScript AWS CDK application that defines the publisher stack.
-  It is a separate npm project with its own README; the Go module ignores it.
+- `infra/`: the TypeScript AWS CDK application that defines the publisher, read
+  API, private frontend origin, and CloudFront distribution. It is a separate npm
+  project with its own README; the Go module ignores it.
 - `infra/iam/`: templates of the four documents applied to the two deployment
   roles, rendered by `infra/scripts/render-iam.js`. They are configuration in an
   AWS account rather than resources in the stack, and `docs/deployment.md`
@@ -59,10 +63,11 @@ go vet ./...
 go build ./...
 ```
 
-Also confirm that the Lambda still cross-compiles for its runtime:
+Also confirm that both Lambdas still cross-compile for their runtime:
 
 ```powershell
 $env:GOOS = "linux"; $env:GOARCH = "arm64"; go build -o /dev/null ./cmd/scan-lambda
+$env:GOOS = "linux"; $env:GOARCH = "arm64"; go build -o /dev/null ./cmd/api-lambda
 ```
 
 The output is discarded on purpose. This is a check that the code still compiles,
@@ -80,7 +85,7 @@ installed the infra dependencies, and `flatted` ships a real Go package that wou
 otherwise be listed among this module's own.
 Nothing imports or builds either module, so do not delete them as dead.
 
-Everything except the Lambda entrypoint and `internal/dynamo` uses only the
+Everything except the Lambda entrypoints and `internal/dynamo` uses only the
 standard library, and it should stay that way. Discuss a new dependency before
 adding it, and commit `go.sum` with it.
 
@@ -100,11 +105,13 @@ local fakes.
 Run this after changing anything under `infra/`:
 
 ```powershell
-cd infra; npm run check
+cd web; $env:VITE_API_BASE_URL = "/"; npm run build
+cd ../infra; npm run check
 ```
 
 That is `tsc --noEmit`, the assertion suite, and a synth. It needs the Go toolchain,
-because every CDK command cross-compiles the scanner first, and it needs no AWS
+because every CDK command cross-compiles both Lambdas first, and it needs the
+production web build because the synth packages those exact bytes. It needs no AWS
 credentials.
 
 Run the full frontend gate from `web/` after changing anything under `web/`:
@@ -140,7 +147,7 @@ Chromium once: `npm run browser:install`.
 ## Snapshot contract invariants
 
 `internal/snapshot` is the shared contract for the website, so the scanner, the
-planned read API, the local preview, and the browser all agree.
+read API, the local preview, and the browser all agree.
 
 - Reuse `ens.Classify` and `ens.Result`. Never add a second classifier.
 - Store the fully-qualified name, `zap.eth`, which is what `ens.Client`,
@@ -670,7 +677,7 @@ section holds only the rules that a change here could quietly break.
   the target account and region come from CDK context rather than from ambient
   credentials. A synth that resolved the environment from whichever profile is
   logged in would silently describe a different account than the one under review.
-- Keep the scanner bundle reproducible: `-trimpath`, a cleared build id,
+- Keep both Go Lambda bundles reproducible: `-trimpath`, a cleared build id,
   `-buildvcs=false`, and only `data/words/*.txt` alongside the binary, because the CDK
   asset hash is the content hash. The VCS stamp is the part that is easy to miss, since
   it varies with how the checkout was made rather than with what is in it: a git
@@ -685,9 +692,9 @@ section holds only the rules that a change here could quietly break.
   refuses an empty directory packages a bundle missing one list, deploys cleanly, and
   then fails every invocation in `loadLists`. The parse has to reject a `Lists` block
   it cannot read rather than yield nothing, or the check passes for any bundle.
-- Inject the Lambda code as a stack prop and let the tests supply the committed
-  fixture in `test/fixtures/scan-lambda/`. A freshly built binary hashes differently
-  per machine, so a test that packaged the real bundle would assert on whoever ran it.
+- Inject the Lambda code and website sources as stack props and let the tests supply
+  committed fixtures under `test/fixtures/`. A freshly built binary or website asset
+  hash would otherwise make a template assertion depend on whoever ran it.
 - Assertions that involve a name Go owns must read the Go source, not copy the
   string: the table's key and TTL attributes from `internal/dynamo/item.go`, the
   scanner role's DynamoDB action set from the method names on `internal/dynamo`'s
@@ -718,13 +725,12 @@ section holds only the rules that a change here could quietly break.
   no index; the managed basic-execution policy adds `logs:CreateLogGroup` on every
   group in the account. The five DynamoDB actions are exactly what `internal/dynamo`
   calls, and a superseded snapshot is expired with an UpdateItem rather than deleted.
-- The role has no `secretsmanager:GetSecretValue`, deliberately. The key reaches the
-  function as a CloudFormation dynamic reference that the deployment resolves, so the
-  grant would be privilege nothing uses; the cost is that rotating the secret needs a
-  deployment, which is the cheaper side of the trade for one long-lived credential.
-  The synthesized template must hold exactly one `{{resolve:secretsmanager:` and no
-  secret resource, because a second reference is a second place the credential is
-  materialized and those places are descriptions, tags, and alarm text.
+- Runtime roles have no `secretsmanager:GetSecretValue`. The Graph key and the two
+  generated serving secrets reach the functions and CloudFront as CloudFormation
+  dynamic references, so a runtime grant would be privilege nothing uses. The Graph
+  secret remains an out-of-band reference; the stack-generated secrets are only the
+  fresh-check HMAC key and the CloudFront-to-origin token, and none may appear in an
+  output, asset, description, tag, or log.
 - Bound retention wherever the stack creates something that accumulates, and refuse an
   unsupported log-retention day count rather than rounding it. Refuse
   `RetentionDays.INFINITE` by meaning rather than by the number: CloudWatch Logs accepts
@@ -753,13 +759,24 @@ section holds only the rules that a change here could quietly break.
 - The chunk recovery window is not configurable from here, so the only TTL knob in
   context is the attribute name. `infra/README.md`'s design note on chunk retention
   says why.
-- The stack defines the publisher and nothing else. The read API and the frontend are
-  later phases of `docs/website-plan.md`, and a test asserts their resource types are
-  absent. That test also refuses an `AWS::IAM::OIDCProvider`, and that one is not a
-  deferral: the provider and the two deployment roles are what deploys this stack, so
-  defining them here would need something else to deploy them first, and a deployment
-  identity CloudFormation may rewrite during a deployment is one a bad template can
-  widen. `Deployment invariants` below has the rest.
+- The public path is exactly one HTTP API, one private S3 frontend bucket, and one
+  CloudFront distribution. CloudFront uses OAC for the bucket and one generated
+  origin token for the HTTP API; a direct execute-api request must fail before it
+  reaches `internal/api`. The API role reads only `META`/`SNAPSHOT#` keys and writes
+  only `CHECKRATE#`/`CHECKRESULT#` keys.
+- SPA fallback belongs only on the default static behavior and rewrites only `/`,
+  trailing-slash routes, and extensionless routes. `assets/*` has no rewrite
+  association and the distribution has no custom error fallback, so a missing
+  immutable file remains missing rather than becoming `index.html`.
+- Keep distinct cache behavior for the no-cache HTML shell, one-year hashed assets,
+  bounded snapshot reads, and cache-disabled health/check/mutation traffic.
+- Keep the production snapshot body ceiling below the buffered Lambda invocation
+  limit; `infra/lib/public-site.ts` owns the 4 MiB value that leaves room for the
+  proxy response envelope.
+- The stack still refuses an `AWS::IAM::OIDCProvider`, custom domain, certificate,
+  hosted zone, or second scheduler. The provider and deployment roles are what
+  deploy this stack, so defining them here would need something else to deploy them
+  first; domains and release-safety extras are outside the approved launch scope.
 - `lib/deployment.ts` owns the bootstrap qualifier, the asset bucket name, and the
   synthesizer, because all three have to agree with an IAM policy that lives outside
   CDK. Nothing else may name the qualifier or build that bucket name, and
@@ -803,11 +820,13 @@ there could quietly break.
   `iam:PutRolePolicy` on `EnsScout-prod-*` plus Lambda creation - is recorded in
   `docs/deployment.md` and is bounded only by the protected environment; a permissions
   boundary is the follow-up, not a reason to stop worrying about the next grant.
-- The production workflow builds once and deploys that artifact. `npm run check`
-  leaves the verified assembly in `infra/cdk.out` and the deploy step reads it with
-  `--app cdk.out`, so what reaches AWS is the artifact the checks passed rather than an
-  equal one synthesized again. The bundle is reproducible, so a second synth would
-  produce the same bytes, and that is still not the same thing.
+- The production workflow builds the web bundle with `VITE_API_BASE_URL=/` before
+  synth, then builds once and deploys that artifact. `npm run check` leaves the
+  verified assembly in `infra/cdk.out` and the deploy step reads it with
+  `--app cdk.out`, so what reaches AWS is the website, both Lambda bundles, and
+  template the checks passed rather than an equal assembly synthesized again.
+  The generated `PublicSiteUrl` output is the only deployment value copied into the
+  job summary.
   That reproducibility is across checkouts and machines, not across compilers, so every
   `setup-go` step in `.github/workflows/` pins one exact version and a test in `infra/`
   fails when they disagree.

@@ -499,6 +499,16 @@ The identity a request is throttled against comes from the trusted transport con
 `X-Forwarded-For` and every other forwarding header are ignored, because a caller chooses a header and a client that can choose its identity can mint a fresh one per request.
 A request with neither is `client_unidentified` and is refused.
 
+The production adapter is behind CloudFront, so API Gateway's transport peer is a
+CloudFront edge rather than the visitor.
+CloudFront adds `CloudFront-Viewer-Address`; the adapter trusts it only after a
+constant-time comparison of the stack-generated `ENS_API_ORIGIN_SECRET` against the
+custom origin header CloudFront overwrites.
+It then attaches only the parsed IP through `WithClientIdentity`, and configures the
+check path to accept only `ContextClientKey`.
+A direct execute-api request therefore fails before it reaches `internal/api`, and a
+spoofed forwarding header cannot choose a limiter identity.
+
 The identity is never stored, logged, or returned.
 It is keyed with HMAC-SHA256 under `ENS_API_CHECK_CLIENT_SECRET`, a stable deployment secret of at least 32 bytes, and only the hex digest reaches the store or a log line.
 HMAC rather than a bare digest is what makes it irreversible: an unkeyed digest of an address is undone by hashing the address space.
@@ -557,8 +567,16 @@ ENS_API_RETRY_AFTER_SECONDS   Retry-After on a 503, default 60
 Every setting has a ceiling as well as a floor, because a mistyped environment variable must not be able to turn a bounded response into an unbounded one.
 A rejected setting names the variable, so an operator does not have to guess which one was refused.
 
-An empty origin list means no browser origin is accepted, which is the safe default: a deployment has to name its frontend before a browser can read the snapshot.
+An empty origin list means no cross-origin browser origin is accepted, which is the
+safe default.
+A same-origin browser needs no CORS grant, so the CloudFront deployment leaves this
+empty and serves the page and `/api/*` from one generated hostname.
 A non-browser client is unaffected, because CORS only ever grants access it would otherwise deny.
+
+The production entrypoint sets `ENS_API_MAX_BODY_BYTES` to 4 MiB. That leaves room
+for the API Gateway/Lambda response envelope below the buffered integration limit,
+so an oversized snapshot reaches the application's fixed `snapshot_too_large`
+response instead of failing as a truncated gateway response.
 
 The store is supplied by the caller rather than parsed, and it is a `snapshot.Reader` rather than a `snapshot.Store`, so a serving path cannot write a chunk, remove one, or move the pointer even by mistake.
 
@@ -600,6 +618,12 @@ Every other value degrades to something sensible; a keying secret has no sensibl
 `ENS_API_CHECK_SOON_DAYS` matches the publisher's window, so a fresh status and a snapshot status agree for a name near a boundary.
 
 `The client identity` above says where an identity comes from and how it is keyed.
+
+`ENS_API_ORIGIN_SECRET` is adapter configuration rather than `internal/api`
+configuration.
+The stack generates it independently of `ENS_API_CHECK_CLIENT_SECRET`, materializes
+it only in the API Lambda environment and CloudFront origin header through dynamic
+references, and emits neither secret as an output.
 
 ## Local development
 

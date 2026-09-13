@@ -372,7 +372,7 @@ describe('starting it again', () => {
   it('offers no retry for a failure another attempt cannot clear', () => {
     mount('unavailable', { failure: UNSUPPORTED })
 
-    expect(UNSUPPORTED?.retryable).toBe(false)
+    expect(UNSUPPORTED.retryable).toBe(false)
     expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull()
     expect(screen.queryByRole('button', { name: 'Stop using it' })).toBeNull()
   })

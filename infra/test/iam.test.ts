@@ -1,6 +1,6 @@
 import { Match, Template } from 'aws-cdk-lib/assertions';
 
-import { asList, eachPolicyStatement, goInterfaceMethods, goSource, synth } from './helpers';
+import { asList, goInterfaceMethods, goSource, synth } from './helpers';
 
 describe('the scanner role', () => {
   let template: Template;
@@ -9,12 +9,14 @@ describe('the scanner role', () => {
     template = synth().template;
   });
 
-  test('is the only role in the stack', () => {
-    // A second role means something added a helper it did not declare - the
-    // log-retention custom resource is the usual one - and that helper's privileges
-    // are then outside every assertion below.
-    template.resourceCountIs('AWS::IAM::Role', 1);
-    template.resourceCountIs('AWS::IAM::Policy', 1);
+  test('is one of the three declared Lambda roles', () => {
+    // Scanner, read API, and website asset copier. No implicit log-retention or
+    // other helper role sits outside the assertions for those paths.
+    template.resourceCountIs('AWS::IAM::Role', 3);
+    template.resourceCountIs('AWS::IAM::Policy', 3);
+    template.hasResourceProperties('AWS::IAM::Role', {
+      Description: 'Publishes ENS snapshots into the snapshot table',
+    });
   });
 
   test('is assumable only by Lambda', () => {
@@ -35,6 +37,7 @@ describe('the scanner role', () => {
     // AWSLambdaBasicExecutionRole would add logs:CreateLogGroup on every group in
     // the account, which is exactly what declaring the group avoids.
     template.hasResourceProperties('AWS::IAM::Role', {
+      Description: 'Publishes ENS snapshots into the snapshot table',
       ManagedPolicyArns: Match.absent(),
     });
   });
@@ -52,7 +55,7 @@ describe('the scanner role', () => {
         ]),
       },
     });
-    const granted = grantedActions(template);
+    const granted = scannerGrantedActions(template);
     expect(granted).not.toContain('logs:CreateLogGroup');
     expect(granted).not.toContain('logs:PutRetentionPolicy');
     expect(granted).not.toContain('logs:DeleteLogGroup');
@@ -73,7 +76,7 @@ describe('the scanner role', () => {
       .map((method) => `dynamodb:${method}`)
       .sort();
 
-    const publish = allowStatements(template).find(
+    const publish = scannerAllowStatements(template).find(
       (statement) => statement.Sid === 'PublishSnapshots',
     );
     expect(publish).toBeDefined();
@@ -83,7 +86,7 @@ describe('the scanner role', () => {
     });
 
     // And nothing outside that statement grants a DynamoDB action either.
-    const dynamoActions = grantedActions(template).filter((action) =>
+    const dynamoActions = scannerGrantedActions(template).filter((action) =>
       action.startsWith('dynamodb:'),
     );
     expect(dynamoActions.sort()).toEqual(expected);
@@ -94,7 +97,9 @@ describe('the scanner role', () => {
     // dead-letter queue, which no longer exists. EventBridge writes to that queue
     // under the queue's own resource policy, so a grant here would be privilege
     // nothing uses.
-    const sqsActions = grantedActions(template).filter((action) => action.startsWith('sqs:'));
+    const sqsActions = scannerGrantedActions(template).filter((action) =>
+      action.startsWith('sqs:'),
+    );
     expect(sqsActions).toEqual([]);
   });
 
@@ -103,13 +108,13 @@ describe('the scanner role', () => {
     // which the deployment resolves with the deployer's credentials before the
     // function exists. A GetSecretValue grant here would be privilege nothing uses,
     // and it would let the running function read the credential store directly.
-    const granted = grantedActions(template);
+    const granted = scannerGrantedActions(template);
     expect(granted.filter((action) => action.startsWith('secretsmanager:'))).toEqual([]);
     expect(granted.filter((action) => action.startsWith('kms:'))).toEqual([]);
   });
 
   test('grants nothing on a wildcard resource', () => {
-    for (const statement of allowStatements(template)) {
+    for (const statement of scannerAllowStatements(template)) {
       for (const resource of asList(statement.Resource)) {
         expect(resource).not.toBe('*');
       }
@@ -117,7 +122,7 @@ describe('the scanner role', () => {
   });
 
   test('grants no wildcard action', () => {
-    for (const action of grantedActions(template)) {
+    for (const action of scannerGrantedActions(template)) {
       expect(action).not.toContain('*');
     }
   });
@@ -126,7 +131,9 @@ describe('the scanner role', () => {
     // The catch-all: a future edit that adds a permission also has to add its
     // service here, which is the moment to decide the grant is least privilege.
     // Secrets Manager is deliberately not one of the two, which the test above says.
-    const services = new Set(grantedActions(template).map((action) => action.split(':')[0]));
+    const services = new Set(
+      scannerGrantedActions(template).map((action) => action.split(':')[0]),
+    );
     expect([...services].sort()).toEqual(['dynamodb', 'logs']);
   });
 });
@@ -179,15 +186,28 @@ describe('the resource policies', () => {
   });
 });
 
-/** allowStatements is every Allow statement of every identity policy in the stack. */
-function allowStatements(template: Template): Array<Record<string, unknown>> {
-  return eachPolicyStatement(template).filter((statement) => statement.Effect === 'Allow');
+function scannerAllowStatements(template: Template): Array<Record<string, unknown>> {
+  const policies = template.findResources('AWS::IAM::Policy');
+  for (const resource of Object.values(policies)) {
+    const statements = (
+      resource.Properties as {
+        PolicyDocument: { Statement: Array<Record<string, unknown>> };
+      }
+    ).PolicyDocument.Statement;
+    if (statements.some((statement) => statement.Sid === 'PublishSnapshots')) {
+      return statements.filter((statement) => statement.Effect === 'Allow');
+    }
+  }
+  throw new Error('the scanner policy was not found');
 }
 
-/** grantedActions is every action any identity policy in the stack allows. */
-function grantedActions(template: Template): string[] {
+function scannerGrantedActions(template: Template): string[] {
+  return actionsFromStatements(scannerAllowStatements(template));
+}
+
+function actionsFromStatements(statements: Array<Record<string, unknown>>): string[] {
   const actions: string[] = [];
-  for (const statement of allowStatements(template)) {
+  for (const statement of statements) {
     for (const action of asList(statement.Action)) {
       if (typeof action === 'string') {
         actions.push(action);

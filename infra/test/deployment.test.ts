@@ -6,7 +6,13 @@ import * as cdk from 'aws-cdk-lib';
 import { placeholderAccount, resolveConfig } from '../lib/config';
 import { assetBucketName, bootstrapQualifier, deploymentSynthesizer } from '../lib/deployment';
 import { EnsScoutStack } from '../lib/ens-scout-stack';
-import { asList, fixtureCode, repoRoot } from './helpers';
+import {
+  asList,
+  fixtureApiCode,
+  fixtureCode,
+  fixtureWebsiteSources,
+  repoRoot,
+} from './helpers';
 
 /**
  * The deployment path is the one part of this repository that is configured in AWS
@@ -239,7 +245,7 @@ describe('the CloudFormation execution role', () => {
   });
 
   test('can attach no managed policy to the role it creates', () => {
-    // The stack gives the scanner an inline policy only, so nothing is lost, and the
+    // The stack gives every Lambda role an inline policy only, so nothing is lost, and the
     // exclusion is what stops this role from attaching AdministratorAccess to a role
     // it may also pass to Lambda.
     for (const excluded of [
@@ -255,8 +261,8 @@ describe('the CloudFormation execution role', () => {
     }
   });
 
-  test('passes the scanner role to Lambda alone', () => {
-    const statement = statementNamed(policy, 'PassTheScannerRoleToLambdaOnly');
+  test('passes the stack Lambda roles to Lambda alone', () => {
+    const statement = statementNamed(policy, 'PassTheStackLambdaRolesToLambdaOnly');
     expect(statement.Condition).toEqual({
       StringEquals: { 'iam:PassedToService': 'lambda.amazonaws.com' },
     });
@@ -268,25 +274,47 @@ describe('the CloudFormation execution role', () => {
     // so the stack name is a real prefix and every resource this role touches carries
     // it. The exceptions are the grants that cannot be written that way, and pinning
     // the set is what makes a sixth one a failing test rather than a quiet widening.
-    const exceptions = new Map<string, string>([
-      ['DescribeLogGroupsTakesTheWholeRegion', `arn:aws:logs:${config.region}:${config.account}:log-group:*`],
-      ['DescribeAlarmsTakesNoResource', '*'],
+    const exceptions = new Map<string, string[]>([
+      [
+        'DescribeLogGroupsTakesTheWholeRegion',
+        [`arn:aws:logs:${config.region}:${config.account}:log-group:*`],
+      ],
+      ['DescribeAlarmsTakesNoResource', ['*']],
       [
         'ResolveTheGraphCredentialDynamicReference',
-        `arn:aws:secretsmanager:${config.region}:${config.account}:secret:${config.graphApiKeySecretName}-*`,
+        [
+          `arn:aws:secretsmanager:${config.region}:${config.account}:secret:${config.graphApiKeySecretName}-*`,
+        ],
       ],
-      ['ReadTheScannerBundleAsset', `arn:aws:s3:::${assetBucket}/*`],
+      [
+        'PrivateWebsiteBucket',
+        [`arn:aws:s3:::ensscout-prod-*`, `arn:aws:s3:::ensscout-prod-*/*`],
+      ],
+      [
+        'HttpApi',
+        [
+          `arn:aws:apigateway:${config.region}::/apis`,
+          `arn:aws:apigateway:${config.region}::/apis/*`,
+          `arn:aws:apigateway:${config.region}::/tags/*`,
+        ],
+      ],
+      ['CloudFrontPublicSite', ['*']],
+      ['GenerateServingSecretValues', ['*']],
+      ['ReadTheStackAssets', [`arn:aws:s3:::${assetBucket}/*`]],
       [
         'ReadTheBootstrapVersion',
-        `arn:aws:ssm:${config.region}:${config.account}:parameter/cdk-bootstrap/${bootstrapQualifier}/version`,
+        [
+          `arn:aws:ssm:${config.region}:${config.account}:parameter/cdk-bootstrap/${bootstrapQualifier}/version`,
+        ],
       ],
     ]);
     for (const statement of policy) {
       const exception = exceptions.get(statement.Sid ?? '');
-      for (const resource of asList(statement.Resource) as string[]) {
-        if (exception !== undefined) {
-          expect(resource).toBe(exception);
-        } else {
+      const resources = asList(statement.Resource) as string[];
+      if (exception !== undefined) {
+        expect(resources).toEqual(exception);
+      } else {
+        for (const resource of resources) {
           expect(resource).toContain(`${stackName}-`);
         }
       }
@@ -295,16 +323,27 @@ describe('the CloudFormation execution role', () => {
     expect(named.map((statement) => statement.Sid).sort()).toEqual([...exceptions.keys()].sort());
   });
 
-  test('reads only the secret the committed context names', () => {
-    // The credential reaches the function as a CloudFormation dynamic reference this
-    // role resolves, so this is the one grant that is a real secret read, and it must
-    // follow cdk.json rather than a literal copied beside it.
-    const secretReads = policy.filter((statement) =>
-      actions([statement]).some((action) => action.startsWith('secretsmanager:')),
+  test('reads the external Graph key and manages only the two stack-generated serving secrets', () => {
+    const graph = statementNamed(policy, 'ResolveTheGraphCredentialDynamicReference');
+    expect(actions([graph])).toEqual(['secretsmanager:GetSecretValue']);
+    expect(graph.Resource).toContain(config.graphApiKeySecretName);
+
+    const generated = statementNamed(policy, 'GeneratedServingSecrets');
+    expect(actions([generated])).toEqual(
+      expect.arrayContaining([
+        'secretsmanager:CreateSecret',
+        'secretsmanager:DeleteSecret',
+        'secretsmanager:DescribeSecret',
+        'secretsmanager:GetSecretValue',
+        'secretsmanager:PutSecretValue',
+        'secretsmanager:UpdateSecret',
+      ]),
     );
-    expect(secretReads).toHaveLength(1);
-    expect(actions(secretReads)).toEqual(['secretsmanager:GetSecretValue']);
-    expect(secretReads[0].Resource).toContain(config.graphApiKeySecretName);
+    expect(generated.Resource).toBe(
+      `arn:aws:secretsmanager:${config.region}:${config.account}:secret:${stackName}-*`,
+    );
+    const random = statementNamed(policy, 'GenerateServingSecretValues');
+    expect(actions([random])).toEqual(['secretsmanager:GetRandomPassword']);
   });
 
   test('grants no wildcard action', () => {
@@ -318,9 +357,13 @@ describe('the CloudFormation execution role', () => {
 
 describe('synthesis under the deployment synthesizer', () => {
   const app = new cdk.App({ context: committedContext });
+  const website = fixtureWebsiteSources();
   new EnsScoutStack(app, stackName, {
     config,
     scannerCode: fixtureCode(),
+    apiCode: fixtureApiCode(),
+    websiteSource: website.site,
+    websiteAssetsSource: website.assets,
     env: { account: config.account, region: config.region },
     synthesizer: deploymentSynthesizer(),
   });
@@ -379,6 +422,23 @@ describe('the production deployment workflow', () => {
     expect(deploy).toContain('npm run check');
     expect(deploy).toContain('--app cdk.out');
     expect(deploy).toContain(`cdk deploy ${stackName}`);
+    expect(deploy.match(/cdk deploy/g)).toHaveLength(1);
+  });
+
+  test('builds the same-origin production website before the one synth it deploys', () => {
+    const websiteBuild = deploy.indexOf('- name: build the production website');
+    const artifactBuild = deploy.indexOf('- name: build and verify the artifact');
+    expect(websiteBuild).toBeGreaterThanOrEqual(0);
+    expect(websiteBuild).toBeLessThan(artifactBuild);
+    expect(deploy).toContain('VITE_API_BASE_URL: /');
+    expect(deploy).toContain('working-directory: web');
+    expect(deploy.match(/npm run check/g)).toHaveLength(1);
+  });
+
+  test('writes the generated HTTPS URL to the deployment summary', () => {
+    expect(deploy).toContain('--outputs-file cdk-outputs.json');
+    expect(deploy).toContain("outputs['EnsScout-prod']?.PublicSiteUrl");
+    expect(deploy).toContain('GITHUB_STEP_SUMMARY');
   });
 
   test('holds no long-lived AWS credential', () => {
@@ -569,6 +629,7 @@ describe('the pull request checks', () => {
       'go test ./...',
       'go build ./...',
       'go build -o /dev/null ./cmd/scan-lambda',
+      'go build -o /dev/null ./cmd/api-lambda',
       'npm run check',
       'npm run verify',
     ]) {

@@ -43,11 +43,14 @@ Scanner Lambda -----> ENS subgraph
         v
 Versioned snapshot in DynamoDB
         |
-        v
-Read Lambda / HTTPS endpoint
-        |
-        v
-Static frontend cached by CloudFront
+        +--------------------+
+                             |
+Private S3 frontend ----> CloudFront ----> browser
+                             |
+                             v
+                    HTTP API / Read Lambda
+                             |
+                             +----> bounded fresh checks ----> ENS subgraph
 ```
 
 The read endpoint also rechecks a small set of names on demand, which is the one
@@ -62,11 +65,8 @@ snapshot alone.
 publisher work added, the `internal/api/` package the read API work added, the
 `infra/` CDK application that defines the stack they run in, and the `web/`
 frontend, which `web/README.md` documents.
-The directories still to be created are:
-
-```text
-cmd/api-lambda/       the entrypoint that wires internal/api and live checks
-```
+`cmd/api-lambda/` is the production entrypoint that wires `internal/api` and live
+checks to API Gateway while keeping the application behavior in `internal/api`.
 
 The Lambda binaries will target Linux on the AWS `provided.al2023` runtime.
 The publisher introduced the official AWS Lambda Go library and AWS SDK for Go
@@ -322,7 +322,7 @@ and secrets. Done.
 
 ### Phase 2: read API and frontend
 
-- Add snapshot metadata and body endpoints with ETag support.
+- Add snapshot metadata and body endpoints with ETag support. Done.
 - Build the responsive browse, filter, sort, and countdown experience. Done,
 against the committed fixtures, with the read API client and its `If-None-Match`
 and local-copy handling in place for when an endpoint exists.
@@ -330,7 +330,11 @@ and local-copy handling in place for when an endpoint exists.
 table, the large `.eth` composer, the compact control bar, and the mono ledger.
 The optical background is mounted already, so until then the page renders the
 previous list markup underneath it.
-- Deploy static assets behind CloudFront and restrict CORS to that origin.
+- Deploy static assets and the read API behind one generated CloudFront HTTPS
+  origin. Done. The frontend bucket is private behind OAC, `/api/*` is a bounded
+  HTTP API integration, and the browser build uses `/` as its API base so ordinary
+  browsing and fresh checks are same-origin. `internal/api` keeps exact-origin CORS
+  behavior and this deployment grants no separate cross-origin browser origin.
 
 ### Phase 3: live verification and operations
 

@@ -41,6 +41,11 @@ good scan with its age.
 That is also the only thing that enables fresh checks: fixture mode has no endpoint to
 ask, so it offers no tick boxes and no links out at all.
 
+The production workflow builds with `VITE_API_BASE_URL=/`. `readConfig` normalizes
+that to the empty path prefix while keeping API mode enabled, so `/api/snapshot` and
+`/api/check` stay on the generated CloudFront hostname. No AWS endpoint, Graph
+endpoint, or credential is embedded in the bundle.
+
 ## Fresh checks
 
 A snapshot is minutes to hours old by the time anyone reads it, so a row offers no link

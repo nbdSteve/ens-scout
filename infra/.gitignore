@@ -7,3 +7,4 @@ iam/rendered/
 *.js
 !jest.config.js
 !scripts/*.js
+!test/fixtures/web/assets/*.js

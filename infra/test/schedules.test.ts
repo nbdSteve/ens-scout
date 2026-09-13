@@ -92,7 +92,13 @@ describe('the scan schedules', () => {
   });
 
   test('grant EventBridge nothing but permission to invoke the scanner', () => {
-    template.resourceCountIs('AWS::Lambda::Permission', scanSchedules.length);
+    const eventPermissions = Object.values(
+      template.findResources('AWS::Lambda::Permission'),
+    ).filter(
+      (resource) =>
+        (resource.Properties as { Principal?: string }).Principal === 'events.amazonaws.com',
+    );
+    expect(eventPermissions).toHaveLength(scanSchedules.length);
     template.hasResourceProperties('AWS::Lambda::Permission', {
       Action: 'lambda:InvokeFunction',
       Principal: 'events.amazonaws.com',

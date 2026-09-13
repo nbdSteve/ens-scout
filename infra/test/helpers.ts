@@ -4,6 +4,7 @@ import * as path from 'path';
 import * as cdk from 'aws-cdk-lib';
 import { Template } from 'aws-cdk-lib/assertions';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
+import * as s3deploy from 'aws-cdk-lib/aws-s3-deployment';
 
 import { Config, defaultScanTuning } from '../lib/config';
 import { EnsScoutStack } from '../lib/ens-scout-stack';
@@ -50,6 +51,21 @@ export function fixtureCode(): lambda.Code {
   return lambda.Code.fromAsset(path.join(__dirname, 'fixtures', 'scan-lambda'));
 }
 
+export function fixtureApiCode(): lambda.Code {
+  return lambda.Code.fromAsset(path.join(__dirname, 'fixtures', 'api-lambda'));
+}
+
+export function fixtureWebsiteSources(): {
+  readonly site: s3deploy.ISource;
+  readonly assets: s3deploy.ISource;
+} {
+  const website = path.join(__dirname, 'fixtures', 'web');
+  return {
+    site: s3deploy.Source.asset(website),
+    assets: s3deploy.Source.asset(path.join(website, 'assets')),
+  };
+}
+
 export interface SynthResult {
   readonly app: cdk.App;
   readonly stack: EnsScoutStack;
@@ -63,9 +79,13 @@ export interface SynthResult {
 export function synth(overrides: Partial<Config> = {}): SynthResult {
   const app = new cdk.App();
   const config: Config = { ...testConfig, ...overrides };
+  const website = fixtureWebsiteSources();
   const stack = new EnsScoutStack(app, `EnsScout-${config.environmentName}`, {
     config,
     scannerCode: fixtureCode(),
+    apiCode: fixtureApiCode(),
+    websiteSource: website.site,
+    websiteAssetsSource: website.assets,
     env: { account: config.account, region: config.region },
   });
   return { app, stack, template: Template.fromStack(stack) };
@@ -168,18 +188,25 @@ export function eachPolicyStatement(template: Template): Array<Record<string, un
 }
 
 /**
- * environmentVariables is the scanner function's environment.
- *
- * The stack declares one Lambda and a test asserts that, so addressing it positionally
- * is safe here; a second function would have to change this accessor rather than let
- * two suites disagree about which one they were reading.
+ * environmentVariables returns the environment of the one function carrying a
+ * caller-selected marker. The marker keeps tests independent of synthesized resource
+ * order now that the stack contains the scanner, API, and deployment helper functions.
  */
-export function environmentVariables(template: Template): Record<string, unknown> {
+export function environmentVariables(
+  template: Template,
+  requiredName = 'ENS_SCAN_WORKERS',
+): Record<string, unknown> {
   const functions = template.findResources('AWS::Lambda::Function');
-  const properties = Object.values(functions)[0].Properties as {
-    Environment?: { Variables?: Record<string, unknown> };
-  };
-  return properties.Environment?.Variables ?? {};
+  for (const resource of Object.values(functions)) {
+    const properties = resource.Properties as {
+      Environment?: { Variables?: Record<string, unknown> };
+    };
+    const variables = properties.Environment?.Variables ?? {};
+    if (requiredName in variables) {
+      return variables;
+    }
+  }
+  throw new Error(`no Lambda function carries environment variable ${requiredName}`);
 }
 
 /** asList normalizes a CloudFormation field that may be a scalar or a list. */

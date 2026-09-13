@@ -11,8 +11,16 @@ describe('the scanner function', () => {
     template = synth().template;
   });
 
-  test('is one function packaged for the Go runtime on Graviton', () => {
-    template.resourceCountIs('AWS::Lambda::Function', 1);
+  test('is one scanner function packaged for the Go runtime on Graviton', () => {
+    const scanners = Object.values(template.findResources('AWS::Lambda::Function')).filter(
+      (resource) => {
+        const variables = (
+          resource.Properties as { Environment?: { Variables?: Record<string, unknown> } }
+        ).Environment?.Variables;
+        return variables !== undefined && 'ENS_SCAN_WORKERS' in variables;
+      },
+    );
+    expect(scanners).toHaveLength(1);
     template.hasResourceProperties('AWS::Lambda::Function', {
       Runtime: 'provided.al2023',
       Architectures: ['arm64'],
@@ -110,7 +118,6 @@ describe('the scanner function', () => {
   });
 
   test('logs to a declared group with bounded retention', () => {
-    template.resourceCountIs('AWS::Logs::LogGroup', 1);
     template.hasResourceProperties('AWS::Logs::LogGroup', {
       RetentionInDays: testConfig.logRetentionDays,
     });
@@ -133,4 +140,3 @@ describe('the scanner function', () => {
     });
   });
 });
-

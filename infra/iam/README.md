@@ -6,14 +6,15 @@ reason [../README.md](../README.md) records, so nothing synthesizes them and not
 detects drift: this directory plus `../test/deployment.test.ts` is what keeps them
 honest.
 
-They are templates rather than the applied documents because the applied documents
-name the account and the execution role, and neither belongs in a public repository.
-Every such position is an explicit `${PLACEHOLDER}`:
+The `*.template.json` files are committed source. They are templates rather than the
+applied documents because the applied documents name the account and the execution
+role, and neither belongs in a public repository. Every such position is an explicit
+`${PLACEHOLDER}`:
 
 | Placeholder | What it is | Where the real value lives |
 | --- | --- | --- |
-| `${ACCOUNT_ID}` | The twelve-digit target account | GitHub repository variable `AWS_ACCOUNT_ID` |
-| `${CLOUDFORMATION_EXECUTION_ROLE_NAME}` | The role CloudFormation acts as | The role part of `AWS_CLOUDFORMATION_EXECUTION_ROLE_ARN` |
+| `${ACCOUNT_ID}` | The twelve-digit target account | Protected `production` environment variable `AWS_ACCOUNT_ID` |
+| `${CLOUDFORMATION_EXECUTION_ROLE_NAME}` | The role CloudFormation acts as | The role-name part of protected `production` environment variable `AWS_CLOUDFORMATION_EXECUTION_ROLE_ARN`; the full ARN is not rendered |
 
 Everything else stays a literal, because it is committed elsewhere in this repository
 already and the test ties the documents to that copy: the region and the secret name
@@ -28,7 +29,8 @@ node scripts/render-iam.js --example
 node scripts/render-iam.js --account-id <twelve digits> --execution-role-name <name>
 ```
 
-Both write to `iam/rendered/`, which is ignored by git.
+Both write to `iam/rendered/`, which is ignored by git; rendered documents are never
+committed in place of the `*.template.json` source.
 The rendering is deterministic - the same inputs produce the same bytes - and it
 refuses a placeholder it does not know, a placeholder no value was supplied for, a
 supplied value no template uses, and a value that is not shaped like the thing it

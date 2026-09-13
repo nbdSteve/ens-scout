@@ -1,5 +1,5 @@
 import AxeBuilder from '@axe-core/playwright'
-import { expect, test, type Locator, type Page } from '@playwright/test'
+import { expect, test, type BrowserContext, type Locator, type Page } from '@playwright/test'
 
 /**
  * Shared helpers for the browser suite.
@@ -51,7 +51,8 @@ const MODEL_ASSET_GLOBS = [
   'https://raw.githubusercontent.com/**',
 ] as const
 
-test.beforeEach(async ({ context }) => {
+/** Installs the context-wide network floor used by every rendered-page test. */
+export async function installModelHostGuard(context: BrowserContext): Promise<void> {
   for (const glob of MODEL_ASSET_GLOBS) {
     await context.route(glob, async (route) => {
       // Aborted rather than fulfilled with something plausible: the library must fail to
@@ -59,6 +60,10 @@ test.beforeEach(async ({ context }) => {
       await route.abort('blockedbyclient')
     })
   }
+}
+
+test.beforeEach(async ({ context }) => {
+  await installModelHostGuard(context)
 })
 
 /** The instant the committed `preview` fixture records as its scan time. */

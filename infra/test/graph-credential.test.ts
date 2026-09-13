@@ -24,10 +24,11 @@ describe('the Graph API credential', () => {
     template = synth().template;
   });
 
-  test('reaches the function under the name internal/scanner reads', () => {
+  test('reaches both Graph clients under the name internal/scanner reads', () => {
     const constants = goStringConstants(goSource('internal/scanner/scanner.go'));
     const variable = requireConstant(constants, 'EnvAPIKey');
     expect(environmentVariables(template)).toHaveProperty(variable);
+    expect(environmentVariables(template, 'ENS_API_ORIGIN_SECRET')).toHaveProperty(variable);
   });
 
   test('is a deploy-time reference, not a value in the template', () => {
@@ -35,16 +36,23 @@ describe('the Graph API credential', () => {
     // deployment, so what the template holds is the secret's address. The assertion
     // is on the rendered text because that is what an operator, a reviewer, and the
     // console all see.
-    const rendered = JSON.stringify(environmentVariables(template).THEGRAPH_API_KEY);
-    expect(rendered).toContain('{{resolve:secretsmanager:');
-    expect(rendered).toContain(testSecretName);
-    expect(rendered).toContain(`SecretString:${testConfig.graphApiKeySecretField}`);
+    for (const variables of [
+      environmentVariables(template),
+      environmentVariables(template, 'ENS_API_ORIGIN_SECRET'),
+    ]) {
+      const rendered = JSON.stringify(variables.THEGRAPH_API_KEY);
+      expect(rendered).toContain('{{resolve:secretsmanager:');
+      expect(rendered).toContain(testSecretName);
+      expect(rendered).toContain(`SecretString:${testConfig.graphApiKeySecretField}`);
+    }
   });
 
-  test('is not stored by this stack, only referenced', () => {
-    // Creating the secret here would put this stack in a position to overwrite the
-    // credential, and a generated one would be a credential The Graph never issued.
-    template.resourceCountIs('AWS::SecretsManager::Secret', 0);
+  test('the Graph credential is not stored by this stack, only referenced', () => {
+    // The two generated secrets belong to the check limiter and the private
+    // CloudFront origin. Neither is named as or usable as a Graph credential.
+    template.resourceCountIs('AWS::SecretsManager::Secret', 2);
+    const secrets = JSON.stringify(template.findResources('AWS::SecretsManager::Secret'));
+    expect(secrets).not.toContain(testSecretName);
     template.resourceCountIs('AWS::SecretsManager::ResourcePolicy', 0);
     template.resourceCountIs('AWS::SecretsManager::RotationSchedule', 0);
   });
@@ -58,12 +66,8 @@ describe('the Graph API credential', () => {
     expect(outputs).not.toContain('{{resolve:');
   });
 
-  test('resolves in exactly one place in the whole template', () => {
-    // A second reference is a second place the credential is materialized, and the
-    // usual second place is a description, a tag, or an alarm text an operator
-    // forwards. Counting is what makes this catch a field a later edit adds, which
-    // naming the fields to check could not.
-    const occurrences = JSON.stringify(template.toJSON()).split('{{resolve:').length - 1;
-    expect(occurrences).toBe(1);
+  test('resolves exactly in the two functions that query the Graph', () => {
+    const resources = JSON.stringify(template.toJSON().Resources ?? {});
+    expect(resources.split(testSecretName).length - 1).toBe(2);
   });
 });

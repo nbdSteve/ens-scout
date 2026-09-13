@@ -21,10 +21,8 @@ import {
  * the same string keys, expire them through the same TTL attribute, and need no
  * DynamoDB action the hand-written scanner role does not already allow.
  *
- * None of it deploys the read API. That is a later phase of docs/website-plan.md, and
- * `synth.test.ts` asserts its resource types are absent; what these tests protect is
- * the table it will use when it arrives, so a change that would strand the allowances
- * fails here instead of at run time.
+ * The public read API now charges these items. These assertions tie its table and
+ * secret to the same contracts the Go package enforces.
  */
 describe('the check-store items', () => {
   let template: Template;
@@ -109,21 +107,23 @@ describe('the check client secret', () => {
     );
   });
 
-  test('is not configured by this stack, which serves no read API yet', () => {
-    // The secret keys the client identity, so it has to be stable across instances and
-    // therefore configured rather than minted at cold start. It belongs to the read
-    // API's own function, which this stack does not define. Setting it on the scanner
-    // would be a credential in the environment of a function that never reads one.
+  test('is generated once for the API and never placed on the scanner', () => {
+    const apiVariables = environmentVariables(template, variableName);
+    expect(apiVariables).toHaveProperty(variableName);
+    expect(JSON.stringify(apiVariables[variableName])).toContain('{{resolve:secretsmanager:');
     expect(Object.keys(environmentVariables(template))).not.toContain(variableName);
+    template.hasResourceProperties('AWS::SecretsManager::Secret', {
+      Description: 'Keys the irreversible fresh-check client identity',
+      GenerateSecretString: {
+        ExcludePunctuation: true,
+        PasswordLength: 64,
+      },
+    });
   });
 
-  test('adds no second place a credential is materialized', () => {
-    // graph-credential.test.ts asserts the one dynamic reference this template holds.
-    // This is the other half: whatever supplies the check secret later must not put a
-    // second resolved credential into a template, because the places a template puts a
-    // string are descriptions, tags, and alarm text.
+  test('is materialized only in the API environment and never in an output', () => {
     const rendered = JSON.stringify(template.toJSON());
-    expect(rendered).not.toContain(variableName);
-    expect(rendered.split('{{resolve:secretsmanager:').length - 1).toBe(1);
+    expect(rendered.split(variableName).length - 1).toBe(1);
+    expect(JSON.stringify(template.toJSON().Outputs ?? {})).not.toContain(variableName);
   });
 });

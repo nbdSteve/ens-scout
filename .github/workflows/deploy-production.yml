@@ -142,10 +142,23 @@ jobs:
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: infra/package-lock.json
+          cache-dependency-path: |
+            infra/package-lock.json
+            web/package-lock.json
 
       - run: npm ci
+        working-directory: web
+      - run: npm ci
         working-directory: infra
+
+      # This is the bundle the CDK synth below packages. A same-origin base of `/`
+      # keeps the browser on the generated CloudFront hostname for both static files
+      # and /api/*, and keeps every Graph and AWS value out of the Vite environment.
+      - name: build the production website
+        working-directory: web
+        env:
+          VITE_API_BASE_URL: /
+        run: npm run build
 
       # Build and verify once. `npm run check` is tsc --noEmit, the assertion suite,
       # and a synth, and the synth leaves the whole cloud assembly in infra/cdk.out.
@@ -206,7 +219,27 @@ jobs:
         env:
           AWS_CLOUDFORMATION_EXECUTION_ROLE_ARN: ${{ vars.AWS_CLOUDFORMATION_EXECUTION_ROLE_ARN }}
         run: |
-          npx cdk deploy EnsScout-prod \
-            --app cdk.out \
-            --role-arn "$AWS_CLOUDFORMATION_EXECUTION_ROLE_ARN" \
-            --require-approval never
+          deploy_log="$(mktemp)"
+          trap 'rm -f "$deploy_log"' EXIT
+          if ! npx cdk deploy EnsScout-prod \
+              --app cdk.out \
+              --role-arn "$AWS_CLOUDFORMATION_EXECUTION_ROLE_ARN" \
+              --require-approval never \
+              --progress errors-only \
+              --no-color \
+              --outputs-file cdk-outputs.json >"$deploy_log" 2>&1; then
+            echo "::error::CDK deployment failed; inspect the protected production stack events"
+            exit 1
+          fi
+
+      - name: publish the generated site URL
+        working-directory: infra
+        run: |
+          site_url="$(node -e "
+            const outputs = require('./cdk-outputs.json');
+            const url = outputs['EnsScout-prod']?.PublicSiteUrl;
+            if (typeof url !== 'string' || !url.startsWith('https://')) process.exit(1);
+            process.stdout.write(url);
+          ")"
+          echo "### Public site" >> "$GITHUB_STEP_SUMMARY"
+          echo "$site_url" >> "$GITHUB_STEP_SUMMARY"

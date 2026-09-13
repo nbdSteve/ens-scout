@@ -364,7 +364,7 @@ describe('App fresh-check completion', () => {
     const panel = screen.getByRole('region', { name: 'Find a name you would actually use' })
     const suggestionCheckbox = within(panel).getAllByRole('checkbox')[0]
     expect(suggestionCheckbox).toBeDefined()
-    await user.click(suggestionCheckbox as HTMLElement)
+    await user.click(suggestionCheckbox!)
     await user.click(within(panel).getByRole('button', { name: 'Check the ticked names now' }))
 
     const checkedName = checkedNames[0]

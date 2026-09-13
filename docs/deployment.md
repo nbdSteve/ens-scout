@@ -50,12 +50,17 @@ One manual workflow run deploys, and nothing else can.
 3. The job declares `environment: production`, so GitHub holds it for the reviewer that
    environment requires and refuses any ref the environment's branch policy does not
    name.
-4. The job builds and verifies once with
+4. The job builds `web/dist` with `VITE_API_BASE_URL=/`, so the browser uses the
+   generated CloudFront hostname for both the page and `/api/*`.
+5. The job builds and verifies once with
    `npm run check -- --context "ens-scout:account=$AWS_ACCOUNT_ID"`, which leaves the
-   whole cloud assembly in `infra/cdk.out`.
-5. It requests an OIDC token and assumes the role `AWS_DEPLOY_ROLE_ARN` names.
-6. It runs `cdk deploy --app cdk.out --role-arn "$AWS_CLOUDFORMATION_EXECUTION_ROLE_ARN"`,
-   which deploys the assembly step 4 verified and synthesizes nothing new.
+   whole cloud assembly - the template, both Go binaries, and that web build - in
+   `infra/cdk.out`.
+6. It requests an OIDC token and assumes the role `AWS_DEPLOY_ROLE_ARN` names.
+7. It runs `cdk deploy --app cdk.out --role-arn "$AWS_CLOUDFORMATION_EXECUTION_ROLE_ARN"`,
+   which deploys the assembly step 5 verified and synthesizes nothing new.
+8. It writes the stack's generated HTTPS `PublicSiteUrl` output to the GitHub
+   deployment summary.
 
 The build happens before the credential is obtained, so a failing check costs no AWS
 session at all.
@@ -63,7 +68,7 @@ The deploy step reads the assembly rather than re-running the app, which is what
 the artifact that reaches AWS the one the checks passed rather than an equal one built a
 second time.
 
-That is also why the account is supplied at step 4 rather than at step 6.
+That is also why the account is supplied at step 5 rather than at step 7.
 `--app cdk.out` deploys the assembly, and the stack environment is baked into it, so the
 real account has to be present at the synth that produced the artifact.
 `infra/cdk.json` commits `infra/lib/config.ts`'s `placeholderAccount` instead, which is
@@ -73,13 +78,13 @@ without the real value.
 nothing else; a test asserts that, because a check script reordered to end with the tests
 would send the context to jest and deploy an artifact built against the placeholder.
 
-Step 4 compiles the scanner, because every CDK command bundles it first, so the Go
-toolchain is part of what this job produces.
+Step 5 compiles both Lambda entrypoints, because every CDK command bundles them
+first, so the Go toolchain is part of what this job produces.
 Every `setup-go` step in `.github/workflows/` therefore pins one exact version rather
 than a channel that resolves to whatever was released most recently, and
 `infra/test/deployment.test.ts` fails when the pins disagree.
-The Lambda asset hash is the content hash of that binary, so a deploy running a compiler
-no pull request had run would report an update for source nobody changed.
+Each Lambda asset hash is the content hash of its binary, so a deploy running a
+compiler no pull request had run would report an update for source nobody changed.
 Raising the pin is a deliberate change, and `AGENTS.md` records what else has to move
 with it.
 
@@ -173,12 +178,13 @@ The identity CloudFormation creates and updates the stack's resources as.
 One inline policy and no attached managed policy.
 Trust: `cloudformation.amazonaws.com` and nothing else.
 
-Every resource it names carries the `EnsScout-prod-` prefix CloudFormation gives an
-auto-named resource, except five grants that cannot be written that way: `DescribeAlarms`
-takes no resource, `DescribeLogGroups` takes the region, and the secret, the asset
-bucket, and the bootstrap version parameter are named directly.
-The test pins that exception set, so a sixth one is a failing test rather than a quiet
-widening.
+Most resources it names carry the `EnsScout-prod-` prefix CloudFormation gives an
+auto-named resource. The exceptions are pinned in
+`infra/test/deployment.test.ts`: regional or no-resource describe calls, the
+existing Graph secret, the bootstrap bucket and version parameter, the lowercase
+S3 bucket name AWS requires, API Gateway's ID-addressed paths, and the CloudFront
+and random-secret-generation calls whose APIs do not provide a stack-name resource
+scope. A new exception is a failing test rather than a quiet widening.
 
 What it deliberately does not hold:
 
@@ -190,9 +196,13 @@ What it deliberately does not hold:
   creation.
 - One `iam:PassRole`, on `role/EnsScout-prod-*`, conditioned on
   `iam:PassedToService = lambda.amazonaws.com`.
-- `secretsmanager:GetSecretValue` on `secret:ens-scout/thegraph-api-key-*` only.
+- `secretsmanager:GetSecretValue` on the existing Graph secret, plus create,
+  update, add-version, delete, describe, tag, and read on
+  `secret:EnsScout-prod-*` for the two generated serving secrets, and
+  `GetRandomPassword` for their generated values.
   The Graph credential reaches the function as a CloudFormation dynamic reference that
-  this role resolves, which is why the grant is here and not on the scanner's own role;
+  this role resolves, and the generated check/origin values reach their consumers the
+  same way. Those grants are here and not on any runtime role;
   `infra/README.md` records that trade-off.
 
 ## The GitHub configuration

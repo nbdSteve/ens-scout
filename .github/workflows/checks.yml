@@ -75,11 +75,13 @@ jobs:
       # compiles for the developer's own platform has to fail here rather than at
       # the next bundle. The output is discarded: this proves the code compiles and
       # builds nothing anyone deploys.
-      - name: cross-compile the Lambda for its runtime
+      - name: cross-compile the Lambdas for their runtime
         env:
           GOOS: linux
           GOARCH: arm64
-        run: go build -o /dev/null ./cmd/scan-lambda
+        run: |
+          go build -o /dev/null ./cmd/scan-lambda
+          go build -o /dev/null ./cmd/api-lambda
 
   infra:
     name: infra
@@ -99,10 +101,20 @@ jobs:
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: infra/package-lock.json
+          cache-dependency-path: |
+            infra/package-lock.json
+            web/package-lock.json
 
       - run: npm ci
+        working-directory: web
+      - run: npm ci
         working-directory: infra
+
+      - name: build the production website artifact
+        working-directory: web
+        env:
+          VITE_API_BASE_URL: /
+        run: npm run build
 
       # tsc --noEmit, the assertion suite, and a synth. The synth resolves its
       # region and its placeholder account from cdk.json rather than from the

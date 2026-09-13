@@ -6,7 +6,15 @@ import { Template } from 'aws-cdk-lib/assertions';
 
 import { placeholderAccount, resolveConfig } from '../lib/config';
 import { EnsScoutStack, scannerHandler } from '../lib/ens-scout-stack';
-import { fixtureCode, goSource, repoRoot, synth } from './helpers';
+import { apiHandler } from '../lib/public-site';
+import {
+  fixtureApiCode,
+  fixtureCode,
+  fixtureWebsiteSources,
+  goSource,
+  repoRoot,
+  synth,
+} from './helpers';
 
 // The bundle script is plain CommonJS, so it is required rather than imported. The
 // assertions below run its exported functions instead of reading its text.
@@ -29,9 +37,13 @@ describe('synthesis', () => {
   test('succeeds against the committed context, which is what a clean clone uses', () => {
     const app = new cdk.App({ context: committedContext });
     const config = resolveConfig(app);
+    const website = fixtureWebsiteSources();
     const stack = new EnsScoutStack(app, `EnsScout-${config.environmentName}`, {
       config,
       scannerCode: fixtureCode(),
+      apiCode: fixtureApiCode(),
+      websiteSource: website.site,
+      websiteAssetsSource: website.assets,
       env: { account: config.account, region: config.region },
     });
     const template = Template.fromStack(stack);
@@ -51,23 +63,35 @@ describe('synthesis', () => {
     expect(rendered).not.toContain('${Token[');
   });
 
-  test('adds none of the resources issue #4 defers', () => {
-    // The read API and the frontend are later phases. This is the assertion that keeps
-    // a well-meant addition out of this stack.
-    //
-    // The OIDC provider is in the list for a different reason, and it stays refused
-    // rather than arriving with a later phase: it and the two deployment roles are
-    // what deploys this stack, so a stack that defined them would need something else
-    // to deploy it first, and a deployment identity CloudFormation may rewrite during
-    // a deployment is one a bad template can widen. `docs/deployment.md` records them
-    // instead.
+  test('keeps account-bearing URLs and ARNs out of stack outputs', () => {
+    const outputs = synth().template.toJSON().Outputs as Record<
+      string,
+      { Value?: unknown }
+    >;
+    expect(Object.keys(outputs)).toEqual(
+      expect.arrayContaining([
+        'UndeliveredEventQueueName',
+        'AlarmTopicName',
+        'PublicSiteUrl',
+      ]),
+    );
+    expect(outputs).not.toHaveProperty('UndeliveredEventQueueUrl');
+    expect(outputs).not.toHaveProperty('AlarmTopicArn');
+    expect(JSON.stringify(outputs)).not.toContain('AWS::AccountId');
+  });
+
+  test('adds exactly the one public hosting path and none of the excluded release extras', () => {
     const template = synth().template;
+    template.resourceCountIs('AWS::ApiGatewayV2::Api', 1);
+    template.resourceCountIs('AWS::S3::Bucket', 1);
+    template.resourceCountIs('AWS::CloudFront::Distribution', 1);
+    template.resourceCountIs('AWS::CloudFront::OriginAccessControl', 1);
+
+    // Deployment identity, custom domains, certificates, and a second scheduler
+    // remain deliberately out of this stack.
     for (const type of [
       'AWS::ApiGateway::RestApi',
-      'AWS::ApiGatewayV2::Api',
       'AWS::Lambda::Url',
-      'AWS::S3::Bucket',
-      'AWS::CloudFront::Distribution',
       'AWS::IAM::OIDCProvider',
       'AWS::CertificateManager::Certificate',
       'AWS::Route53::HostedZone',
@@ -117,6 +141,16 @@ describe('the scanner bundle', () => {
   test('writes the entrypoint name the provided runtime executes', () => {
     const output = args[args.indexOf('-o') + 1];
     expect(path.basename(output)).toBe(scannerHandler);
+  });
+
+  test('compiles the read API as its own equally reproducible entrypoint', () => {
+    const apiArgs: string[] = bundle.apiBuildArgs();
+    expect(apiArgs.filter((arg) => arg.startsWith('./'))).toEqual(['./cmd/api-lambda']);
+    expect(apiArgs[apiArgs.length - 1]).toBe('./cmd/api-lambda');
+    expect(path.basename(apiArgs[apiArgs.indexOf('-o') + 1])).toBe(apiHandler);
+    expect(apiArgs).toContain('-trimpath');
+    expect(apiArgs).toContain('-buildvcs=false');
+    expect(apiArgs[apiArgs.indexOf('-ldflags') + 1].split(/\s+/)).toContain('-buildid=');
   });
 
   test('drops every stamp that would vary between two builds of one commit', () => {

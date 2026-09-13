@@ -272,7 +272,7 @@ export function useSuggest(input: SuggestInput, deps: SuggestDeps = {}): Suggest
   /** Set when the visitor asked for this attempt, which is what lets it exceed the automatic bound. */
   const asked = useRef(false)
 
-  const useDeterministicAnswer = useCallback(() => {
+  const restoreDeterministicAnswer = useCallback(() => {
     setAnswer((current) => {
       if (current === null || current.source === 'deterministic') {
         return current
@@ -456,22 +456,22 @@ export function useSuggest(input: SuggestInput, deps: SuggestDeps = {}): Suggest
       return
     }
     const loading = loadRun.current !== null
-    useDeterministicAnswer()
+    restoreDeterministicAnswer()
     release()
     setFailure(null)
     setPhase(loading ? 'cancelled' : 'paused')
-  }, [phase, release, useDeterministicAnswer])
+  }, [phase, release, restoreDeterministicAnswer])
 
   const disable = useCallback(() => {
     if (phase === 'disabled') {
       return
     }
-    useDeterministicAnswer()
+    restoreDeterministicAnswer()
     release()
     store.set(true)
     setFailure(null)
     setPhase('disabled')
-  }, [phase, release, store, useDeterministicAnswer])
+  }, [phase, release, restoreDeterministicAnswer, store])
 
   const enable = useCallback(() => {
     if (phase !== 'disabled') {

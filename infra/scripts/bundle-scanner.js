@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 'use strict';
 
-// Builds the scanner Lambda bundle that lib/scanner-bundle.ts turns into a CDK
-// asset.
+// Builds the two Go Lambda bundles that lib/scanner-bundle.ts and
+// lib/api-bundle.ts turn into CDK assets.
 //
 // cdk.json runs this before the CDK app on every CDK command, so `cdk synth` and
 // `cdk diff` work from a clean clone with nothing but the Go toolchain and
@@ -37,8 +37,9 @@ const path = require('path');
 // unpacking the deployed artifact sees the same layout as the checkout, and
 // EnvWordListDir points at it.
 const repoRoot = path.resolve(__dirname, '..', '..');
-const outputRoot = path.join(__dirname, '..', 'build', 'scan-lambda');
-const wordListOutput = path.join(outputRoot, 'data', 'words');
+const scannerOutputRoot = path.join(__dirname, '..', 'build', 'scan-lambda');
+const apiOutputRoot = path.join(__dirname, '..', 'build', 'api-lambda');
+const wordListOutput = path.join(scannerOutputRoot, 'data', 'words');
 const wordListSource = path.join(repoRoot, 'data', 'words');
 
 // The Go file that defines which word lists a scan loads.
@@ -47,6 +48,7 @@ const scannerSource = path.join(repoRoot, 'internal', 'scanner', 'scanner.go');
 // The Go package the bundle compiles, and the file name the AWS provided.al2023
 // runtime executes.
 const scannerPackage = './cmd/scan-lambda';
+const apiPackage = './cmd/api-lambda';
 const entrypointName = 'bootstrap';
 
 // arm64 is Graviton, which is the cheaper Lambda architecture and is what
@@ -57,6 +59,15 @@ const goarch = 'arm64';
 
 /** buildArgs is the `go` argv the bundle is compiled with. */
 function buildArgs() {
+  return packageBuildArgs(scannerPackage, scannerOutputRoot);
+}
+
+/** apiBuildArgs is the `go` argv for the read API bundle. */
+function apiBuildArgs() {
+  return packageBuildArgs(apiPackage, apiOutputRoot);
+}
+
+function packageBuildArgs(packageName, outputRoot) {
   return [
     'build',
     '-trimpath',
@@ -65,7 +76,7 @@ function buildArgs() {
     '-s -w -buildid=',
     '-o',
     path.join(outputRoot, entrypointName),
-    scannerPackage,
+    packageName,
   ];
 }
 
@@ -136,10 +147,17 @@ function main() {
     requiredWordLists(fs.readFileSync(scannerSource, 'utf8')),
   );
 
-  fs.rmSync(outputRoot, { recursive: true, force: true });
+  fs.rmSync(scannerOutputRoot, { recursive: true, force: true });
+  fs.rmSync(apiOutputRoot, { recursive: true, force: true });
   fs.mkdirSync(wordListOutput, { recursive: true });
+  fs.mkdirSync(apiOutputRoot, { recursive: true });
 
   execFileSync('go', buildArgs(), {
+    cwd: repoRoot,
+    stdio: ['ignore', 'inherit', 'inherit'],
+    env: buildEnv(),
+  });
+  execFileSync('go', apiBuildArgs(), {
     cwd: repoRoot,
     stdio: ['ignore', 'inherit', 'inherit'],
     env: buildEnv(),
@@ -150,11 +168,13 @@ function main() {
   }
 
   process.stderr.write(
-    `bundled ${entrypointName} (${goos}/${goarch}) and ${lists.length} word lists into ${path.relative(repoRoot, outputRoot)}\n`,
+    `bundled scanner and API ${entrypointName} binaries (${goos}/${goarch}); scanner carries ${lists.length} word lists\n`,
   );
 }
 
 module.exports = {
+  apiBuildArgs,
+  apiPackage,
   buildArgs,
   buildEnv,
   entrypointName,

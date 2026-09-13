@@ -133,11 +133,11 @@ describe('ranking candidates', () => {
     const values = ['moss', 'reed']
     let reads = 0
     const terms = new Proxy(values, {
-      get(target, property, receiver) {
+      get(target, property, receiver): unknown {
         if (typeof property === 'string' && /^\d+$/u.test(property)) {
           reads += 1
         }
-        return Reflect.get(target, property, receiver)
+        return Reflect.get(target, property, receiver) as unknown
       },
     })
     const preference: Preference = { kind: 'theme', theme: 'moss reed', terms }

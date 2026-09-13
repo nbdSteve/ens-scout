@@ -1,13 +1,13 @@
 # ENS Scout infrastructure
 
-TypeScript AWS CDK application that defines the scheduled ENS snapshot publisher.
+TypeScript AWS CDK application for the scheduled publisher and public website.
 
-One stack, `EnsScout-prod`, holds the DynamoDB snapshot table, the Go scanner
-Lambda, the two offset EventBridge schedules, the undelivered-event queue, the log
-group, the alarms and the topic they raise into, and the scanner's IAM role.
-Nothing else.
-The public read API and the frontend distribution are later phases of
-[docs/website-plan.md](../docs/website-plan.md) and are deliberately absent.
+One stack, `EnsScout-prod`, holds the DynamoDB snapshot/check table, both Go
+Lambdas, the two offset EventBridge schedules, the private frontend bucket, one
+HTTP API, one CloudFront distribution, the generated serving secrets, the
+undelivered-event queue, and the existing publisher alarms.
+CloudFront is the public origin: OAC keeps the bucket private, `/api/*` goes to the
+HTTP API, and the stack outputs the complete generated HTTPS URL.
 The two deployment roles are absent from the stack too, and for a different reason:
 they are what deploys it, so a stack that defined them would have to be deployed by
 something else first.
@@ -17,7 +17,9 @@ They live in `iam/` as templates of the documents applied to the account, and
 ## Requirements
 
 - Node.js 20 or newer.
-- The Go toolchain, because every CDK command compiles the scanner first.
+- The Go toolchain, because every CDK command compiles both Lambda entrypoints.
+- A production build in `web/dist`, built with `VITE_API_BASE_URL=/`, because the
+  synth packages those exact bytes.
 - Nothing else for a synth.
   Credentials are needed only to deploy, and no command here is run against AWS as
   part of development.
@@ -26,7 +28,7 @@ They live in `iam/` as templates of the documents applied to the account, and
 
 ```powershell
 npm ci          # install exactly the locked dependency versions
-npm run bundle  # cross-compile the scanner into build/scan-lambda
+npm run bundle  # cross-compile scanner and API into build/
 npm test        # the CDK assertion suite
 npm run lint    # tsc --noEmit
 npm run synth   # write cdk.out/EnsScout-prod.template.json
@@ -42,11 +44,23 @@ how the production workflow builds the artifact it deploys, and a `check` reorde
 end with the tests would send that context to jest instead.
 A test asserts the order.
 
+Build the website before an infrastructure check:
+
+```powershell
+cd ../web
+$env:VITE_API_BASE_URL = "/"
+npm ci
+npm run build
+cd ../infra
+npm ci
+npm run check
+```
+
 `cdk.json` runs `scripts/bundle-scanner.js` before the app on every CDK command, so
-`npm run synth` works from a clean clone with no separate build step and no Docker.
-The bundle is `GOOS=linux GOARCH=arm64 CGO_ENABLED=0` with `-trimpath`, a cleared
-build id, and `-buildvcs=false`, so two builds of the same source produce the same
-bytes and the same CDK asset hash.
+the Go bundles need no separate build step and no Docker. Both use
+`GOOS=linux GOARCH=arm64 CGO_ENABLED=0` with `-trimpath`, a cleared build id, and
+`-buildvcs=false`, so two builds of the same source produce the same bytes and the
+same CDK asset hashes.
 Without that, every `cdk diff` would report a Lambda update that is not one, and a
 real change would then hide among the noise.
 The VCS stamp matters as much as the other two: it records the commit and the
@@ -74,6 +88,9 @@ The target account is the one deployment value this repository does not commit.
 clone, every pull-request check, and every test synthesize the stack, and the workflow
 supplies the real account from the `AWS_ACCOUNT_ID` variable as
 `-c ens-scout:account=` on the synth that produces the artifact it deploys.
+The workflow builds `web/dist` with the same-origin API base before that synth,
+deploys `infra/cdk.out` without another synth, and writes only the
+`PublicSiteUrl` output to the deployment summary.
 
 `npm run diff` and an interactive `cdk deploy` still work for someone holding
 credentials directly, and three things must exist before either.
@@ -90,7 +107,8 @@ credentials directly, and three things must exist before either.
 
 The stack creates the alarm topic and deliberately adds no subscription to it, so
 subscribing is a deployment step rather than something the template does.
-Subscribe out of band to the `AlarmTopicArn` output after the first deploy; until
+Subscribe out of band to the `AlarmTopicName` output in the configured account after
+the first deploy; until
 someone does, every alarm here raises into a topic with no subscribers and notifies
 nobody.
 
@@ -146,7 +164,7 @@ The scan tuning is in `lib/config.ts` rather than in context.
 It is a deployment decision derived from the query budget, not an operational knob,
 and `internal/scanner` validates and bounds every value again at cold start.
 
-## How the Graph API key reaches the scanner
+## How the Graph API key reaches the Lambdas
 
 The stack references an existing secret and reads one field of it with
 `secretValueFromJson(...).unsafeUnwrap()`.
@@ -158,8 +176,8 @@ and the resolved key lives in the function's encrypted configuration - the
 "encrypted Lambda setting" `docs/website-plan.md` permits alongside Secrets Manager.
 
 The trade-off is deliberate.
-The scanner's role has no `secretsmanager:GetSecretValue`, because a grant nothing
-uses is privilege the running function should not have; the cost is that rotating
+Neither runtime role has `secretsmanager:GetSecretValue`, because a grant nothing
+uses is privilege a running function should not have; the cost is that rotating
 the secret needs a deployment to pick up the new value, rather than the next cold
 start.
 A scheduled publisher that runs eight times a day and holds one long-lived gateway
@@ -181,7 +199,7 @@ definition instead of copying it:
 - the actions the fresh-check store calls, derived from `CheckAPI` the same way, which
   has to stay a subset of `API` so serving the read API needs no wider policy;
 - the environment variable that names the check client secret, from
-  `internal/api/checkconfig.go`, which this stack must not set;
+  `internal/api/checkconfig.go`, which only the API function receives;
 - the scanner's environment variable names, from `internal/scanner/scanner.go`;
 - the two scan group strings, from the same file;
 - the word lists the bundle must ship, from that file's `Lists`;
@@ -202,10 +220,10 @@ they actually fire and requiring the intersection to be empty.
 Comparing the two cron strings would pass for two different expressions that
 describe the same instant.
 
-The bundle's reproducibility is asserted the same way.
-`scripts/bundle-scanner.js` exports the `go` argv and the environment it builds, and
-the suite runs those functions and asserts on the values, so deleting a flag fails a
-test.
+The bundles' reproducibility is asserted the same way.
+`scripts/bundle-scanner.js` exports both `go` argv lists and the environment it
+builds, and the suite runs those functions and asserts on the values, so deleting a
+flag fails a test.
 Matching the script's text would not: its own header comment names every flag, which
 is how a dropped `-buildvcs=false` went unnoticed once already.
 `npm test` never compiles the binary.
@@ -254,14 +272,20 @@ That last set is what makes it safe to render the real documents locally.
 bin/ens-scout.ts              app entry point; resolves context and the environment
 lib/config.ts                 context keys, validation, and the scan tuning
 lib/deployment.ts             the bootstrap qualifier, the asset bucket, and the synthesizer
+lib/api-bundle.ts              locates the built read API bundle
+lib/public-site.ts             HTTP API, private bucket, CloudFront, and cache policies
 lib/schedules.ts              the two schedules and the cron expansion used to prove the offset
 lib/ens-scout-stack.ts        the stack
 lib/scanner-bundle.ts         locates the bundle the CDK app packages
+lib/spa.ts                    the extensionless-route viewer-request rewrite
+lib/website-bundle.ts         locates web/dist and its hashed assets
 iam/                          templates of the four documents applied to the two deployment roles
-scripts/bundle-scanner.js     reproducible cross-compile of cmd/scan-lambda
+scripts/bundle-scanner.js     reproducible cross-compile of both Lambda entrypoints
 scripts/render-iam.js         the one path from an iam/ template to a document
 test/                         the assertion suite
 test/fixtures/scan-lambda/    fixed-hash stand-in for the compiled scanner
+test/fixtures/api-lambda/     fixed-hash stand-in for the compiled API
+test/fixtures/web/            fixed-hash stand-in for the production web build
 ```
 
 ## Design notes
@@ -322,6 +346,30 @@ scanner's role name that one group.
 The bound is here so a misconfigured schedule or a burst of manual invocations
 cannot run many scans at once and multiply the Graph spend.
 
+**One public origin.** The Vite build is stored in a private S3 bucket and read
+through CloudFront OAC. The HTTP API is the second origin under the same
+distribution, so the production build uses `VITE_API_BASE_URL=/` and never needs a
+custom domain or a cross-origin browser grant. The execute-api endpoint still
+exists as CloudFront's origin, but the Lambda adapter accepts it only when the
+request carries the stack-generated origin token CloudFront overwrites and forwards.
+That authenticated adapter may then trust `CloudFront-Viewer-Address` for the
+fresh-check client identity; a caller-controlled forwarding header never reaches
+the limiter as identity.
+
+**SPA fallback is a path rewrite, not an error rewrite.** The viewer-request
+function rewrites only extensionless shell routes on the default behavior.
+`assets/*` has no function association, concrete file names keep their path, and
+the distribution defines no custom error response, so a missing immutable asset
+cannot return `index.html`.
+
+**Four cache classes.** The HTML shell and unhashed files do not cache, Vite's
+content-hashed assets cache for one year as immutable, snapshot GET/HEAD traffic
+uses the API's short cache lifetime under a one-hour ceiling, and health,
+fresh-check, and other `/api/*` traffic is cache-disabled. `internal/api` remains
+the authority for ETag, `Cache-Control`, CORS, and `no-store`.
+The API entrypoint also sets the raw snapshot ceiling to 4 MiB, leaving room for
+the JSON-escaped Lambda proxy envelope under the buffered response limit.
+
 **The table is retained and deletion-protected.** It holds the only copy of every
 published snapshot.
 A scan can be repeated, but only by spending the Graph budget again.
@@ -370,7 +418,7 @@ table.
 What the table owes them is the two string keys and TTL on the same attribute the
 publisher uses, and `test/check-store.test.ts` asserts exactly that against the Go
 definitions.
-The read API that will charge those allowances is a later phase, so this stack sets no
-`ENS_API_CHECK_*` variable and defines no second secret; the same suite asserts both,
-because the check client secret has to be stable across instances and a stack that put
-one in a scanner environment would be materializing a credential nothing reads.
+The API role reads published snapshots only under `META` and `SNAPSHOT#` keys and
+writes only the `CHECKRATE#` and `CHECKRESULT#` keyspaces. The stable check-client
+secret is generated once by the stack, reaches only the API environment through a
+dynamic reference, and never reaches the scanner, an output, or an asset.
