@@ -1,4 +1,6 @@
+import { spawnSync } from 'child_process';
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 
 import * as cdk from 'aws-cdk-lib';
@@ -31,6 +33,7 @@ import {
 // applied documents name the account and the execution role, so what is committed is a
 // template and this is the one path to a document.
 const render = require('../scripts/render-iam');
+const yaml = require('js-yaml');
 
 interface Statement {
   readonly Sid?: string;
@@ -89,21 +92,147 @@ function statementNamed(document: Statement[], sid: string): Statement {
   return found;
 }
 
+interface WorkflowStep {
+  readonly name?: string;
+  readonly id?: string;
+  readonly uses?: string;
+  readonly with?: Record<string, unknown>;
+  readonly env?: Record<string, unknown>;
+  readonly run?: string;
+  readonly shell?: string;
+  readonly ['working-directory']?: string;
+}
+
+interface WorkflowJob {
+  readonly name?: string;
+  readonly needs?: string | string[];
+  readonly if?: string;
+  readonly environment?: string | { readonly name?: string };
+  readonly permissions?: Record<string, string>;
+  readonly outputs?: Record<string, string>;
+  readonly steps: WorkflowStep[];
+}
+
+interface Workflow {
+  readonly name: string;
+  readonly on: Record<string, unknown>;
+  readonly permissions?: Record<string, string>;
+  readonly concurrency?: Record<string, unknown>;
+  readonly jobs: Record<string, WorkflowJob>;
+}
+
 /**
- * workflow is a workflow file with its full-line comments removed.
+ * Parse a workflow into the same mapping/list/scalar model GitHub consumes.
  *
- * These assertions match text, which is what this repository avoids elsewhere, and
- * the reason is that there is no YAML parser in the dependency set and adding one is
- * a decision rather than a convenience. Dropping the comments is what keeps the match
- * honest: a comment that names `aws-access-key-id` to say it is absent must not make
- * the assertion that it is absent fail, or pass.
+ * js-yaml is already present in the exact locked Jest dependency graph. Parsing the
+ * document keeps comments and formatting from deciding a test and lets the assertions
+ * below exercise jobs, steps, triggers, permissions, inputs, and scripts as workflow
+ * data rather than as incidental source text.
  */
-function workflow(name: string): string {
+function workflow(name: string): Workflow {
   const source = fs.readFileSync(path.join(repoRoot, '.github', 'workflows', name), 'utf8');
-  return source
-    .split('\n')
-    .filter((line) => !line.trim().startsWith('#'))
-    .join('\n');
+  const parsed: unknown = yaml.safeLoad(source);
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error(`${name} did not parse to a workflow mapping`);
+  }
+  const candidate = parsed as Partial<Workflow>;
+  if (
+    typeof candidate.name !== 'string' ||
+    candidate.on === null ||
+    typeof candidate.on !== 'object' ||
+    candidate.jobs === null ||
+    typeof candidate.jobs !== 'object'
+  ) {
+    throw new Error(`${name} is missing its name, triggers, or jobs`);
+  }
+  return candidate as Workflow;
+}
+
+function workflowJob(document: Workflow, id: string): WorkflowJob {
+  const found = document.jobs[id];
+  if (!found || !Array.isArray(found.steps)) {
+    throw new Error(`workflow has no job ${id} with steps; the assertion below is stale`);
+  }
+  return found;
+}
+
+function workflowStep(job: WorkflowJob, name: string): WorkflowStep {
+  const found = job.steps.find((step) => step.name === name);
+  if (!found) {
+    throw new Error(`workflow job has no step named ${name}; the assertion below is stale`);
+  }
+  return found;
+}
+
+function workflowRun(step: WorkflowStep): string {
+  if (typeof step.run !== 'string') {
+    throw new Error(`workflow step ${step.name ?? step.id ?? '<unnamed>'} has no run script`);
+  }
+  return step.run;
+}
+
+function workflowRunOrEmpty(step: WorkflowStep): string {
+  return typeof step.run === 'string' ? step.run : '';
+}
+
+function allWorkflowSteps(document: Workflow): WorkflowStep[] {
+  return Object.values(document.jobs).flatMap((job) => job.steps ?? []);
+}
+
+function serializedWorkflow(document: Workflow): string {
+  return JSON.stringify(document);
+}
+
+interface StepResult {
+  readonly status: number;
+  readonly stdout: string;
+  readonly stderr: string;
+  readonly outputs: Record<string, string>;
+}
+
+/**
+ * Execute the exact shell body carried by a parsed workflow step.
+ *
+ * The scripts under test use only runner-provided environment and shell tools. A
+ * temporary GITHUB_OUTPUT file captures the same step outputs GitHub would expose to
+ * downstream jobs.
+ */
+function runWorkflowStep(step: WorkflowStep, env: Record<string, string>): StepResult {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'ens-scout-workflow-'));
+  const output = path.join(directory, 'output');
+  fs.writeFileSync(output, '');
+  try {
+    const result = spawnSync('/bin/bash', ['-c', `set -euo pipefail\n${workflowRun(step)}`], {
+      cwd: repoRoot,
+      env: {
+        ...process.env,
+        ...env,
+        GITHUB_OUTPUT: output,
+      },
+      encoding: 'utf8',
+    });
+    const outputs = Object.fromEntries(
+      fs
+        .readFileSync(output, 'utf8')
+        .split('\n')
+        .filter(Boolean)
+        .map((line) => {
+          const separator = line.indexOf('=');
+          if (separator < 1) {
+            throw new Error(`workflow output is not a name=value pair: ${line}`);
+          }
+          return [line.slice(0, separator), line.slice(separator + 1)];
+        }),
+    );
+    return {
+      status: result.status ?? 1,
+      stdout: result.stdout,
+      stderr: result.stderr,
+      outputs,
+    };
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
 }
 
 /**
@@ -115,11 +244,10 @@ function workflow(name: string): string {
  * no toolchain at all would make the assertions vacuous, so finding none is a failure.
  */
 function goVersions(name: string): string[] {
-  const found = workflow(name)
-    .split('\n')
-    .map((line) => /^\s*go-version:\s*'?([^'\s]+)'?\s*$/.exec(line))
-    .filter((match): match is RegExpExecArray => match !== null)
-    .map((match) => match[1]);
+  const found = allWorkflowSteps(workflow(name))
+    .filter((step) => step.uses?.startsWith('actions/setup-go@'))
+    .map((step) => step.with?.['go-version'])
+    .filter((version): version is string => typeof version === 'string');
   if (found.length === 0) {
     throw new Error(`${name} installs no Go toolchain; the assertion below is stale`);
   }
@@ -401,101 +529,240 @@ describe('synthesis under the deployment synthesizer', () => {
 });
 
 describe('the production deployment workflow', () => {
-  const deploy = workflow('deploy-production.yml');
+  const document = workflow('deploy-production.yml');
+  const select = workflowJob(document, 'select');
+  const deploy = workflowJob(document, 'deploy');
+  const resolver = workflowStep(select, 'resolve the immutable deploy SHA');
+  const deploySha = '${{ needs.select.outputs.deploy_sha }}';
+  const checkedSha = 'a'.repeat(40);
+  const workflowSha = 'b'.repeat(40);
 
-  test('runs only when someone starts it', () => {
-    // Not on a push, not on a pull request, and not on a schedule. There is one
-    // environment and no promotion path, so a deployment is a decision.
-    expect(deploy).toContain('workflow_dispatch:');
-    expect(deploy).not.toContain('pull_request');
-    expect(deploy).not.toMatch(/^\s*schedule:/m);
-    expect(deploy).not.toMatch(/^\s*push:/m);
+  function selection(overrides: Record<string, string> = {}): StepResult {
+    return runWorkflowStep(resolver, {
+      EVENT_NAME: 'workflow_run',
+      REPOSITORY: 'nbdSteve/ens-scout',
+      DISPATCH_REF: 'refs/heads/main',
+      DISPATCH_SHA: workflowSha,
+      UPSTREAM_EVENT: 'push',
+      UPSTREAM_CONCLUSION: 'success',
+      UPSTREAM_HEAD_BRANCH: 'main',
+      UPSTREAM_HEAD_REPOSITORY: 'nbdSteve/ens-scout',
+      UPSTREAM_HEAD_SHA: checkedSha,
+      ...overrides,
+    });
+  }
+
+  test('listens only for completed checks runs on main and optional recovery dispatches', () => {
+    expect(document.on).toEqual({
+      workflow_run: {
+        workflows: ['checks'],
+        types: ['completed'],
+        branches: ['main'],
+      },
+      workflow_dispatch: null,
+    });
+    expect(document.on).not.toHaveProperty('pull_request');
+    expect(document.on).not.toHaveProperty('push');
+    expect(document.on).not.toHaveProperty('schedule');
   });
 
-  test('deploys through the protected environment and asks for a token there alone', () => {
-    expect(deploy).toContain('environment: production');
-    expect(deploy).toContain('id-token: write');
-    expect(deploy.match(/id-token: write/g)).toHaveLength(1);
+  test('serializes production deployments without cancelling one in progress', () => {
+    expect(document.concurrency).toEqual({
+      group: 'deploy-production',
+      'cancel-in-progress': false,
+    });
   });
 
-  test('deploys the assembly it verified rather than synthesizing a second one', () => {
-    expect(deploy).toContain('npm run check');
-    expect(deploy).toContain('--app cdk.out');
-    expect(deploy).toContain(`cdk deploy ${stackName}`);
-    expect(deploy.match(/cdk deploy/g)).toHaveLength(1);
+  test('binds the resolver to the upstream event fields and gates the deploy job on its output', () => {
+    expect(resolver.env).toEqual({
+      EVENT_NAME: '${{ github.event_name }}',
+      REPOSITORY: '${{ github.repository }}',
+      DISPATCH_REF: '${{ github.ref }}',
+      DISPATCH_SHA: '${{ github.sha }}',
+      UPSTREAM_EVENT: '${{ github.event.workflow_run.event }}',
+      UPSTREAM_CONCLUSION: '${{ github.event.workflow_run.conclusion }}',
+      UPSTREAM_HEAD_BRANCH: '${{ github.event.workflow_run.head_branch }}',
+      UPSTREAM_HEAD_REPOSITORY: '${{ github.event.workflow_run.head_repository.full_name }}',
+      UPSTREAM_HEAD_SHA: '${{ github.event.workflow_run.head_sha }}',
+    });
+    expect(select.outputs).toEqual({
+      deploy_sha: '${{ steps.resolve.outputs.deploy_sha }}',
+    });
+    expect(deploy.needs).toBe('select');
+    expect(deploy.if).toBe("needs.select.outputs.deploy_sha != ''");
   });
 
-  test('builds the same-origin production website before the one synth it deploys', () => {
-    const websiteBuild = deploy.indexOf('- name: build the production website');
-    const artifactBuild = deploy.indexOf('- name: build and verify the artifact');
-    expect(websiteBuild).toBeGreaterThanOrEqual(0);
-    expect(websiteBuild).toBeLessThan(artifactBuild);
-    expect(deploy).toContain('VITE_API_BASE_URL: /');
-    expect(deploy).toContain('working-directory: web');
-    expect(deploy.match(/npm run check/g)).toHaveLength(1);
+  test('admits a successful main push from this repository and selects its checked SHA', () => {
+    const result = selection();
+    expect(result.status).toBe(0);
+    expect(result.outputs).toEqual({ deploy_sha: checkedSha });
+    expect(result.stdout).not.toContain(checkedSha);
+    expect(result.stderr).not.toContain(checkedSha);
   });
 
-  test('writes the generated HTTPS URL to the deployment summary', () => {
-    expect(deploy).toContain('--outputs-file cdk-outputs.json');
-    expect(deploy).toContain("outputs['EnsScout-prod']?.PublicSiteUrl");
-    expect(deploy).toContain('GITHUB_STEP_SUMMARY');
+  test.each([
+    ['a failed checks run', { UPSTREAM_CONCLUSION: 'failure' }],
+    ['a pull-request head', { UPSTREAM_EVENT: 'pull_request' }],
+    ['a fork head', { UPSTREAM_HEAD_REPOSITORY: 'someone-else/ens-scout' }],
+    ['a non-main branch', { UPSTREAM_HEAD_BRANCH: 'feature/not-main' }],
+  ])('does not admit %s', (_name, overrides) => {
+    const result = selection(overrides);
+    expect(result.status).toBe(0);
+    expect(result.outputs).toEqual({});
+  });
+
+  test('uses workflow_run.head_sha rather than the deploy workflow SHA', () => {
+    const result = selection({
+      UPSTREAM_HEAD_SHA: checkedSha,
+      DISPATCH_SHA: workflowSha,
+    });
+    expect(result.outputs.deploy_sha).toBe(checkedSha);
+    expect(result.outputs.deploy_sha).not.toBe(workflowSha);
+
+    const checkout = workflowStep(deploy, 'checkout the selected commit');
+    expect(checkout.uses).toBe('actions/checkout@v7');
+    expect(checkout.with).toEqual({
+      ref: deploySha,
+      'persist-credentials': false,
+    });
+    expect(workflowStep(deploy, 'verify the selected commit').env).toEqual({
+      DEPLOY_SHA: deploySha,
+    });
+    expect(workflowStep(deploy, 'record what is about to be deployed').env).toEqual({
+      DEPLOY_SHA: deploySha,
+    });
+  });
+
+  test('keeps dispatch as a main-only recovery path with its own immutable event SHA', () => {
+    const accepted = selection({
+      EVENT_NAME: 'workflow_dispatch',
+      DISPATCH_REF: 'refs/heads/main',
+      DISPATCH_SHA: workflowSha,
+    });
+    expect(accepted.status).toBe(0);
+    expect(accepted.outputs).toEqual({ deploy_sha: workflowSha });
+
+    const rejected = selection({
+      EVENT_NAME: 'workflow_dispatch',
+      DISPATCH_REF: 'refs/heads/recovery',
+      DISPATCH_SHA: workflowSha,
+    });
+    expect(rejected.status).toBe(0);
+    expect(rejected.outputs).toEqual({});
+  });
+
+  test('fails closed if an otherwise eligible event does not carry a full commit SHA', () => {
+    const result = selection({ UPSTREAM_HEAD_SHA: 'not-a-commit' });
+    expect(result.status).not.toBe(0);
+    expect(result.outputs).toEqual({});
+    expect(`${result.stdout}${result.stderr}`).not.toContain('not-a-commit');
+  });
+
+  test('deploys through the production environment and asks for an OIDC token there alone', () => {
+    expect(deploy.environment).toBe('production');
+    expect(
+      Object.entries(document.jobs)
+        .filter(([, job]) => job.permissions?.['id-token'] === 'write')
+        .map(([id]) => id),
+    ).toEqual(['deploy']);
+    expect(deploy.permissions).toEqual({
+      contents: 'read',
+      'id-token': 'write',
+    });
+  });
+
+  test('builds once and deploys the exact cdk.out assembly that passed', () => {
+    const website = workflowStep(deploy, 'build the production website');
+    const artifact = workflowStep(deploy, 'build and verify the artifact');
+    const deployment = workflowStep(deploy, 'deploy');
+    expect(deploy.steps.indexOf(website)).toBeLessThan(deploy.steps.indexOf(artifact));
+    expect(deploy.steps.indexOf(artifact)).toBeLessThan(deploy.steps.indexOf(deployment));
+    expect(website['working-directory']).toBe('web');
+    expect(website.env).toEqual({ VITE_API_BASE_URL: '/' });
+    expect(workflowRun(artifact)).toBe(
+      'npm run check -- --context "ens-scout:account=$AWS_ACCOUNT_ID"',
+    );
+    expect(workflowRun(deployment)).toContain(`npx cdk deploy ${stackName}`);
+    expect(workflowRun(deployment)).toContain('--app cdk.out');
+    expect(
+      allWorkflowSteps(document).filter((step) =>
+        workflowRunOrEmpty(step).includes('npm run check'),
+      ),
+    ).toHaveLength(1);
+    expect(
+      allWorkflowSteps(document).filter((step) => workflowRunOrEmpty(step).includes('cdk deploy')),
+    ).toHaveLength(1);
+  });
+
+  test('records only the immutable SHA, artifact checksum, and generated site URL', () => {
+    const artifactSummary = workflowStep(deploy, 'record what is about to be deployed');
+    const deployment = workflowStep(deploy, 'deploy');
+    const siteSummary = workflowStep(deploy, 'publish the generated site URL');
+    expect(workflowRun(artifactSummary)).toContain('commit  $DEPLOY_SHA');
+    expect(workflowRun(artifactSummary)).toContain('sha256sum cdk.out/EnsScout-prod.template.json');
+    expect(workflowRun(deployment)).toContain('--outputs-file cdk-outputs.json');
+    expect(workflowRun(deployment)).toContain('>"$deploy_log" 2>&1');
+    expect(workflowRun(siteSummary)).toContain("outputs['EnsScout-prod']?.PublicSiteUrl");
+    expect(workflowRun(siteSummary)).toContain('GITHUB_STEP_SUMMARY');
+    for (const summary of [workflowRun(artifactSummary), workflowRun(siteSummary)]) {
+      expect(summary).not.toMatch(/AWS_(ACCOUNT|REGION|DEPLOY|CLOUDFORMATION)/);
+      expect(summary).not.toContain('role/');
+    }
   });
 
   test('holds no long-lived AWS credential', () => {
     // The whole point of federating: there is no access key in this repository to
     // leak, rotate, or forget.
-    expect(deploy).not.toContain('aws-access-key-id');
-    expect(deploy).not.toContain('aws-secret-access-key');
-    expect(deploy).not.toMatch(/secrets\.AWS/);
+    const serialized = serializedWorkflow(document);
+    expect(serialized).not.toContain('aws-access-key-id');
+    expect(serialized).not.toContain('aws-secret-access-key');
+    expect(serialized).not.toMatch(/secrets\.AWS/);
   });
 });
 
 describe('the deployment configuration the workflow requires', () => {
-  const deploy = workflow('deploy-production.yml');
+  const document = workflow('deploy-production.yml');
+  const deploy = workflowJob(document, 'deploy');
+  const validation = workflowStep(deploy, 'require the deployment configuration');
+  const credential = workflowStep(deploy, 'assume the deployment role');
+  const artifact = workflowStep(deploy, 'build and verify the artifact');
+  const deployment = workflowStep(deploy, 'deploy');
+  const required = Object.keys(validation.env ?? {}).filter((name) => name.startsWith('AWS_'));
+  const validAccount = '1'.repeat(12);
+  const valid = {
+    AWS_ACCOUNT_ID: validAccount,
+    AWS_REGION: 'ap-southeast-2',
+    AWS_DEPLOY_ROLE_ARN: `arn:aws:iam::${validAccount}:role/DeployFixture`,
+    AWS_CLOUDFORMATION_EXECUTION_ROLE_ARN: `arn:aws:iam::${validAccount}:role/ExecutionFixture`,
+    PLACEHOLDER_ACCOUNT: placeholderAccount,
+  };
 
-  /** The four names, in the order the workflow's own validation loop lists them. */
-  const required = ((): string[] => {
-    const listed = /for name in ([A-Z0-9_ ]+); do/.exec(deploy);
-    if (!listed) {
-      throw new Error('deploy-production.yml validates no variable; the assertions below are stale');
-    }
-    return listed[1].trim().split(/\s+/);
-  })();
-
-  /** usesVariable is a YAML key bound to a repository variable on one line. */
-  function usesVariable(key: string, variable: string): boolean {
-    return new RegExp(`${key}:\\s*\\$\\{\\{\\s*vars\\.${variable}\\s*\\}\\}`).test(deploy);
-  }
-
-  /** stepIndex is where a named step begins, so two can be ordered. */
-  function stepIndex(name: string): number {
-    const found = deploy.indexOf(`- name: ${name}\n`);
-    if (found < 0) {
-      throw new Error(`deploy-production.yml has no step named ${name}; this assertion is stale`);
-    }
-    return found;
+  function validate(overrides: Record<string, string> = {}): StepResult {
+    return runWorkflowStep(validation, { ...valid, ...overrides });
   }
 
   test('embeds no account number of its own', () => {
     // The one twelve-digit run this file may hold is the placeholder its own guard
     // compares against, and that guard is only a guard if it is the same placeholder
     // lib/config.ts commits. Everything else about the account arrives as a variable.
-    const digitRuns = new Set([...deploy.matchAll(/[0-9]{12,}/g)].map((match) => match[0]));
+    const serialized = serializedWorkflow(document);
+    const digitRuns = new Set([...serialized.matchAll(/[0-9]{12,}/g)].map((match) => match[0]));
     expect([...digitRuns]).toEqual([placeholderAccount]);
   });
 
   test('embeds no role ARN and no role name of its own', () => {
     // A whole ARN, or a CamelCase role name, is the shape the leak took: both roles are
     // now supplied whole, so the file names IAM only in the pattern its guard matches.
-    expect(deploy).not.toMatch(/arn:aws:iam::[0-9]+:role\//);
-    expect(deploy).not.toMatch(/[A-Za-z][A-Za-z0-9]*Role[A-Za-z0-9]*/);
+    const serialized = serializedWorkflow(document);
+    expect(serialized).not.toMatch(/arn:aws:iam::[0-9]+:role\//);
+    expect(serialized).not.toMatch(/[A-Za-z][A-Za-z0-9]*Role[A-Za-z0-9]*/);
   });
 
   test('requires every variable it reads, and reads every variable it requires', () => {
     // A fifth variable added without a check would be one the job discovers is missing
     // at whichever step first needs it, which on the deploy step is mid-deployment.
     const referenced = new Set(
-      [...deploy.matchAll(/vars\.([A-Z0-9_]+)/g)].map((match) => match[1]),
+      [...serializedWorkflow(document).matchAll(/vars\.([A-Z0-9_]+)/g)].map((match) => match[1]),
     );
     expect([...referenced].sort()).toEqual([...required].sort());
     expect([...required].sort()).toEqual([
@@ -510,38 +777,70 @@ describe('the deployment configuration the workflow requires', () => {
     // Ordering is the point of the step. A value checked after the synth costs a
     // toolchain and a build; one checked after the deploy step has started costs a
     // half-applied stack.
-    const validation = stepIndex('require the deployment configuration');
-    expect(validation).toBeLessThan(stepIndex('build and verify the artifact'));
-    expect(validation).toBeLessThan(stepIndex('deploy'));
+    expect(deploy.steps.indexOf(validation)).toBeLessThan(deploy.steps.indexOf(artifact));
+    expect(deploy.steps.indexOf(validation)).toBeLessThan(deploy.steps.indexOf(deployment));
+  });
+
+  test('accepts four consistent production values and prints none of them', () => {
+    const result = validate();
+    expect(result.status).toBe(0);
+    for (const value of Object.values(valid)) {
+      expect(`${result.stdout}${result.stderr}`).not.toContain(value);
+    }
+  });
+
+  test.each(required)('refuses a missing %s before any build', (name) => {
+    const result = validate({ [name]: '' });
+    expect(result.status).not.toBe(0);
+    expect(`${result.stdout}${result.stderr}`).toContain(name);
   });
 
   test('refuses the placeholder account rather than deploying at nothing', () => {
-    expect(deploy).toContain(`PLACEHOLDER_ACCOUNT: '${placeholderAccount}'`);
-    expect(deploy).toMatch(/AWS_ACCOUNT_ID" = "\$PLACEHOLDER_ACCOUNT"/);
+    expect(validation.env?.PLACEHOLDER_ACCOUNT).toBe(placeholderAccount);
+    expect(validate({ AWS_ACCOUNT_ID: placeholderAccount }).status).not.toBe(0);
+  });
+
+  test('refuses malformed values, role/account disagreement, and one role used twice', () => {
+    expect(validate({ AWS_ACCOUNT_ID: 'short' }).status).not.toBe(0);
+    expect(validate({ AWS_REGION: 'not-a-region' }).status).not.toBe(0);
+    expect(
+      validate({
+        AWS_DEPLOY_ROLE_ARN: `arn:aws:iam::${'2'.repeat(12)}:role/DeployFixture`,
+      }).status,
+    ).not.toBe(0);
+    expect(
+      validate({
+        AWS_CLOUDFORMATION_EXECUTION_ROLE_ARN: valid.AWS_DEPLOY_ROLE_ARN,
+      }).status,
+    ).not.toBe(0);
   });
 
   test('assumes the deployment role the deploy-role variable names, in that region', () => {
-    expect(usesVariable('role-to-assume', 'AWS_DEPLOY_ROLE_ARN')).toBe(true);
-    expect(usesVariable('aws-region', 'AWS_REGION')).toBe(true);
-    expect(usesVariable('allowed-account-ids', 'AWS_ACCOUNT_ID')).toBe(true);
+    expect(credential.with?.['role-to-assume']).toBe('${{ vars.AWS_DEPLOY_ROLE_ARN }}');
+    expect(credential.with?.['aws-region']).toBe('${{ vars.AWS_REGION }}');
+    expect(credential.with?.['allowed-account-ids']).toBe('${{ vars.AWS_ACCOUNT_ID }}');
   });
 
   test('synthesizes the deployed artifact against the account variable', () => {
     // `--app cdk.out` deploys the assembly, and the stack environment is baked into
     // it, so the real account has to reach the synth that produced it. This is the
     // whole reason cdk.json can carry a placeholder at all.
-    expect(usesVariable('AWS_ACCOUNT_ID', 'AWS_ACCOUNT_ID')).toBe(true);
-    expect(deploy).toContain('npm run check -- --context "ens-scout:account=$AWS_ACCOUNT_ID"');
+    expect(artifact.env?.AWS_ACCOUNT_ID).toBe('${{ vars.AWS_ACCOUNT_ID }}');
+    expect(workflowRun(artifact)).toBe(
+      'npm run check -- --context "ens-scout:account=$AWS_ACCOUNT_ID"',
+    );
   });
 
   test('passes the execution role the execution-role variable names', () => {
     // A different ARN here is refused by the deployment role's PassRole condition, so
     // the failure is safe but opaque; this is the assertion that names where it comes
     // from.
-    expect(
-      usesVariable('AWS_CLOUDFORMATION_EXECUTION_ROLE_ARN', 'AWS_CLOUDFORMATION_EXECUTION_ROLE_ARN'),
-    ).toBe(true);
-    expect(deploy).toContain('--role-arn "$AWS_CLOUDFORMATION_EXECUTION_ROLE_ARN"');
+    expect(deployment.env?.AWS_CLOUDFORMATION_EXECUTION_ROLE_ARN).toBe(
+      '${{ vars.AWS_CLOUDFORMATION_EXECUTION_ROLE_ARN }}',
+    );
+    expect(workflowRun(deployment)).toContain(
+      '--role-arn "$AWS_CLOUDFORMATION_EXECUTION_ROLE_ARN"',
+    );
   });
 
   test('appends the account context to a script that ends with the synth', () => {
@@ -616,10 +915,12 @@ describe('the committed IAM templates', () => {
 
 describe('the pull request checks', () => {
   const checks = workflow('checks.yml');
+  const serialized = serializedWorkflow(checks);
+  const commands = allWorkflowSteps(checks).map(workflowRunOrEmpty).join('\n');
 
   test('request no OIDC token, so they can reach no AWS account', () => {
-    expect(checks).not.toContain('id-token');
-    expect(checks).not.toContain('role-to-assume');
+    expect(serialized).not.toContain('id-token');
+    expect(serialized).not.toContain('role-to-assume');
   });
 
   test('run every command AGENTS.md documents as the development workflow', () => {
@@ -633,13 +934,19 @@ describe('the pull request checks', () => {
       'npm run check',
       'npm run verify',
     ]) {
-      expect(checks).toContain(command);
+      expect(commands).toContain(command);
     }
   });
 
   test('cross-compile the Lambda for the architecture it runs on', () => {
-    expect(checks).toContain('GOOS: linux');
-    expect(checks).toContain('GOARCH: arm64');
+    const crossCompile = workflowStep(
+      workflowJob(checks, 'go'),
+      'cross-compile the Lambdas for their runtime',
+    );
+    expect(crossCompile.env).toEqual({
+      GOOS: 'linux',
+      GOARCH: 'arm64',
+    });
   });
 });
 

@@ -49,7 +49,7 @@ and correct ENS lifecycle classification are core requirements.
   roles, rendered by `infra/scripts/render-iam.js`. They are configuration in an
   AWS account rather than resources in the stack, and `docs/deployment.md`
   explains them.
-- `.github/workflows/`: the pull-request gates and the one manual production
+- `.github/workflows/`: the pull-request gates and the automatic production
   deployment. `docs/deployment.md` is the whole description of the deployment path.
 
 ## Development workflow
@@ -820,6 +820,16 @@ there could quietly break.
   `iam:PutRolePolicy` on `EnsScout-prod-*` plus Lambda creation - is recorded in
   `docs/deployment.md` and is bounded only by the protected environment; a permissions
   boundary is the follow-up, not a reason to stop worrying about the next grant.
+- Production follows the completed `checks` workflow through `workflow_run`, and only a
+  successful same-repository `push` whose head branch is `main` may produce a deploy
+  SHA. That SHA is the upstream run's `head_sha`, and checkout, verification, summary,
+  build, synth, and deploy all consume that one immutable value. A pull-request run, a
+  fork run, a failed run, or a non-main run reaches no environment and requests no
+  token. `workflow_dispatch` is a main-only recovery trigger and does not gate the
+  automatic path.
+- The `production` environment keeps the four deployment variables and the custom
+  `main`-only branch policy, but no required-reviewer rule. Recurring production
+  approval is the successful `main` checks run rather than a second human gate.
 - The production workflow builds the web bundle with `VITE_API_BASE_URL=/` before
   synth, then builds once and deploys that artifact. `npm run check` leaves the
   verified assembly in `infra/cdk.out` and the deploy step reads it with

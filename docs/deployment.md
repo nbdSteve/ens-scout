@@ -32,7 +32,7 @@ also let a variable disagree with the ARN the workflow built out of it.
 on its own: the CDK stack environment, which is an account and a region rather than an
 ARN, and the `allowed-account-ids` guard on the credential step.
 
-The workflow's first step refuses to build anything until all four are present, the
+The deploy job's first step refuses to build anything until all four are present, the
 account is twelve digits and is not the placeholder `infra/cdk.json` commits, the region
 is shaped like a region, both ARNs are IAM role ARNs in the account `AWS_ACCOUNT_ID`
 names, and the two ARNs are not the same role.
@@ -43,32 +43,52 @@ one reaches the command that needs it.
 
 ## The path
 
-One manual workflow run deploys, and nothing else can.
+Every successful `checks` workflow for a push to `main` automatically queues the exact
+commit it checked for production. A manual `workflow_dispatch` remains available only
+as a recovery path from `main`; it does not approve, release, or otherwise participate
+in the automatic path.
 
-1. Someone dispatches `deploy production` on the default branch.
-2. The job checks the four variables described above, before it checks out anything.
-3. The job declares `environment: production`, so GitHub holds it for the reviewer that
-   environment requires and refuses any ref the environment's branch policy does not
-   name.
-4. The job builds `web/dist` with `VITE_API_BASE_URL=/`, so the browser uses the
+1. `checks.yml` runs for the push to `main`.
+2. When that run completes, GitHub starts `deploy production` through `workflow_run`.
+   The trigger names the `checks` workflow, the `completed` activity, and the `main`
+   branch, but those filters are not treated as the authorization boundary.
+3. The unprivileged selector job emits a deploy SHA only when the upstream event was
+   `push`, its conclusion was `success`, its head branch was `main`, and its head
+   repository was `nbdSteve/ens-scout`. The emitted value is exactly
+   `github.event.workflow_run.head_sha`, and it must be a full commit ID. A failed run,
+   pull-request run, fork run, or non-main run emits nothing, so the deploy job is
+   skipped before it can enter the environment or request an OIDC token.
+   For a recovery dispatch, the same selector accepts only `refs/heads/main` and emits
+   the immutable `github.sha` recorded on that dispatch.
+4. The deploy job runs only when that one output is present. It declares
+   `environment: production`, whose custom deployment branch policy names `main` alone
+   and whose protection rules require no reviewer interaction.
+5. The job checks the four variables described above, then checks out the selected
+   full SHA and verifies that `git rev-parse HEAD` is the same value. It never checks
+   out a moving branch for a deployment.
+6. The job builds `web/dist` with `VITE_API_BASE_URL=/`, so the browser uses the
    generated CloudFront hostname for both the page and `/api/*`.
-5. The job builds and verifies once with
+7. The job builds, tests, and synthesizes once with
    `npm run check -- --context "ens-scout:account=$AWS_ACCOUNT_ID"`, which leaves the
    whole cloud assembly - the template, both Go binaries, and that web build - in
    `infra/cdk.out`.
-6. It requests an OIDC token and assumes the role `AWS_DEPLOY_ROLE_ARN` names.
-7. It runs `cdk deploy --app cdk.out --role-arn "$AWS_CLOUDFORMATION_EXECUTION_ROLE_ARN"`,
-   which deploys the assembly step 5 verified and synthesizes nothing new.
-8. It writes the stack's generated HTTPS `PublicSiteUrl` output to the GitHub
-   deployment summary.
+8. It records that selected SHA and the synthesized template's SHA-256, then requests
+   an OIDC token and assumes the role `AWS_DEPLOY_ROLE_ARN` names.
+9. It runs `cdk deploy --app cdk.out --role-arn "$AWS_CLOUDFORMATION_EXECUTION_ROLE_ARN"`,
+   which deploys the assembly step 7 verified and synthesizes nothing new.
+10. It writes the stack's generated HTTPS `PublicSiteUrl` output to the GitHub
+    deployment summary.
 
 The build happens before the credential is obtained, so a failing check costs no AWS
 session at all.
 The deploy step reads the assembly rather than re-running the app, which is what makes
 the artifact that reaches AWS the one the checks passed rather than an equal one built a
 second time.
+The selected SHA is the single identity used by checkout, verification, the artifact
+summary, and the build that creates that assembly, so a later move of `main` cannot
+change what an already-triggered run deploys.
 
-That is also why the account is supplied at step 5 rather than at step 7.
+That is also why the account is supplied at step 7 rather than at step 9.
 `--app cdk.out` deploys the assembly, and the stack environment is baked into it, so the
 real account has to be present at the synth that produced the artifact.
 `infra/cdk.json` commits `infra/lib/config.ts`'s `placeholderAccount` instead, which is
@@ -209,8 +229,8 @@ What it deliberately does not hold:
 
 Repository `nbdSteve/ens-scout`.
 
-- Environment `production`, with a required reviewer and a deployment branch policy that
-  names `main` alone.
+- Environment `production`, with no required reviewers and a custom deployment branch
+  policy that names `main` alone.
 - The four variables above, held on that environment.
   None is secret by nature, and the workflow refuses to run without them.
 - No Actions secret holds an AWS credential, and there is no AWS access key anywhere in
@@ -220,7 +240,9 @@ Repository `nbdSteve/ens-scout`.
 
 `checks.yml` runs the three repository gates on every pull request and on a push to
 `main`, and requests no `id-token` at all, so nothing on that path can reach the account.
-It also needs none of the four variables: it synthesizes against the committed
+Only its successful same-repository `push` run on `main` can supply a deploy SHA; a
+successful pull request, including one from a fork or a branch also named `main`, cannot.
+The checks also need none of the four variables: they synthesize against the committed
 placeholder account, which is the whole reason that placeholder exists.
 
 ## Residual risks
@@ -230,8 +252,8 @@ These are accepted rather than closed, and each is a deliberate decision.
 1. The execution role can create a role under `EnsScout-prod-*`, put an inline policy on
    it, and pass it to Lambda, which is a theoretical privilege-escalation path from that
    role to arbitrary permissions.
-   Reaching it needs a change to the stack definition, which needs a merge to `main` and
-   the production environment's approval.
+   Reaching it needs a change to the stack definition, a merge to `main`, and a successful
+   `main` checks run; that success now deploys automatically.
    A permissions boundary on that `iam:PutRolePolicy` grant is the follow-up that would
    close it properly.
 2. The execution role's action set was derived from the committed stack rather than proved

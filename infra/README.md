@@ -75,8 +75,10 @@ from whichever profile is logged in.
 
 ## Deployment
 
-Deployment is one manual GitHub Actions run in `ap-southeast-2`, through a GitHub OIDC
-role and a protected `production` environment.
+Deployment follows every successful `checks` run for a same-repository push to `main`,
+through a GitHub OIDC role and the `production` environment in `ap-southeast-2`.
+A main-only `workflow_dispatch` remains as an optional recovery trigger and does not
+gate the automatic path.
 [docs/deployment.md](../docs/deployment.md) is the whole description: the four
 `production` environment variables, the two roles, what they may and may not do, the
 GitHub configuration, and the residual risks.
@@ -88,9 +90,10 @@ The target account is the one deployment value this repository does not commit.
 clone, every pull-request check, and every test synthesize the stack, and the workflow
 supplies the real account from the `AWS_ACCOUNT_ID` variable as
 `-c ens-scout:account=` on the synth that produces the artifact it deploys.
-The workflow builds `web/dist` with the same-origin API base before that synth,
-deploys `infra/cdk.out` without another synth, and writes only the
-`PublicSiteUrl` output to the deployment summary.
+The workflow selects `github.event.workflow_run.head_sha`, checks out and verifies that
+full commit, builds `web/dist` with the same-origin API base before the synth, deploys
+`infra/cdk.out` without another synth, and writes only the selected SHA, the template
+checksum, and the `PublicSiteUrl` output to the deployment summary.
 
 `npm run diff` and an interactive `cdk deploy` still work for someone holding
 credentials directly, and three things must exist before either.
@@ -242,16 +245,18 @@ that grant anything on `*`; it synthesizes with `deploymentSynthesizer()` and re
 the stack artifact to name none of the bootstrap roles; and it requires every template to
 hold no twelve-digit run and to name no role but a placeholder or one under the stack's
 own prefix.
-It matches the workflow text after stripping full-line comments, which is the one place
-here that asserts on text: there is no YAML parser in the dependency set, and adding a
-dependency is a decision rather than a convenience.
-Stripping the comments is what keeps that match honest, because a comment naming
-`aws-access-key-id` to say it is absent must not decide the assertion that it is absent.
+It parses the workflow YAML into mappings, lists, and scalars through the YAML parser
+already present in the locked Jest dependency graph, so comments and formatting cannot
+decide an assertion.
+For the automatic gate it executes the exact resolver shell body from that parsed model
+against successful, failed, pull-request, fork, non-main, dispatch, and malformed-SHA
+events, then requires checkout, verification, summary, build, and deployment to consume
+the one selected output.
 
 The same suite asserts what the deploy workflow may not contain and what it must carry.
 It requires that the workflow embeds no account number of its own and no role name or
 role ARN at all, that the four `production` variables it reads are exactly the four its
-first step refuses to run without, that the check comes before both the build and the
+deploy job refuses to run without, that the check comes before both the build and the
 deploy, and that each variable reaches the command that needs it - `AWS_DEPLOY_ROLE_ARN`
 the credential step's `role-to-assume`, `AWS_ACCOUNT_ID` the `allowed-account-ids` guard
 and the synth's `-c ens-scout:account=`, and
