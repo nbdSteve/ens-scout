@@ -20,12 +20,66 @@ import { FIXTURE_SITE, VERIFY_SITE, type BuiltSite } from './servers'
  * where a wrongly named variable would actually show up; scanning only the fixture
  * build would check the case that cannot leak.
  *
+ * The optional model is the one thing here that does name a third-party origin, and the
+ * whole arrangement in `suggest/` exists to confine it to one lazily fetched chunk. That
+ * makes the split an assertion rather than a convention: the model hosts are allowed in
+ * the model chunk and are forbidden in every other built file, so a static import that
+ * pulled the library onto the first-screen path would fail here.
+ *
  * This suite reads the output directories, so it depends on the builds the Playwright
  * web servers have already run. It carries no viewport, which is why the config gives
  * it a project of its own instead of repeating it at every width.
  */
 
 const SITES: readonly BuiltSite[] = [FIXTURE_SITE, VERIFY_SITE]
+
+/**
+ * The lazily fetched model chunk, and its source map.
+ *
+ * Named from the module `suggest/engine/load.ts` imports, which is what Vite names the
+ * chunk after. `tests/browser/suggestModel.ts` intercepts the same shape of path, so a
+ * rename that broke this would break that too rather than quietly widening either.
+ */
+const MODEL_CHUNK = /\/assets\/webllm-[^/]+\.js(?:\.map)?$/
+
+/** The executable half of it, without the source map. */
+const MODEL_CODE = /\/assets\/webllm-[^/]+\.js$/
+
+/**
+ * Where the pinned model's assets and the library's own catalogue live.
+ *
+ * Not a secret and not a credential - they are published, public, and fetched by the
+ * browser only after a visitor has been shown the size and has not refused it. What
+ * matters is that they are reachable from nowhere except the chunk below.
+ */
+const MODEL_HOSTS: readonly string[] = [
+  'https://huggingface.co',
+  'https://raw.githubusercontent.com',
+  // The library's own diagnostic link, in a message it never reaches here.
+  'https://webgpureport.org',
+]
+
+/**
+ * Origins that appear only in the model chunk's source map.
+ *
+ * A source map holds the library's vendored sources verbatim, comments and all, so these
+ * are licence headers, specification links, and one author's own pages. None of them is
+ * reachable from any code path: the executable chunk is checked against `MODEL_HOSTS`
+ * alone, which is what `confines the model hosts` and the entry-chunk bound below turn on,
+ * and this list is only about text nothing executes.
+ *
+ * It is an explicit list rather than a blanket exemption for `.map` files, because the
+ * point of the origins check is to notice an endpoint arriving in a dependency. A map that
+ * grew a new origin still fails here and has to be read and accepted.
+ */
+const MODEL_SOURCE_COMMENT_ORIGINS: readonly string[] = [
+  'https://github.com',
+  'http://www.apache.org',
+  'https://en.cppreference.com',
+  'https://jackpordi.com',
+  'https://www.linkedin.com',
+  'https://developer.chrome.com',
+]
 
 /*
  * `fileURLToPath`, not `URL.pathname`. The latter keeps the URL's leading slash, so on
@@ -81,13 +135,6 @@ for (const site of SITES) {
   })
 
   test(`the only origins ${site.outDir}/ names are ENS, its read API, and the page itself`, async () => {
-    const origins = new Set<string>()
-    for (const [, text] of await builtFiles(site)) {
-      for (const match of text.matchAll(/https?:\/\/[a-z0-9.-]+(?::\d+)?/gi)) {
-        origins.add(match[0].toLowerCase())
-      }
-    }
-
     /*
      * `app.ens.domains` is where a visitor is sent to confirm a name, the two schema
      * URLs are namespaces in the built HTML, and `react.dev` is where React's own
@@ -105,7 +152,69 @@ for (const site of SITES) {
     if (site.apiBaseUrl !== null) {
       allowed.add(site.apiBaseUrl.toLowerCase())
     }
-    expect([...origins].filter((origin) => !allowed.has(origin))).toEqual([])
+
+    const found: string[] = []
+    for (const [path, text] of await builtFiles(site)) {
+      /*
+       * The model chunk may name the model hosts, and only it may. Its source map may also
+       * carry the origins its vendored sources mention in comments, which nothing executes
+       * and nothing fetches; the executable chunk is held to `MODEL_HOSTS` alone.
+       */
+      let permitted = allowed
+      if (MODEL_CHUNK.test(path)) {
+        permitted = new Set([
+          ...allowed,
+          ...MODEL_HOSTS,
+          ...(MODEL_CODE.test(path) ? [] : MODEL_SOURCE_COMMENT_ORIGINS),
+        ])
+      }
+      for (const match of text.matchAll(/https?:\/\/[a-z0-9.-]+(?::\d+)?/gi)) {
+        const origin = match[0].toLowerCase()
+        if (!permitted.has(origin)) {
+          found.push(`${path} names ${origin}`)
+        }
+      }
+    }
+    expect([...new Set(found)]).toEqual([])
+  })
+
+  /*
+   * The other half of the same rule, stated from the other direction. The test above
+   * would pass for a build that named no model host anywhere, which is also what a build
+   * whose lazy chunk had been folded into the entry chunk looks like from a distance.
+   * This one insists the hosts are somewhere, and that the somewhere is one chunk.
+   */
+  test(`${site.outDir}/ confines the model hosts to the lazily fetched chunk`, async () => {
+    const naming = new Map<string, readonly string[]>()
+    for (const [path, text] of await builtFiles(site)) {
+      const hosts = MODEL_HOSTS.filter((host) => text.includes(host))
+      if (hosts.length > 0) {
+        naming.set(path, hosts)
+      }
+    }
+
+    expect([...naming.keys()].length, 'no built file names the model host at all').toBeGreaterThan(
+      0,
+    )
+    expect([...naming.keys()].filter((path) => !MODEL_CHUNK.test(path))).toEqual([])
+  })
+
+  /*
+   * The promise the whole feature rests on, measured rather than asserted in prose: the
+   * page a visitor waits for is the small one. The bound is generous against the current
+   * figure so ordinary growth does not trip it, and it is far below the model chunk, which
+   * is the comparison that matters - a static import of the library would multiply the
+   * entry chunk by twenty and fail this by an order of magnitude rather than by a margin.
+   */
+  test(`the first screen of ${site.outDir}/ does not carry the model library`, async () => {
+    const scripts = (await builtFiles(site)).filter(
+      ([path]) => path.endsWith('.js') && !path.endsWith('.map'),
+    )
+    const entry = scripts.filter(([path]) => /\/assets\/index-[^/]+\.js$/.test(path))
+    expect(entry.length, 'no entry chunk in the build').toBe(1)
+
+    const bytes = Buffer.byteLength(entry[0]?.[1] ?? '', 'utf8')
+    expect(bytes).toBeLessThan(600_000)
   })
 
   test(`${site.outDir}/ ships the fixture, so a clean clone has something to show`, async () => {

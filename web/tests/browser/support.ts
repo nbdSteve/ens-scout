@@ -1,5 +1,5 @@
 import AxeBuilder from '@axe-core/playwright'
-import { expect, type Locator, type Page } from '@playwright/test'
+import { expect, test, type Locator, type Page } from '@playwright/test'
 
 /**
  * Shared helpers for the browser suite.
@@ -24,6 +24,42 @@ import { expect, type Locator, type Page } from '@playwright/test'
  * longest strings, ten rows - asks for `view=all` rather than reading whatever the
  * landing view happens to hold.
  */
+
+/**
+ * Every origin the pinned model configuration can fetch from, refused for every test in
+ * this suite.
+ *
+ * This is a hard guarantee rather than a convenience, and it is registered on every
+ * browser context because the alternative is environment-dependent in the worst direction.
+ * `navigator.gpu` is
+ * present in headless Chromium on a secure origin, which `127.0.0.1` is, so
+ * `suggest/engine/load.ts` passes its cheap gate and the page fetches the model chunk on
+ * every single test here once the start grace elapses. Whether anything then downloads a
+ * 211 MB model comes down to whether the machine running the suite has an adapter with
+ * `shader-f16`: it does not in this container, and it does on a developer's laptop and on a
+ * GPU runner. A suite that contacts a model host on some machines and not others is one
+ * that cannot be said not to contact one.
+ *
+ * `tests/browser/suggestModel.ts` registers the same globs per test, which is not
+ * redundant: those record what was attempted so a test can assert on it, and this one is
+ * the floor under every test that never thinks about the model at all.
+ */
+const MODEL_ASSET_GLOBS = [
+  'https://huggingface.co/**',
+  'https://*.huggingface.co/**',
+  'https://*.hf.co/**',
+  'https://raw.githubusercontent.com/**',
+] as const
+
+test.beforeEach(async ({ context }) => {
+  for (const glob of MODEL_ASSET_GLOBS) {
+    await context.route(glob, async (route) => {
+      // Aborted rather than fulfilled with something plausible: the library must fail to
+      // load, and the page must treat that as one of its ordinary states.
+      await route.abort('blockedbyclient')
+    })
+  }
+})
 
 /** The instant the committed `preview` fixture records as its scan time. */
 export const SCANNED_AT = Date.UTC(2026, 2, 1, 12, 0, 0)
@@ -125,4 +161,16 @@ export function scrollsSideways(page: Page): Promise<boolean> {
 /** The query string of the address bar, including its leading `?`. */
 export function searchOf(page: Page): string {
   return new URL(page.url()).search
+}
+
+/**
+ * The match count above the list.
+ *
+ * Named by its own text rather than by `role="status"`, which the page now has more than
+ * one of: the recommender panel states what the optional model is doing in a second one.
+ * A bare `getByRole('status')` was unambiguous when there was one, and picking the first
+ * of two would depend on document order rather than on meaning.
+ */
+export function matchCount(page: Page): Locator {
+  return page.getByRole('status').filter({ hasText: /names? match/ })
 }

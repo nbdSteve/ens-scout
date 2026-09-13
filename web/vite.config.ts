@@ -21,5 +21,18 @@ export default defineConfig({
     // so a production bug can be diagnosed without guessing at minified frames.
     sourcemap: true,
     target: 'es2022',
+    /*
+     * The optional model library is deliberately one large chunk, reached only through
+     * the dynamic import in `src/suggest/engine/load.ts` and only after a visitor has
+     * been shown its size. Rollup's default 500 kB warning is about the bundle a first
+     * screen waits for, and this chunk is not on that path, so the warning here would be
+     * a line of noise on every build that trained everyone to ignore the next real one.
+     *
+     * Raised rather than silenced, and the figure that actually matters is asserted
+     * instead of warned about: `tests/browser/assets.spec.ts` bounds the entry chunk and
+     * insists the model hosts appear in nothing but this chunk. A soft warning nobody
+     * reads is worse than a hard gate, so the gate is where the check lives.
+     */
+    chunkSizeWarningLimit: 7_000,
   },
 })

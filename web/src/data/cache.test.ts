@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { FORMAT_VERSION } from '../snapshot/contract'
 import type { LatestDocument, SnapshotDocument } from '../snapshot/types'
 import { buildLatestDocument, buildSnapshotDocument } from '../test/factory'
+import { keysOf, memoryStorage } from '../test/storage'
 import { CACHE_KEY, clearCache, readCache, writeCache } from './cache'
 
 /**
@@ -19,49 +20,6 @@ const UNVERSIONED_KEY = 'ens-scout.snapshot.vNext'
 
 /** An entry from another feature on the same origin. */
 const UNRELATED_KEY = 'ens-scout.preferences'
-
-/**
- * A `Storage` backed by a map. `refuse` rejects a write the way a full store
- * does, and sees the entries that are present, so a test can make room by
- * removing something and have the retry succeed.
- */
-function memoryStorage(
-  seed: Record<string, string> = {},
-  refuse: (stored: ReadonlyMap<string, string>) => boolean = () => false,
-): Storage {
-  const entries = new Map<string, string>(Object.entries(seed))
-  return {
-    get length() {
-      return entries.size
-    },
-    clear: () => {
-      entries.clear()
-    },
-    getItem: (key: string) => entries.get(key) ?? null,
-    key: (index: number) => [...entries.keys()][index] ?? null,
-    removeItem: (key: string) => {
-      entries.delete(key)
-    },
-    setItem: (key: string, value: string) => {
-      if (refuse(entries)) {
-        throw new DOMException('quota exceeded', 'QuotaExceededError')
-      }
-      entries.set(key, value)
-    },
-  }
-}
-
-/** Every key the store holds, read the way the sweep reads them. */
-function keysOf(storage: Storage): string[] {
-  const keys: string[] = []
-  for (let index = 0; index < storage.length; index += 1) {
-    const key = storage.key(index)
-    if (key !== null) {
-      keys.push(key)
-    }
-  }
-  return keys.sort()
-}
 
 function storedEntry(etag: string | null = '"abc"'): string {
   const snapshot = buildSnapshotDocument()

@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import { App } from './App'
 import type { AppConfig } from './config/env'
 import type { SnapshotDocument } from './snapshot/types'
+import type { FreshCheckDeps } from './state/useFreshCheck'
 import type { SnapshotDeps } from './state/useSnapshot'
 import { buildLatestDocument, buildSnapshotDocument, SCANNED_AT } from './test/factory'
 
@@ -52,6 +53,20 @@ const DOCUMENT = buildSnapshotDocument({
 const DEPS: SnapshotDeps = {
   loadFixture: () => Promise.resolve({ snapshot: DOCUMENT, latest: buildLatestDocument(DOCUMENT) }),
   storage: null,
+}
+
+const API_DEPS: SnapshotDeps = {
+  storage: null,
+  fetchImpl: (input, init) => {
+    const request = new Request(input, init)
+    const body = request.url.endsWith('/api/latest') ? buildLatestDocument(DOCUMENT) : DOCUMENT
+    return Promise.resolve(
+      new Response(JSON.stringify(body), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    )
+  },
 }
 
 /**
@@ -315,5 +330,60 @@ describe('App trust', () => {
       'href',
       './',
     )
+  })
+})
+
+describe('App fresh-check completion', () => {
+  it('announces one result while updating the table and suggestion', async () => {
+    const config: AppConfig = { apiBaseUrl: 'https://read.example', fixtureId: 'preview' }
+    let checkedNames: readonly string[] = []
+    const verifyDeps: FreshCheckDeps = {
+      requestCheck: (options) => {
+        checkedNames = options.names
+        return Promise.resolve({
+          checkedAt: NOW,
+          expiresAt: new Date(NOW.getTime() + 60 * 1000),
+          names: options.names,
+          results: options.names.map((name) => ({
+            name,
+            label: name.slice(0, -4),
+            status: 'registered',
+            expiry: new Date(NOW.getTime() + 24 * 60 * 60 * 1000),
+            graceEnds: null,
+            premiumEnds: null,
+          })),
+        })
+      },
+    }
+    window.history.replaceState(null, '', `/?now=${NOW.toISOString().slice(0, 19)}Z`)
+    render(<App config={config} deps={API_DEPS} verifyDeps={verifyDeps} />)
+    await screen.findByRole('table')
+    const user = userEvent.setup()
+
+    await user.click(screen.getByRole('button', { name: 'Suggest names' }))
+    const panel = screen.getByRole('region', { name: 'Find a name you would actually use' })
+    const suggestionCheckbox = within(panel).getAllByRole('checkbox')[0]
+    expect(suggestionCheckbox).toBeDefined()
+    await user.click(suggestionCheckbox as HTMLElement)
+    await user.click(within(panel).getByRole('button', { name: 'Check the ticked names now' }))
+
+    const checkedName = checkedNames[0]
+    if (checkedName === undefined) {
+      throw new Error('the suggestion check sent no name')
+    }
+    const message = `Fresh check completed. ${checkedName} returned Registered. Its ENS link is now actionable.`
+    const completion = await screen.findByText(message)
+    expect(completion).toHaveAttribute('aria-live', 'polite')
+
+    const namePattern = new RegExp(`^${checkedName.replace('.', '\\.')}`)
+    expect(within(resultsRegion()).getByRole('link', { name: namePattern })).toBeVisible()
+    expect(within(panel).getByRole('link', { name: namePattern })).toBeVisible()
+    expect(within(resultsRegion()).getByText('Registered')).toBeVisible()
+    expect(within(panel).getByText('Registered')).toBeVisible()
+
+    const matchingRegions = [...document.querySelectorAll('[aria-live="polite"]')].filter(
+      (region) => region.textContent === message,
+    )
+    expect(matchingRegions).toEqual([completion])
   })
 })

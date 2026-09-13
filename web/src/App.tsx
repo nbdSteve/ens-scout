@@ -9,6 +9,7 @@ import { SimulatedClockNotice } from './components/SimulatedClockNotice'
 import { SnapshotDetails } from './components/SnapshotDetails'
 import { StaleWarning } from './components/StaleWarning'
 import { StoredCopyNotice } from './components/StoredCopyNotice'
+import { SuggestPanel } from './components/SuggestPanel'
 import { Toolbar } from './components/Toolbar'
 import { TrustLine } from './components/TrustLine'
 import { VerifyBar } from './components/VerifyBar'
@@ -17,6 +18,7 @@ import { ViewTabs } from './components/ViewTabs'
 import { appConfig, type AppConfig } from './config/env'
 import { Optics } from './optics/Optics'
 import type { Status } from './snapshot/contract'
+import type { SnapshotResult } from './snapshot/types'
 import { deriveAttribution } from './snapshot/attribution'
 import { applyQuery, countByStatus, filterResults } from './state/filter'
 import { CLEAR_FILTERS, isFiltered } from './state/query'
@@ -24,6 +26,7 @@ import { useFreshCheck, type FreshCheckDeps } from './state/useFreshCheck'
 import { useLengthDrafts } from './state/useLengthDrafts'
 import { useNow } from './state/useNow'
 import { useSnapshot, type SnapshotDeps } from './state/useSnapshot'
+import { useSuggest, type SuggestDeps } from './state/useSuggest'
 import { useUrlState } from './state/useUrlState'
 import { VIEWS, viewOrDefault } from './state/views'
 
@@ -55,13 +58,17 @@ export interface AppProps {
   readonly config?: AppConfig
   readonly deps?: SnapshotDeps
   readonly verifyDeps?: FreshCheckDeps
+  readonly suggestDeps?: SuggestDeps
 }
 
-export function App({ config = appConfig, deps, verifyDeps }: AppProps): ReactNode {
+/** One array, so the shortlist's dependency identity does not change every render. */
+const NO_RESULTS: readonly SnapshotResult[] = []
+
+export function App({ config = appConfig, deps, verifyDeps, suggestDeps }: AppProps): ReactNode {
   const { query, warnings, setQuery, hrefFor } = useUrlState()
   const now = useNow(query.now)
   const store = useSnapshot(config, deps)
-  const check = useFreshCheck(config, verifyDeps)
+  const check = useFreshCheck(config, now, verifyDeps)
 
   const snapshot = store.snapshot
   const attribution = useMemo(
@@ -134,6 +141,25 @@ export function App({ config = appConfig, deps, verifyDeps }: AppProps): ReactNo
           }
         : null,
     [check.available, check.selected, check.full, check.pending, check.verified, check.toggle],
+  )
+
+  /*
+   * The recommender, and the milestone it waits for.
+   *
+   * `interactive` is exactly the condition the names themselves render under, so nothing
+   * model-related begins until a visitor can already read, filter, and check the snapshot.
+   * That is the promise the whole feature is built around: the optional model is an
+   * addition to a page that works without it, so it must never be on the path to it.
+   *
+   * The shortlist is drawn from `page.matched`, the whole filtered set rather than the
+   * current page, because a visitor filtering to a hundred names is describing what they
+   * want considered - not which fifty of them they happen to be looking at.
+   */
+  const interactive =
+    snapshot !== null && store.origin !== null && attribution !== null && page !== null
+  const suggest = useSuggest(
+    { interactive, results: page?.matched ?? NO_RESULTS },
+    suggestDeps ?? {},
   )
 
   /**
@@ -365,6 +391,26 @@ export function App({ config = appConfig, deps, verifyDeps }: AppProps): ReactNo
                   )}
                 </section>
               </div>
+            </div>
+
+            <p aria-atomic="true" aria-live="polite" className="visually-hidden">
+              {check.announcement}
+            </p>
+
+            {/*
+             * Below the names, deliberately. `the first screen is the answer, not an
+             * introduction` charges anything above the list against a name row, and a
+             * visitor who wants a recommendation scrolls to it; one who wants the list
+             * never has to. It is also why the panel starts nothing until `interactive`.
+             */}
+            <div className="page">
+              <SuggestPanel
+                checking={check.checking}
+                now={now}
+                onCheck={check.check}
+                store={suggest}
+                verify={verify}
+              />
             </div>
 
             <div className="page">

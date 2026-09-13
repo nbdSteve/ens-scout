@@ -1050,9 +1050,116 @@ never the ENS availability authority.
   sit below the current latest on purpose; `web/README.md` records which upstream
   ranges hold them there.
 - Do not delete `web/go.mod`. `Development workflow` above says what it is for.
-- No AWS, deployment, or WebLLM code belongs in `web/`. Fresh checks now do, but only
-  as a client: `web/` asks `POST /api/check` and reads the answer, and it holds no
-  Graph endpoint, no credential, and no lifecycle arithmetic of its own.
+- No AWS or deployment code belongs in `web/`. Fresh checks and the local model now do,
+  but only as clients: `web/` asks `POST /api/check` and reads the answer, and it runs the
+  model inside the browser, and it holds no Graph endpoint, no credential, no hosted model
+  endpoint, and no lifecycle arithmetic of its own.
+
+## Local recommender invariants
+
+`web/src/suggest/` is the shortlist, the two recommenders, and the seam to the optional
+browser model. `web/README.md` documents the pinned model and how its figures were
+measured; these are the rules behind the code.
+
+- The model ranks, and that is all it does. It never invents a candidate,
+  never classifies a lifecycle, never decides a name is registrable, never reaches The
+  Graph, and is never asked about any of them. Explanations are repository-owned templates
+  derived from the deterministic shortlist evidence, so generated prose has no accepted
+  field and no path to the UI. The snapshot publishes the status and `verify/gate.ts`
+  decides whether a name may be acted on, and neither of those grows a second answer here.
+- A name may reach the screen only if it was in the shortlist the prompt was built from.
+  Enforced twice on purpose and neither is redundant: the JSON schema constrains the name
+  field to an enum over exactly that list, which is the library's promise, and
+  `parse.ts` checks membership again by exact string equality against the caller's own
+  shortlist, which is this page's. Membership is never re-derived, re-normalized, or
+  matched loosely, and the set checked against is never read out of the answer.
+- Refuse an answer whole rather than repairing or partly using one. Not JSON, an unexpected
+  field at either level, a repeated name, a control or bidi character, or a name that was
+  not offered - each is a refusal, and a refusal leaves the deterministic answer exactly
+  where it is. A pick carries only its exact name. That closed shape is the trust boundary
+  for qualified `.eth` references and for lifecycle, availability, registration, expiry,
+  price, or sale claims: all generated prose is an unexpected field.
+- Prose around the JSON is a refusal, not something to strip. The engine is asked for one
+  JSON object under a grammar, so a fenced block or a preamble means the constraint was not
+  applied, and a parser that learned to skip commentary would accept a document the pinned
+  configuration cannot produce.
+- The deterministic recommender is a real answer and the only fallback. One scoring
+  function serves both paths, so the two draw from the same candidates in the same order
+  and the difference is only ever the choice and order within the shortlist. It is pure
+  and stable, so the same snapshot, filters, and preference give the same order on
+  every device. There is no larger model to fall back to and no hidden retry: when a bound
+  is reached, it answers and the page says which of the two produced what is on screen.
+- The shortlist is drawn from the rows the visitor's own filters admit and never from past
+  them. That is also the only control over which statuses may be suggested, deliberately:
+  a visitor who wants available names sets that filter, rather than this package holding a
+  rule about it.
+- Nothing model-related starts before the core page is interactive, and then it still waits
+  out `START_GRACE_MS`. The grace is not a performance tweak: it is the window in which the
+  download size is on screen with the pause and disable controls reachable and nothing yet
+  in flight, which is what makes a 212 MB download refusable before it begins. A visitor's
+  own attempt skips it, because somebody who pressed the button has already decided.
+- Every failure is a state on the panel and never an application error, and the states are
+  separate because the honest sentences differ. Unsupported, unsupported-feature,
+  probe-failed, offline, blocked, memory, load-timeout, load-failed, generate-timeout,
+  generate-refused, and generate-failed are eleven fixed literals in `failure.ts`, chosen
+  by kind through total maps rather than a switch with a default, so a kind added anywhere
+  is a type error rather than the vaguest sentence. In every one of them, asking for names
+  still produces names.
+- No text from a thrown error, and no text from the library, reaches a screen. The library's
+  messages and its progress line quote asset URLs, adapter strings, and buffer sizes, and
+  the host in them is the one thing this page otherwise never names. The progress fraction
+  is a number, so that is what is shown, as a percentage.
+- Pausing and disabling are two promises and are labelled as two. Pausing is this page;
+  disabling is remembered on this device under a versioned key that `optOut.ts` sweeps, for
+  the same reason the snapshot cache key is versioned. Re-enabling undoes the memory and
+  does not itself start a load.
+- Cancellation releases what the library permits and no document may claim more. The engine
+  is unloaded and holds no graphics memory, and a load that resolves after being abandoned
+  is disposed of by the handler attached to that promise - not by the caller, which has by
+  then been rejected and cannot see what arrived. The fetches already in flight are the
+  library's and it exposes no way to stop them.
+- A bound that is no longer being waited on must not report anything. `withBound` settles on
+  an abort from anywhere, with that abort's own reason, because the boundary may leave a
+  cancelled load pending forever: left counting down, the load ceiling fires minutes later
+  and reports a timeout over the cancellation the visitor chose, replacing a benign state
+  with a failure banner about work they had already ended.
+- `src/suggest/engine/load.ts` holds the only dynamic import of `@mlc-ai/web-llm`, and
+  `webllm.ts` is the only file that imports it. A static import anywhere on the path from
+  `main.tsx` would put six megabytes and three asset hosts into the bundle the first screen
+  waits for, however lazily the feature behaved at run time. `tests/browser/assets.spec.ts`
+  asserts both halves: the model hosts appear in that chunk and in no other built file, and
+  the entry chunk stays bounded.
+- The model list is one explicit pinned record, not `prebuiltAppConfig`. A one-record config
+  means the library cannot be asked for another model, so "assets download only through the
+  pinned configuration" is a fact about the source rather than a claim about intent, and
+  nothing a visitor types or chooses can name a URL. `contract.drift.test.ts` compares the
+  record field by field against the installed library's own catalogue, so a bump that moves
+  the weights, the shader library, the memory requirement, or the required features fails
+  the gate rather than a visitor's device.
+- No test may download a real model or contact a model host, and this is enforced rather than intended.
+  `contract.drift.test.ts` deliberately imports the installed WebLLM package and the real adapter module to compare the pinned record with the installed catalogue.
+  It creates no engine and downloads nothing.
+  The state-machine unit tests inject an `EngineModule`, and component tests render a `SuggestStore`, so neither crosses the dynamic import.
+- `tests/browser/suggest.spec.ts` and `tests/browser/suggestVerify.spec.ts` replace the built model chunk with the fake module in `tests/browser/suggestModel.ts`.
+  There is deliberately no test-only seam in `src/`, because a hook would be a name in the shipped bundle.
+  The remaining app-rendering browser suites use the unmodified production bundle and may fetch and evaluate the installed WebLLM chunk after the grace period when `navigator.gpu` is present.
+  `tests/browser/assets.spec.ts` reads the built files without launching a browser or evaluating the runtime.
+- `tests/browser/support.ts` refuses every model asset origin on every browser context.
+  That guard is load-bearing rather than belt-and-braces.
+  `navigator.gpu` is present in headless Chromium on a secure origin, which `127.0.0.1` is, so an ordinary browser test can pass the cheap gate and evaluate the real model chunk once the grace elapses.
+  Whether the runtime then tries to download weights depends on whether the machine has an adapter with `shader-f16`, which a CI container may lack and a developer's laptop may have.
+  Removing the guard makes the suite contact a model host on some machines and not others.
+  It is also why a browser test drives an unsupported device through the probe's verdict rather than by removing `navigator.gpu`, which no launch flag does.
+- A suggestion is gated exactly like a scanned row and there is no shortcut. `SuggestionItem`
+  derives its row through the same `rowVerification` the table uses, so one fresh check
+  covering the name and still current is the only thing that opens an outbound link. If
+  anything a suggested name is less verified than a scanned one, since it was chosen for how
+  it reads rather than for what the index said.
+- Bound everything and put the bounds in `contract.ts`: theme length, shortlist size,
+  suggestion count, repository-owned explanation length, generated tokens, initialization
+  attempts, and every wait. Each is a ceiling on work a device does or a wait a visitor
+  sits through, and each ends with the deterministic recommender answering rather than
+  with a retry.
 
 ## ENS lifecycle rules
 

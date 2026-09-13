@@ -2421,7 +2421,7 @@ strong {
   border-block-start: 1px solid var(--hairline);
 }
 
-.results__fresh-label {
+.fresh-check__label {
   color: var(--ink-faint);
   font-size: var(--step--2);
   letter-spacing: var(--track-wide);
@@ -2432,7 +2432,7 @@ strong {
    uppercased or tracked out with the label around it, or a timestamp read as a
    spaced-out serial number. `.mono` already resets the tracking; this drops the
    transform, which is inherited and which `.mono` has no business knowing about. */
-.results__fresh-label time {
+.fresh-check__label time {
   text-transform: none;
 }
 
@@ -2614,4 +2614,353 @@ strong {
   to {
     rotate: 360deg;
   }
+}
+
+/* ----------------------------------------------------------------- suggest -- */
+
+/*
+ * The recommender, below the names.
+ *
+ * A `.card` first, so it takes the hairline and the vertical rhythm every other
+ * section below the list has, and then a two-column split at desktop width. The
+ * asymmetry is the point: the chooser is a narrow rail of controls and the answer is
+ * the wide column beside it, so the names it puts forward are the largest thing in
+ * the block rather than one of two equal halves. Below that width it is one column in
+ * source order, which is already the order it should be read in.
+ *
+ * The rows are placed explicitly rather than left to auto-flow. The rail holds two
+ * children and the answer has to sit beside both of them, and auto-placement cannot
+ * express that without an extra wrapper element whose only job is to be placed.
+ */
+.suggest {
+  align-items: start;
+}
+
+@media (min-width: 64rem) {
+  .suggest {
+    grid-template-columns: minmax(0, 20rem) minmax(0, 1fr);
+    column-gap: clamp(2rem, 5vw, 4rem);
+  }
+
+  .suggest__head {
+    grid-column: 1 / -1;
+    grid-row: 1;
+  }
+
+  .suggest__form {
+    grid-column: 1;
+    grid-row: 2;
+  }
+
+  .suggest__model {
+    grid-column: 1;
+    grid-row: 3;
+  }
+
+  .suggest__answer {
+    grid-column: 2;
+    grid-row: 2 / span 2;
+  }
+}
+
+.suggest__form {
+  display: grid;
+  gap: var(--space-3);
+  align-content: start;
+}
+
+.suggest__vibes {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/*
+ * One direction to ask for, as a real radio inside its own label.
+ *
+ * The input keeps a visible box for the reason the status chips give: a hidden input
+ * is still focusable, so the ring would be drawn on a target nobody can see. Aligned
+ * to the start rather than to a baseline, because a replaced element with no text
+ * resolves its baseline to its bottom edge, which drops the dot below the label
+ * beside it - the same trap `.results__pick` describes.
+ */
+.suggest__option {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  column-gap: 0.6rem;
+  align-items: start;
+  padding: 0.6rem 0.85rem 0.65rem 0.7rem;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-2);
+  cursor: pointer;
+  transition:
+    background-color var(--quick) var(--ease),
+    border-color var(--quick) var(--ease);
+}
+
+.suggest__option:hover {
+  border-color: var(--ink-faint);
+  background: var(--canvas-tint);
+}
+
+.suggest__option:has(input:checked) {
+  border-color: var(--accent);
+  background: var(--accent-wash);
+}
+
+/*
+ * The dot is a gradient, not an image, and that is the one way this differs from the
+ * tick box: a gradient reads `--accent` from the custom property, so there is no
+ * second literal copy of the colour to keep in step. The contrast argument is the
+ * same one the tick makes - the accent against paper is far past the 3:1 a non-text
+ * graphic needs - and axe cannot see either of them.
+ */
+.suggest__option input {
+  appearance: none;
+  grid-row: 1;
+  width: 1.05rem;
+  height: 1.05rem;
+  /* On the label's optical middle at this size, rather than on its cap line. */
+  margin: 0.2rem 0 0;
+  border: 1.5px solid var(--hairline-strong);
+  border-radius: 50%;
+  background: var(--surface);
+  cursor: pointer;
+  transition:
+    background-color var(--quick) var(--ease),
+    border-color var(--quick) var(--ease);
+}
+
+.suggest__option input:checked {
+  border-color: var(--accent);
+  background-image: radial-gradient(circle at center, var(--accent) 0 42%, transparent 44%);
+}
+
+.suggest__option-label {
+  grid-column: 2;
+  font-weight: 600;
+}
+
+.suggest__option-note {
+  grid-column: 2;
+  color: var(--ink-muted);
+  font-size: var(--step--1);
+}
+
+/* The typed theme belongs to the option above it, so it is indented to that option's
+   text rather than sitting level with the chips. */
+.suggest__vibe--own {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.suggest__theme {
+  display: block;
+  padding-inline-start: 1.05rem;
+}
+
+/*
+ * The panel's own polite region, mounted with the panel and empty on the ordinary
+ * screen. `:not(:empty)` carries the spacing for the reason the page's `.advisories`
+ * block gives: a padded empty box is a gap with nothing in it. It is a region of its
+ * own rather than that one reused, because the two are announced independently and a
+ * shared class would make either one's spacing the other's problem.
+ */
+.suggest__advisories {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.suggest__advisories:not(:empty) {
+  padding-block-end: var(--space-1);
+}
+
+/* The one advisory this block can raise, worded from the field. Coloured rather than
+   banner-framed: it is one line about one box, and a banner here would outweigh the
+   controls it is about. */
+.suggest__advisory {
+  color: var(--warn);
+  font-size: var(--step--1);
+}
+
+.suggest__submit {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: center;
+}
+
+.suggest__model {
+  display: grid;
+  gap: var(--space-2);
+  justify-items: start;
+  align-content: start;
+}
+
+.suggest__size,
+.suggest__slow {
+  color: var(--ink-muted);
+  font-size: var(--step--1);
+  max-width: var(--measure);
+}
+
+.suggest__progress-row {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  width: 100%;
+}
+
+/*
+ * A native progress bar, given a colour and a height and nothing else. Restyling it
+ * properly means one vendor pseudo-element per engine, and every one of them is a
+ * place the value and the track can disagree; `accent-color` is honoured by all
+ * three and cannot.
+ */
+.suggest__progress {
+  flex: 1 1 8rem;
+  min-width: 0;
+  height: 0.4rem;
+  accent-color: var(--accent);
+}
+
+.suggest__progress-figure {
+  flex: none;
+  min-width: 3ch;
+  color: var(--ink-muted);
+  font-size: var(--step--1);
+  font-variant-numeric: tabular-nums;
+}
+
+.suggest__controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.suggest__answer {
+  display: grid;
+  gap: var(--space-3);
+  align-content: start;
+}
+
+.suggest__answer-title {
+  font-size: var(--step-1);
+  font-weight: 600;
+}
+
+.suggest__source,
+.suggest__empty,
+.suggest__note {
+  color: var(--ink-muted);
+  font-size: var(--step--1);
+  max-width: var(--measure);
+}
+
+.suggest__list {
+  display: grid;
+  gap: var(--space-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.suggest__actions {
+  display: grid;
+  gap: var(--space-2);
+  justify-items: start;
+}
+
+/*
+ * One suggestion: a hanging tick box, the name, and the reason under it.
+ *
+ * Deliberately a list and not a grid of cells. A grid of equal boxes would present
+ * five names as five products to choose between, and these are a reading of a list -
+ * so they are stacked, in order, with the first one first.
+ *
+ * There is no column gap. The tick box is a 44px hit target with a 17px box at its
+ * start edge, so it already carries the gutter to the name, exactly as it does in the
+ * table.
+ */
+.suggestion {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  row-gap: 0.15rem;
+  padding-block-end: var(--space-3);
+  border-block-end: 1px solid var(--hairline);
+}
+
+.suggestion:last-child {
+  padding-block-end: 0;
+  border-block-end: 0;
+}
+
+.suggestion__pick {
+  grid-column: 1;
+  grid-row: 1;
+  align-self: start;
+}
+
+/*
+ * A grid of its own, so the name and its check note are centred as a pair against the
+ * 44px tick box beside them. Two rows or one, the pair's middle is the box's middle,
+ * which is what keeps the box aligned in the verified case where the note is absent.
+ *
+ * `justify-items: start` is load-bearing rather than tidy: a grid container blockifies
+ * an inline-flex child, so the name link would stretch the full column and take its
+ * drawn underline - which is inset to the element's own box - with it.
+ */
+.suggestion__name {
+  display: grid;
+  grid-column: 2;
+  grid-row: 1;
+  align-content: center;
+  justify-items: start;
+  row-gap: 0.15rem;
+  min-height: 2.75rem;
+  font-size: var(--step-1);
+  font-weight: 600;
+  letter-spacing: var(--track-snug);
+}
+
+/* The text face, for the reason `.results__name .mono` gives: monospace is kept for
+   machine timestamps, where digits have to line up. The size matches the link's
+   exactly, so checking a name does not reflow the row it is in. */
+.suggestion__name .mono {
+  font-family: var(--font-sans);
+  font-size: inherit;
+  letter-spacing: inherit;
+}
+
+/* The faintest thing in the row, for the reason `.results__verify` is: it usually
+   reads `No fresh check`, which is the resting state of every suggestion and must not
+   look like a warning on each one. */
+.suggestion__verify {
+  /*
+   * Its own line, always. Left inline it would be merged into the same anonymous grid
+   * item as the name whenever the name is plain text rather than a link, so the
+   * verified and unverified rows would be laid out differently.
+   */
+  display: block;
+  color: var(--ink-faint);
+  font-size: var(--step--2);
+  font-weight: 400;
+  letter-spacing: var(--track-wide);
+  text-transform: uppercase;
+}
+
+.suggestion__fresh {
+  display: grid;
+  grid-column: 2;
+  gap: 0.1rem;
+  justify-items: start;
+  margin-block-start: var(--space-1);
+}
+
+.suggestion__reason {
+  grid-column: 2;
+  color: var(--ink-muted);
+  max-width: var(--measure);
 }

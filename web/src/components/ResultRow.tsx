@@ -1,13 +1,13 @@
 import type { ReactNode } from 'react'
-import { splitAbsolute, toIsoSecond } from '../format/time'
 import type { Status } from '../snapshot/contract'
 import { nextBoundary } from '../snapshot/lifecycle'
 import type { SnapshotResult } from '../snapshot/types'
 import { labelLength } from '../state/filter'
 import { Countdown } from './Countdown'
 import { EnsAppLink } from './EnsAppLink'
+import { FreshCheckEvidence } from './FreshCheckEvidence'
 import { StatusPill } from './StatusPill'
-import { rowVerification, rowVerifyNote, type VerifyBinding } from './verification'
+import { rowVerifiedName, rowVerification, rowVerifyNote, type VerifyBinding } from './verification'
 
 /**
  * One name.
@@ -50,18 +50,7 @@ export function ResultRow({ result, now, verify }: ResultRowProps): ReactNode {
   const length = labelLength(result)
   const row = verify === null ? null : rowVerification(result.name, verify, now)
   const note = row === null ? null : rowVerifyNote(row)
-  /*
-   * The last fresh answer, whether or not it still opens the link. A lapsed check is
-   * still the newest thing anyone read, and its label carries the instant, so showing it
-   * states a fact rather than implying a currency it has lost. The name cell says it has
-   * lapsed, and the link is gone either way.
-   */
-  const fresh = row?.verdict.allowed === true ? row.verdict.verified : null
-  const lapsed =
-    row !== null && !row.verdict.allowed && row.verdict.reason === 'expired'
-      ? row.verdict.verified
-      : null
-  const checked = fresh ?? lapsed
+  const checked = row === null ? null : rowVerifiedName(row)
 
   return (
     <tr className="results__row">
@@ -111,17 +100,7 @@ export function ResultRow({ result, now, verify }: ResultRowProps): ReactNode {
       </th>
       <td className="results__status">
         <StatusPill status={result.status} />
-        {checked !== null && (
-          <span className="results__fresh">
-            <span className="results__fresh-label">
-              Fresh check{' '}
-              <time className="mono" dateTime={toIsoSecond(checked.checkedAt)}>
-                {splitAbsolute(checked.checkedAt).clock}
-              </time>
-            </span>
-            <StatusPill status={checked.result.status} />
-          </span>
-        )}
+        {checked !== null && <FreshCheckEvidence checked={checked} className="results__fresh" />}
       </td>
       <td className="results__next">
         {boundary === null ? (

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { SnapshotResult } from '../snapshot/types'
 import type { VerifiedName } from '../verify/types'
-import { rowVerification, rowVerifyNote, type VerifyBinding } from './verification'
+import { rowVerifiedName, rowVerification, rowVerifyNote, type VerifyBinding } from './verification'
 
 /**
  * The per-row derivation, on its own.
@@ -125,5 +125,18 @@ describe('rowVerifyNote', () => {
 
   it.each(cases)('%s', (_name, bound, now, expected) => {
     expect(rowVerifyNote(rowVerification('aaaa.eth', bound, now))).toBe(expected)
+  })
+})
+
+describe('rowVerifiedName', () => {
+  it('returns the latest result for both current and lapsed checks', () => {
+    const bound = binding({ verified: new Map([['aaaa.eth', entry]]) })
+
+    expect(rowVerifiedName(rowVerification('aaaa.eth', bound, CHECKED_AT))).toBe(entry)
+    expect(rowVerifiedName(rowVerification('aaaa.eth', bound, EXPIRES_AT))).toBe(entry)
+  })
+
+  it('returns nothing when no check covered the name', () => {
+    expect(rowVerifiedName(rowVerification('aaaa.eth', binding(), CHECKED_AT))).toBeNull()
   })
 })

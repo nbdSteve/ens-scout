@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { openMore, searchOf, since, visit } from './support'
+import { matchCount, openMore, searchOf, since, visit } from './support'
 
 /**
  * The address bar as the state, exercised through real navigation.
@@ -54,7 +54,7 @@ test('the search reaches the address bar and survives a reload', async ({ page }
   // A substring, not a prefix: `x` is in the middle of `flux` and the end of `vex`,
   // so a search that only matched the start of a label would return nothing here.
   await page.getByRole('searchbox', { name: 'Search names' }).fill('x')
-  await expect(page.getByRole('status')).toContainText('2 names match')
+  await expect(matchCount(page)).toContainText('2 names match')
   await expect.poll(() => searchOf(page)).toContain('q=x')
 
   const found = await namesOn(page)
@@ -190,7 +190,7 @@ test('the report goes when React empties the box itself, with no event to read',
   await visit(page, { view: 'all', min: '5' })
   const box = page.getByRole('spinbutton', { name: 'Shortest label length' })
   const advisory = page.getByRole('region', { name: 'Not applied' })
-  const count = page.getByRole('status').first()
+  const count = matchCount(page)
 
   await expect(box).toHaveValue('5')
   // Three of the fixture's ten labels are five characters or longer.

@@ -7,10 +7,21 @@
  * such a label in the wrong length bucket, so length is always counted in code
  * points.
  */
+/**
+ * A string as its code points.
+ *
+ * The one place this decomposition is written, so the reason for it is stated once.
+ * `Array.from` iterates by code point, which is what keeps an astral character a single
+ * value; spreading a string does the same thing but is what the lint rule against
+ * mishandled strings flags, and it is flagged for a real reason - it is the habit that
+ * silently reaches `split('')` next, and that one is wrong.
+ */
+export function codePoints(text: string): readonly string[] {
+  return Array.from(text)
+}
+
 export function codePointLength(text: string): number {
-  // `Array.from` iterates a string by code point, which is the whole reason for
-  // not reading `String.prototype.length`.
-  return Array.from(text).length
+  return codePoints(text).length
 }
 
 /**

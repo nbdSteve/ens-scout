@@ -1,5 +1,5 @@
 import { expect, test, type Locator } from '@playwright/test'
-import { openDetails, openMore, scrollsSideways, visit } from './support'
+import { matchCount, openDetails, openMore, scrollsSideways, visit } from './support'
 
 /**
  * Responsive layout, checked at each configured viewport.
@@ -192,7 +192,7 @@ test('the first screen is the answer, not an introduction', async ({ page }, tes
     // No header in this list any more. The corner it used to occupy is empty, and
     // `constellation.spec.ts` is what holds it that way.
     ['the title', page.getByRole('heading', { level: 1 })],
-    ['the count', page.getByRole('status')],
+    ['the count', matchCount(page)],
     ['the trust line', page.getByText(/Recorded statuses, not a live check/)],
     ['the views', page.getByRole('navigation', { name: 'Views' })],
     ['the search box', page.getByRole('searchbox', { name: 'Search names' })],

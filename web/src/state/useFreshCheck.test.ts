@@ -19,6 +19,7 @@ const API_CONFIG: AppConfig = { apiBaseUrl: 'https://read.example', fixtureId: '
 
 const CHECKED_AT = '2026-03-01T12:00:00Z'
 const EXPIRES_AT = '2026-03-01T12:01:00Z'
+const NOW = new Date('2026-03-01T12:00:30Z')
 
 function verification(
   names: readonly string[],
@@ -81,8 +82,11 @@ function deferred(): Deferred {
   return { promise, settle, fail }
 }
 
-function render(config: AppConfig, requestCheck: Verifier['impl']) {
-  return renderHook(() => useFreshCheck(config, { requestCheck }))
+function render(config: AppConfig, requestCheck: Verifier['impl'], now = NOW) {
+  return renderHook(
+    ({ currentNow }: { currentNow: Date }) => useFreshCheck(config, currentNow, { requestCheck }),
+    { initialProps: { currentNow: now } },
+  )
 }
 
 describe('useFreshCheck selection', () => {
@@ -184,6 +188,61 @@ describe('useFreshCheck verification', () => {
     expect(entry?.result.status).toBe('available')
     expect(fake.calls[0]?.names).toEqual(['aaa.eth'])
     expect(fake.calls[0]?.baseUrl).toBe('https://read.example')
+  })
+
+  it('announces a current result as actionable through the outbound gate', async () => {
+    const fake = answering()
+    const { result } = render(API_CONFIG, fake.impl)
+
+    act(() => {
+      result.current.toggle('aaa.eth')
+    })
+    act(() => {
+      result.current.check()
+    })
+    await waitFor(() => {
+      expect(result.current.announcement).toBe(
+        'Fresh check completed. aaa.eth returned Available. Its ENS link is now actionable.',
+      )
+    })
+  })
+
+  it('announces an already-expired result without offering an actionable link', async () => {
+    const fake = answering()
+    const { result } = render(API_CONFIG, fake.impl, new Date(EXPIRES_AT))
+
+    act(() => {
+      result.current.toggle('aaa.eth')
+    })
+    act(() => {
+      result.current.check()
+    })
+    await waitFor(() => {
+      expect(result.current.announcement).toBe(
+        'Fresh check completed. aaa.eth returned Available. The fresh check has expired, so its ENS link is not actionable.',
+      )
+    })
+  })
+
+  it('updates the announcement when the completed check expires', async () => {
+    const fake = answering()
+    const { result, rerender } = render(API_CONFIG, fake.impl)
+
+    act(() => {
+      result.current.toggle('aaa.eth')
+    })
+    act(() => {
+      result.current.check()
+    })
+    await waitFor(() => {
+      expect(result.current.announcement).toContain('Its ENS link is now actionable.')
+    })
+
+    rerender({ currentNow: new Date(EXPIRES_AT) })
+
+    expect(result.current.announcement).toBe(
+      'Fresh check completed. aaa.eth returned Available. The fresh check has expired, so its ENS link is not actionable.',
+    )
   })
 
   it('reports which names a check in flight covers', async () => {

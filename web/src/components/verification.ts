@@ -1,5 +1,5 @@
 import { resolveOutbound, type OutboundVerdict } from '../verify/gate'
-import type { VerifiedNames } from '../verify/types'
+import type { VerifiedName, VerifiedNames } from '../verify/types'
 
 /**
  * What the results table needs to know about fresh checks.
@@ -40,8 +40,8 @@ export function rowVerification(name: string, binding: VerifyBinding, now: Date)
  * What the row says about its own fresh check, or null when there is nothing to add.
  *
  * Fixed literals, because the only thing here that varies is a state this page decided
- * for itself. The instant of a check that did land is stated in the status cell instead,
- * beside the status it produced, where the two belong together.
+ * for itself. The instant of a check that did land is stated in the row's fresh evidence
+ * instead, beside the status it produced, where the two belong together.
  *
  * The verified case says nothing: the link being there, and the fresh status beside it,
  * are the whole message, and a third line repeating it would cost a row on the first
@@ -55,4 +55,11 @@ export function rowVerifyNote(row: RowVerification): string | null {
     return null
   }
   return row.verdict.reason === 'expired' ? 'Fresh check has lapsed' : 'No fresh check'
+}
+
+export function rowVerifiedName(row: RowVerification): VerifiedName | null {
+  if (row.verdict.allowed) {
+    return row.verdict.verified
+  }
+  return row.verdict.reason === 'expired' ? row.verdict.verified : null
 }
