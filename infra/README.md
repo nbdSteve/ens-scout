@@ -11,7 +11,7 @@ The public read API and the frontend distribution are later phases of
 The two deployment roles are absent from the stack too, and for a different reason:
 they are what deploys it, so a stack that defined them would have to be deployed by
 something else first.
-They live in `iam/` as the documents applied to the account, and
+They live in `iam/` as templates of the documents applied to the account, and
 [docs/deployment.md](../docs/deployment.md) explains them.
 
 ## Requirements
@@ -32,7 +32,15 @@ npm run lint    # tsc --noEmit
 npm run synth   # write cdk.out/EnsScout-prod.template.json
 npm run diff    # compare the synthesized stack with the deployed one
 npm run check   # lint, test, and synth: the check to run before a commit
+
+npm run render:iam -- --example   # render iam/*.template.json with the example values
 ```
+
+`npm run check` ends with the synth deliberately, so trailing arguments reach `cdk
+synth` and nothing else: `npm run check -- --context ens-scout:account=<account>` is
+how the production workflow builds the artifact it deploys, and a `check` reordered to
+end with the tests would send that context to jest instead.
+A test asserts the order.
 
 `cdk.json` runs `scripts/bundle-scanner.js` before the app on every CDK command, so
 `npm run synth` works from a clean clone with no separate build step and no Docker.
@@ -53,12 +61,19 @@ from whichever profile is logged in.
 
 ## Deployment
 
-Deployment is one manual GitHub Actions run against account `000000000000` in
-`ap-southeast-2`, through a GitHub OIDC role and a protected `production` environment.
-[docs/deployment.md](../docs/deployment.md) is the whole description: the two roles,
-what they may and may not do, the GitHub configuration, and the residual risks.
+Deployment is one manual GitHub Actions run in `ap-southeast-2`, through a GitHub OIDC
+role and a protected `production` environment.
+[docs/deployment.md](../docs/deployment.md) is the whole description: the four
+`production` environment variables, the two roles, what they may and may not do, the
+GitHub configuration, and the residual risks.
 `.github/workflows/deploy-production.yml` is the only workflow that deploys, and no
 command run during development here touches AWS.
+
+The target account is the one deployment value this repository does not commit.
+`cdk.json` carries `lib/config.ts`'s `placeholderAccount`, which is what lets a clean
+clone, every pull-request check, and every test synthesize the stack, and the workflow
+supplies the real account from the `AWS_ACCOUNT_ID` variable as
+`-c ens-scout:account=` on the synth that produces the artifact it deploys.
 
 `npm run diff` and an interactive `cdk deploy` still work for someone holding
 credentials directly, and three things must exist before either.
@@ -70,7 +85,8 @@ credentials directly, and three things must exist before either.
    JSON document with the field named by `ens-scout:graphApiKeySecretField`.
    Create it out of band.
    This stack references the secret and never creates, rotates, or overwrites it.
-3. The two roles in `iam/`, if the deployment goes through the workflow.
+3. The two roles the templates in `iam/` describe, if the deployment goes through the
+   workflow, and the four `production` environment variables that name them.
 
 The stack creates the alarm topic and deliberately adds no subscription to it, so
 subscribing is a deployment step rather than something the template does.
@@ -93,7 +109,7 @@ deployed is recorded in the repository and any of it can be overridden with
 | Key | Purpose |
 | --- | --- |
 | `ens-scout:environmentName` | Stack name suffix and the `Environment` tag |
-| `ens-scout:account` | Target account, exactly twelve digits |
+| `ens-scout:account` | Target account, exactly twelve digits; committed as a placeholder |
 | `ens-scout:region` | Target region |
 | `ens-scout:subgraphId` | ENS subgraph on the Graph gateway |
 | `ens-scout:graphApiKeySecretName` | Secrets Manager secret holding the Graph API key |
@@ -106,6 +122,16 @@ No key holds a credential.
 `resolveConfig` fails on a missing or malformed value instead of substituting one,
 because every key changes what a scheduled scan queries or where it publishes, and
 a silent default would point a real scan at the wrong subgraph or table.
+
+`ens-scout:account` is the one key whose committed value is deliberately not the
+deployed one.
+It is `lib/config.ts`'s `placeholderAccount`, an account nobody owns, and the real
+account arrives as `-c ens-scout:account=` at the synth the production workflow
+deploys.
+The key is present rather than absent so `resolveConfig` still resolves from a clean
+clone and every assertion about the stack's environment stays a real assertion; a
+test pins the committed value, so a commit that put the real account back fails
+rather than only being noticed by a reader.
 
 `ens-scout:logRetentionDays` has to be one of the finite day counts CloudWatch Logs
 accepts.
@@ -185,20 +211,42 @@ is how a dropped `-buildvcs=false` went unnoticed once already.
 `npm test` never compiles the binary.
 
 `test/deployment.test.ts` is the one suite that asserts on things outside CDK.
-The two role documents in `iam/` are configuration in an AWS account, and the two
-workflows are configuration in GitHub, so no template can describe either, and both have
-to agree with `lib/deployment.ts` and with the committed context.
+The four documents in `iam/` are configuration in an AWS account, and the two workflows
+are configuration in GitHub, so no template can describe either, and both have to agree
+with `lib/deployment.ts` and with the committed context.
+It renders the templates through `scripts/render-iam.js` with `iam/example-values.json`
+and asserts the rendered documents, because the committed form carries placeholders
+rather than an account.
 It derives the asset bucket, the bootstrap version parameter, the stack ARN, and the
 secret ARN from those two sources and requires the documents to name exactly them; it
 pins the trust policy's subject, audience, and condition operator; it pins the statements
 that grant anything on `*`; it synthesizes with `deploymentSynthesizer()` and requires
-the stack artifact to name none of the bootstrap roles; and it requires the deploy
-workflow to pass exactly the one role the deployment policy permits passing.
+the stack artifact to name none of the bootstrap roles; and it requires every template to
+hold no twelve-digit run and to name no role but a placeholder or one under the stack's
+own prefix.
 It matches the workflow text after stripping full-line comments, which is the one place
 here that asserts on text: there is no YAML parser in the dependency set, and adding a
 dependency is a decision rather than a convenience.
 Stripping the comments is what keeps that match honest, because a comment naming
 `aws-access-key-id` to say it is absent must not decide the assertion that it is absent.
+
+The same suite asserts what the deploy workflow may not contain and what it must carry.
+It requires that the workflow embeds no account number of its own and no role name or
+role ARN at all, that the four `production` variables it reads are exactly the four its
+first step refuses to run without, that the check comes before both the build and the
+deploy, and that each variable reaches the command that needs it - `AWS_DEPLOY_ROLE_ARN`
+the credential step's `role-to-assume`, `AWS_ACCOUNT_ID` the `allowed-account-ids` guard
+and the synth's `-c ens-scout:account=`, and
+`AWS_CLOUDFORMATION_EXECUTION_ROLE_ARN` the deploy's `--role-arn`.
+A workflow that composed an ARN out of the account and a literal role name would satisfy
+the deployment either way, so the assertion is what keeps the identifiers out of the
+tree rather than a reviewer's attention.
+
+`test/iam-render.test.ts` covers the render script itself: that the example values fill
+every placeholder and no more, that rendering is deterministic and canonical, that a
+value of the wrong shape is refused, that a refusal names the placeholder and never the
+value supplied for it, and that the output directory is gitignored.
+That last set is what makes it safe to render the real documents locally.
 
 ## Layout
 
@@ -209,8 +257,9 @@ lib/deployment.ts             the bootstrap qualifier, the asset bucket, and the
 lib/schedules.ts              the two schedules and the cron expansion used to prove the offset
 lib/ens-scout-stack.ts        the stack
 lib/scanner-bundle.ts         locates the bundle the CDK app packages
-iam/                          the four documents applied to the two deployment roles
+iam/                          templates of the four documents applied to the two deployment roles
 scripts/bundle-scanner.js     reproducible cross-compile of cmd/scan-lambda
+scripts/render-iam.js         the one path from an iam/ template to a document
 test/                         the assertion suite
 test/fixtures/scan-lambda/    fixed-hash stand-in for the compiled scanner
 ```
@@ -225,7 +274,7 @@ An identity permitted to assume the deploy role is therefore an account administ
 another name, and the deploy role's own `iam:PassRole` is restricted to exactly that
 admin-capable role, so a narrower execution role cannot be substituted through the chain.
 `lib/deployment.ts` selects `CliCredentialsStackSynthesizer` to remove the hop, which is
-what makes the two narrow roles in `iam/` reachable at all.
+what makes the two narrow roles `iam/` describes reachable at all.
 The cost is that the bootstrap roles go unused while the bootstrap stack is still
 required, because the qualifier names the asset bucket and the version parameter.
 

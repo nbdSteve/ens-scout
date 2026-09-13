@@ -15,6 +15,13 @@
 #   3. The role passes exactly one CloudFormation execution role, which is scoped
 #      to this stack's own resources.
 #
+# Everything this workflow needs to know about the account is a variable on the
+# protected `production` environment, and the first step below refuses to build
+# anything until all four are present and well formed. Nothing here composes an ARN
+# out of parts, and no step prints a value: the account number and the role names are
+# public facts about a private deployment, and a workflow file and its logs are the
+# two most public places in the repository.
+#
 # `docs/deployment.md` records the permission sets and what they deliberately
 # exclude. No AWS access key is stored in this repository.
 name: deploy production
@@ -42,6 +49,68 @@ jobs:
       # this job alone.
       id-token: write
     steps:
+      # The four values this job needs from the account, checked before it builds or
+      # deploys anything. It is first for two reasons: a value that is absent or
+      # mistyped then costs no checkout, no toolchain, and no synth, and it fails
+      # where the reason is legible rather than part-way through a CDK command or,
+      # worse, inside a deployment that has already started changing the stack.
+      #
+      # Only names are printed, never values. This log is readable by anyone who can
+      # read the repository.
+      #
+      # The two ARNs are supplied whole rather than assembled from an account and a
+      # role name. Composing one here would put a role name back in this file, and it
+      # would also mean a variable could disagree with the ARN this workflow built
+      # from it; a full ARN is checked against the account instead, so the four
+      # variables have to agree with each other before anything runs.
+      - name: require the deployment configuration
+        env:
+          AWS_ACCOUNT_ID: ${{ vars.AWS_ACCOUNT_ID }}
+          AWS_REGION: ${{ vars.AWS_REGION }}
+          AWS_DEPLOY_ROLE_ARN: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          AWS_CLOUDFORMATION_EXECUTION_ROLE_ARN: ${{ vars.AWS_CLOUDFORMATION_EXECUTION_ROLE_ARN }}
+          # infra/lib/config.ts `placeholderAccount`, which infra/cdk.json commits so
+          # a clean clone can synthesize. Deploying with it would be a deployment
+          # aimed at nothing.
+          PLACEHOLDER_ACCOUNT: '000000000000'
+        run: |
+          missing=0
+          for name in AWS_ACCOUNT_ID AWS_REGION AWS_DEPLOY_ROLE_ARN AWS_CLOUDFORMATION_EXECUTION_ROLE_ARN; do
+            if [ -z "${!name}" ]; then
+              echo "::error::variable $name is not set on the production environment"
+              missing=1
+            fi
+          done
+          if [ "$missing" -ne 0 ]; then
+            exit 1
+          fi
+          if [[ ! $AWS_ACCOUNT_ID =~ ^[0-9]{12}$ ]]; then
+            echo "::error::AWS_ACCOUNT_ID is not exactly twelve digits"
+            exit 1
+          fi
+          if [ "$AWS_ACCOUNT_ID" = "$PLACEHOLDER_ACCOUNT" ]; then
+            echo "::error::AWS_ACCOUNT_ID is still the placeholder infra/cdk.json commits"
+            exit 1
+          fi
+          if [[ ! $AWS_REGION =~ ^[a-z]{2}(-[a-z]+)+-[0-9]$ ]]; then
+            echo "::error::AWS_REGION is not shaped like an AWS region"
+            exit 1
+          fi
+          for name in AWS_DEPLOY_ROLE_ARN AWS_CLOUDFORMATION_EXECUTION_ROLE_ARN; do
+            if [[ ! ${!name} =~ ^arn:aws:iam::${AWS_ACCOUNT_ID}:role/[A-Za-z0-9+=,.@_/-]+$ ]]; then
+              echo "::error::$name is not an IAM role ARN in the account AWS_ACCOUNT_ID names"
+              exit 1
+            fi
+          done
+          # One role assumed by GitHub, one role assumed only by CloudFormation. The
+          # separation is the whole point of the pair, so the same ARN in both is a
+          # deployment identity that passes itself.
+          if [ "$AWS_DEPLOY_ROLE_ARN" = "$AWS_CLOUDFORMATION_EXECUTION_ROLE_ARN" ]; then
+            echo "::error::AWS_DEPLOY_ROLE_ARN and AWS_CLOUDFORMATION_EXECUTION_ROLE_ARN name one role"
+            exit 1
+          fi
+          echo "the four production deployment variables are present and consistent"
+
       # The environment's branch policy already refuses another ref, but that policy
       # is configuration outside this repository, and this is the check a reviewer
       # can see. `workflow_dispatch` also cannot be triggered on a pull request ref,
@@ -85,9 +154,18 @@ jobs:
       # just passed. The bundle is reproducible, so a second synth would produce the
       # same bytes - but "would" is not the same as "did", and this is the step that
       # makes it the same artifact rather than an equal one.
+      #
+      # The account is supplied here, and only here, because it is a property of the
+      # artifact rather than of the deploy command: `--app cdk.out` deploys the
+      # assembly this step produced, and the stack environment is baked into it. The
+      # trailing arguments reach `cdk synth`, which `npm run check` ends with, so the
+      # assembly the assertion suite just verified is the one carrying the real
+      # account. Everything else stays in infra/cdk.json.
       - name: build and verify the artifact
         working-directory: infra
-        run: npm run check
+        env:
+          AWS_ACCOUNT_ID: ${{ vars.AWS_ACCOUNT_ID }}
+        run: npm run check -- --context "ens-scout:account=$AWS_ACCOUNT_ID"
 
       - name: record what is about to be deployed
         working-directory: infra
@@ -113,18 +191,22 @@ jobs:
       # `--app cdk.out` deploys the assembly built above and synthesizes nothing new.
       #
       # `--role-arn` is what keeps the deployment identity narrow: CloudFormation
-      # creates and updates the stack's resources as EnsScoutCloudFormationExecutionRole,
-      # so this job's own role needs no permission over DynamoDB, Lambda, IAM, or
+      # creates and updates the stack's resources as the configured execution role, so
+      # this job's own role needs no permission over DynamoDB, Lambda, IAM, or
       # anything else the stack contains. It is also the only role the deployment
-      # role is permitted to pass, and only to CloudFormation.
+      # role is permitted to pass, and only to CloudFormation. That is the tie the
+      # variable has to honour: the deployment role's `iam:PassRole` names one role,
+      # so an ARN naming any other one is denied here rather than widened there.
       #
       # `--require-approval never` answers the CLI's own prompt about IAM changes,
       # which cannot be answered in CI. The human approval is the production
       # environment's, recorded against the deployment.
       - name: deploy
         working-directory: infra
+        env:
+          AWS_CLOUDFORMATION_EXECUTION_ROLE_ARN: ${{ vars.AWS_CLOUDFORMATION_EXECUTION_ROLE_ARN }}
         run: |
           npx cdk deploy EnsScout-prod \
             --app cdk.out \
-            --role-arn arn:aws:iam::000000000000:role/EnsScoutCloudFormationExecutionRole \
+            --role-arn "$AWS_CLOUDFORMATION_EXECUTION_ROLE_ARN" \
             --require-approval never

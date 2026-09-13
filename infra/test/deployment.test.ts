@@ -3,7 +3,7 @@ import * as path from 'path';
 
 import * as cdk from 'aws-cdk-lib';
 
-import { resolveConfig } from '../lib/config';
+import { placeholderAccount, resolveConfig } from '../lib/config';
 import { assetBucketName, bootstrapQualifier, deploymentSynthesizer } from '../lib/deployment';
 import { EnsScoutStack } from '../lib/ens-scout-stack';
 import { asList, fixtureCode, repoRoot } from './helpers';
@@ -11,13 +11,20 @@ import { asList, fixtureCode, repoRoot } from './helpers';
 /**
  * The deployment path is the one part of this repository that is configured in AWS
  * and in GitHub rather than synthesized, so nothing about it can be asserted from a
- * template. These tests assert the two things that can drift silently and would fail
- * only at a deployment: the committed copies of the two role documents against what
- * `lib/deployment.ts` and the committed context actually produce, and the workflow
- * against the one execution role the deployment role is permitted to pass.
+ * template. These tests assert the three things that can drift silently and would fail
+ * only at a deployment: the committed role documents against what `lib/deployment.ts`
+ * and the committed context actually produce, the workflow against the one execution
+ * role the deployment role is permitted to pass, and every value the workflow needs
+ * from the account against the variable it really reads it from.
  *
  * `docs/deployment.md` records what is deployed and why each grant is there.
  */
+
+// The render script is plain CommonJS, so it is required rather than imported, the same
+// way scripts/bundle-scanner.js is. `iam/README.md` describes the arrangement: the
+// applied documents name the account and the execution role, so what is committed is a
+// template and this is the one path to a document.
+const render = require('../scripts/render-iam');
 
 interface Statement {
   readonly Sid?: string;
@@ -35,7 +42,19 @@ const committedContext: Record<string, unknown> = JSON.parse(
 const config = resolveConfig(new cdk.App({ context: committedContext }));
 const stackName = `EnsScout-${config.environmentName}`;
 const assetBucket = assetBucketName(config.account, config.region);
-const executionRoleArn = `arn:aws:iam::${config.account}:role/EnsScoutCloudFormationExecutionRole`;
+
+/**
+ * The substitution every assertion below renders with.
+ *
+ * Its `ACCOUNT_ID` is the account the committed context carries, which is what keeps
+ * these assertions the tie they were: a rendered document is compared against
+ * `config`, so a template that stopped naming the account through its placeholder
+ * would render a document that no longer matches. A test below asserts the two agree,
+ * because if they ever did not, every such comparison would fail for a reason that
+ * looks like a policy change.
+ */
+const exampleValues: Record<string, string> = render.exampleValues();
+const executionRoleArn = `arn:aws:iam::${config.account}:role/${exampleValues.CLOUDFORMATION_EXECUTION_ROLE_NAME}`;
 
 /**
  * The subject the deployment role trusts. It is a literal here on purpose: the point
@@ -45,7 +64,7 @@ const executionRoleArn = `arn:aws:iam::${config.account}:role/EnsScoutCloudForma
 const trustedSubject = 'repo:nbdSteve/ens-scout:environment:production';
 
 function iamDocument(name: string): { Version: string; Statement: Statement[] } {
-  return JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'iam', `${name}.json`), 'utf8'));
+  return JSON.parse(render.renderIamDocument(render.readTemplate(name), exampleValues));
 }
 
 function statements(name: string): Statement[] {
@@ -356,22 +375,10 @@ describe('the production deployment workflow', () => {
     expect(deploy.match(/id-token: write/g)).toHaveLength(1);
   });
 
-  test('passes exactly the role the deployment policy permits it to pass', () => {
-    // A different ARN here is refused by the deployment role's PassRole condition, so
-    // the failure is safe but opaque; this is the assertion that names it.
-    expect(deploy).toContain(`--role-arn ${executionRoleArn}`);
-  });
-
   test('deploys the assembly it verified rather than synthesizing a second one', () => {
     expect(deploy).toContain('npm run check');
     expect(deploy).toContain('--app cdk.out');
     expect(deploy).toContain(`cdk deploy ${stackName}`);
-  });
-
-  test('names the account and the region through repository variables', () => {
-    expect(deploy).toContain('${{ vars.AWS_DEPLOY_ROLE_ARN }}');
-    expect(deploy).toContain('${{ vars.AWS_REGION }}');
-    expect(deploy).toContain('${{ vars.AWS_ACCOUNT_ID }}');
   });
 
   test('holds no long-lived AWS credential', () => {
@@ -380,6 +387,170 @@ describe('the production deployment workflow', () => {
     expect(deploy).not.toContain('aws-access-key-id');
     expect(deploy).not.toContain('aws-secret-access-key');
     expect(deploy).not.toMatch(/secrets\.AWS/);
+  });
+});
+
+describe('the deployment configuration the workflow requires', () => {
+  const deploy = workflow('deploy-production.yml');
+
+  /** The four names, in the order the workflow's own validation loop lists them. */
+  const required = ((): string[] => {
+    const listed = /for name in ([A-Z0-9_ ]+); do/.exec(deploy);
+    if (!listed) {
+      throw new Error('deploy-production.yml validates no variable; the assertions below are stale');
+    }
+    return listed[1].trim().split(/\s+/);
+  })();
+
+  /** usesVariable is a YAML key bound to a repository variable on one line. */
+  function usesVariable(key: string, variable: string): boolean {
+    return new RegExp(`${key}:\\s*\\$\\{\\{\\s*vars\\.${variable}\\s*\\}\\}`).test(deploy);
+  }
+
+  /** stepIndex is where a named step begins, so two can be ordered. */
+  function stepIndex(name: string): number {
+    const found = deploy.indexOf(`- name: ${name}\n`);
+    if (found < 0) {
+      throw new Error(`deploy-production.yml has no step named ${name}; this assertion is stale`);
+    }
+    return found;
+  }
+
+  test('embeds no account number of its own', () => {
+    // The one twelve-digit run this file may hold is the placeholder its own guard
+    // compares against, and that guard is only a guard if it is the same placeholder
+    // lib/config.ts commits. Everything else about the account arrives as a variable.
+    const digitRuns = new Set([...deploy.matchAll(/[0-9]{12,}/g)].map((match) => match[0]));
+    expect([...digitRuns]).toEqual([placeholderAccount]);
+  });
+
+  test('embeds no role ARN and no role name of its own', () => {
+    // A whole ARN, or a CamelCase role name, is the shape the leak took: both roles are
+    // now supplied whole, so the file names IAM only in the pattern its guard matches.
+    expect(deploy).not.toMatch(/arn:aws:iam::[0-9]+:role\//);
+    expect(deploy).not.toMatch(/[A-Za-z][A-Za-z0-9]*Role[A-Za-z0-9]*/);
+  });
+
+  test('requires every variable it reads, and reads every variable it requires', () => {
+    // A fifth variable added without a check would be one the job discovers is missing
+    // at whichever step first needs it, which on the deploy step is mid-deployment.
+    const referenced = new Set(
+      [...deploy.matchAll(/vars\.([A-Z0-9_]+)/g)].map((match) => match[1]),
+    );
+    expect([...referenced].sort()).toEqual([...required].sort());
+    expect([...required].sort()).toEqual([
+      'AWS_ACCOUNT_ID',
+      'AWS_CLOUDFORMATION_EXECUTION_ROLE_ARN',
+      'AWS_DEPLOY_ROLE_ARN',
+      'AWS_REGION',
+    ]);
+  });
+
+  test('checks the configuration before it builds or deploys anything', () => {
+    // Ordering is the point of the step. A value checked after the synth costs a
+    // toolchain and a build; one checked after the deploy step has started costs a
+    // half-applied stack.
+    const validation = stepIndex('require the deployment configuration');
+    expect(validation).toBeLessThan(stepIndex('build and verify the artifact'));
+    expect(validation).toBeLessThan(stepIndex('deploy'));
+  });
+
+  test('refuses the placeholder account rather than deploying at nothing', () => {
+    expect(deploy).toContain(`PLACEHOLDER_ACCOUNT: '${placeholderAccount}'`);
+    expect(deploy).toMatch(/AWS_ACCOUNT_ID" = "\$PLACEHOLDER_ACCOUNT"/);
+  });
+
+  test('assumes the deployment role the deploy-role variable names, in that region', () => {
+    expect(usesVariable('role-to-assume', 'AWS_DEPLOY_ROLE_ARN')).toBe(true);
+    expect(usesVariable('aws-region', 'AWS_REGION')).toBe(true);
+    expect(usesVariable('allowed-account-ids', 'AWS_ACCOUNT_ID')).toBe(true);
+  });
+
+  test('synthesizes the deployed artifact against the account variable', () => {
+    // `--app cdk.out` deploys the assembly, and the stack environment is baked into
+    // it, so the real account has to reach the synth that produced it. This is the
+    // whole reason cdk.json can carry a placeholder at all.
+    expect(usesVariable('AWS_ACCOUNT_ID', 'AWS_ACCOUNT_ID')).toBe(true);
+    expect(deploy).toContain('npm run check -- --context "ens-scout:account=$AWS_ACCOUNT_ID"');
+  });
+
+  test('passes the execution role the execution-role variable names', () => {
+    // A different ARN here is refused by the deployment role's PassRole condition, so
+    // the failure is safe but opaque; this is the assertion that names where it comes
+    // from.
+    expect(
+      usesVariable('AWS_CLOUDFORMATION_EXECUTION_ROLE_ARN', 'AWS_CLOUDFORMATION_EXECUTION_ROLE_ARN'),
+    ).toBe(true);
+    expect(deploy).toContain('--role-arn "$AWS_CLOUDFORMATION_EXECUTION_ROLE_ARN"');
+  });
+
+  test('appends the account context to a script that ends with the synth', () => {
+    // `npm run check -- <args>` appends to the end of the chained script string, so the
+    // arguments reach whatever the chain ends with and nothing else. A check script
+    // reordered to end with the tests would send `--context` to jest, which would
+    // deploy an artifact synthesized against the placeholder.
+    const scripts: Record<string, string> = JSON.parse(
+      fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'),
+    ).scripts;
+    const last = scripts.check.split('&&').pop()!.trim();
+    expect(last.startsWith('npm run synth')).toBe(true);
+    expect(scripts.synth).toBe('cdk synth');
+  });
+});
+
+describe('the committed IAM templates', () => {
+  const names: string[] = render.templateNames();
+
+  test('are the four documents applied to the two deployment roles', () => {
+    expect(names.sort()).toEqual([
+      'cloudformation-execution-role-policy',
+      'cloudformation-execution-role-trust',
+      'github-deploy-role-policy',
+      'github-deploy-role-trust',
+    ]);
+  });
+
+  test('render against the account the committed context names', () => {
+    // Every assertion above compares a rendered document with `config`, so this is the
+    // equality those comparisons rest on. Were it to break, they would all fail at
+    // once and look like a policy change instead of a mismatched example.
+    expect(exampleValues.ACCOUNT_ID).toBe(config.account);
+    expect(config.account).toBe(placeholderAccount);
+  });
+
+  test('carry no account number', () => {
+    for (const name of names) {
+      expect(render.readTemplate(name)).not.toMatch(/[0-9]{12,}/);
+    }
+  });
+
+  test('name the deployment roles through a placeholder, and no other role by literal', () => {
+    // A role a template may name outright is one this stack creates, which
+    // CloudFormation prefixes with the stack name, so it is scoped and reviewable. The
+    // two deployment roles are not among them: they exist before the stack does, and
+    // their names are what this change took out of the repository.
+    for (const name of names) {
+      const roles = [...render.readTemplate(name).matchAll(/:role\/([^"]*)/g)].map(
+        (match: RegExpMatchArray) => match[1],
+      );
+      for (const role of roles) {
+        if (!role.startsWith('${')) {
+          expect(role.startsWith(`${stackName}-`)).toBe(true);
+        }
+      }
+    }
+  });
+
+  test('use only placeholders the render script knows how to fill', () => {
+    // A placeholder nothing substitutes would be applied literally, and an
+    // unsubstituted `${ACCOUNT_ID}` in a Resource is an ARN that matches nothing: every
+    // call denied, at the deployment rather than here.
+    const known = Object.keys(render.placeholderRules);
+    for (const name of names) {
+      for (const placeholder of render.placeholdersIn(render.readTemplate(name))) {
+        expect(known).toContain(placeholder);
+      }
+    }
   });
 });
 

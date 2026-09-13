@@ -3,7 +3,7 @@ import * as path from 'path';
 
 import * as cdk from 'aws-cdk-lib';
 
-import { contextKeys, resolveConfig } from '../lib/config';
+import { contextKeys, placeholderAccount, resolveConfig } from '../lib/config';
 import { goSource, goStringConstants, requireConstant } from './helpers';
 
 /** The context committed in cdk.json, which is what an unqualified `cdk` command uses. */
@@ -22,9 +22,14 @@ describe('the committed context', () => {
     expect(() => resolveConfig(scopeWith())).not.toThrow();
   });
 
-  test('names the production account and region the task fixed', () => {
+  test('names the production region, and a placeholder account', () => {
+    // The region is committed. The account is not: it is a public fact about a private
+    // deployment, so cdk.json carries `placeholderAccount` and the production workflow
+    // supplies the real value to the synth that produces the artifact it deploys.
+    // Asserting the placeholder here is what keeps the real one out: a commit that put
+    // it back fails this test rather than only being noticed by a reader.
     const config = resolveConfig(scopeWith());
-    expect(config.account).toBe('000000000000');
+    expect(config.account).toBe(placeholderAccount);
     expect(config.region).toBe('ap-southeast-2');
   });
 
@@ -95,7 +100,7 @@ describe('resolveConfig', () => {
   test('requires an account of exactly twelve digits', () => {
     // A truncated or mistyped account number synthesizes an asset bucket and a set
     // of ARNs for an account that does not exist, and the failure appears at deploy.
-    for (const account of ['28986676305', '0000000000008', '28986676305a', 'default']) {
+    for (const account of ['00000000000', '0000000000000', '00000000000a', 'default']) {
       expect(() => resolveConfig(scopeWith({ [contextKeys.account]: account }))).toThrow(
         contextKeys.account,
       );

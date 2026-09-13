@@ -9,6 +9,9 @@ import { Duration } from 'aws-cdk-lib';
  * No key here holds a secret. The Graph API key is named indirectly, by the
  * Secrets Manager secret that holds it, so its value never enters the repository,
  * the context, or the synthesized template.
+ *
+ * `ens-scout:account` is the one key `cdk.json` deliberately does not commit the
+ * real value of. See `placeholderAccount`.
  */
 export const contextKeys = {
   environmentName: 'ens-scout:environmentName',
@@ -84,6 +87,24 @@ export const defaultScanTuning: ScanTuning = {
   scanBudget: Duration.minutes(9),
   previousReadAttempts: 3,
 };
+
+/**
+ * placeholderAccount is the account `cdk.json` commits for `ens-scout:account`.
+ *
+ * The account number is public information about a private deployment, so this
+ * repository does not carry it: the real one is the GitHub repository variable
+ * `AWS_ACCOUNT_ID`, and the production workflow supplies it to the synth that
+ * produces the artifact it deploys, with
+ * `-c ens-scout:account=<the variable>`.
+ *
+ * A placeholder rather than an absent key, because `resolveConfig` fails closed on a
+ * missing account and every pull-request check, every local synth, and every test in
+ * this directory has to be able to synthesize the stack without the real value. It is
+ * obviously not an account anyone owns, so a synth that reached AWS with it would be
+ * refused rather than land somewhere unexpected, and the deploy workflow refuses it
+ * explicitly before it builds anything.
+ */
+export const placeholderAccount = '000000000000';
 
 /**
  * functionTimeout is the Lambda timeout.

@@ -8,6 +8,7 @@
   },
   "scripts": {
     "bundle": "node scripts/bundle-scanner.js",
+    "render:iam": "node scripts/render-iam.js",
     "build": "tsc",
     "watch": "tsc -w",
     "test": "jest",

@@ -105,9 +105,10 @@ jobs:
         working-directory: infra
 
       # tsc --noEmit, the assertion suite, and a synth. The synth resolves its
-      # account and region from cdk.json rather than from the environment, so it
-      # needs no credentials and cannot target a different account here than it
-      # does under review.
+      # region and its placeholder account from cdk.json rather than from the
+      # environment, so it needs no credentials, needs none of the production
+      # variables, and cannot target a real account from a pull request. Only
+      # the deploy workflow overrides the account, for the artifact it deploys.
       - run: npm run check
         working-directory: infra
 

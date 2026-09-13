@@ -41,9 +41,10 @@ and correct ENS lifecycle classification are core requirements.
 - `data/archive/`: superseded input lists retained for provenance.
 - `infra/`: the TypeScript AWS CDK application that defines the publisher stack.
   It is a separate npm project with its own README; the Go module ignores it.
-- `infra/iam/`: the four documents applied to the two deployment roles. They are
-  configuration in an AWS account rather than resources in the stack, and
-  `docs/deployment.md` explains them.
+- `infra/iam/`: templates of the four documents applied to the two deployment
+  roles, rendered by `infra/scripts/render-iam.js`. They are configuration in an
+  AWS account rather than resources in the stack, and `docs/deployment.md`
+  explains them.
 - `.github/workflows/`: the pull-request gates and the one manual production
   deployment. `docs/deployment.md` is the whole description of the deployment path.
 
@@ -762,7 +763,7 @@ section holds only the rules that a change here could quietly break.
 - `lib/deployment.ts` owns the bootstrap qualifier, the asset bucket name, and the
   synthesizer, because all three have to agree with an IAM policy that lives outside
   CDK. Nothing else may name the qualifier or build that bucket name, and
-  `test/deployment.test.ts` is what ties the committed policy documents to it.
+  `test/deployment.test.ts` is what ties the committed policy templates to it.
 
 ## Deployment invariants
 
@@ -817,13 +818,34 @@ there could quietly break.
   `environment: production`. The pull-request checks request no OIDC token at all, so
   nothing on that path can reach the account.
 - No AWS access key or other long-lived cloud credential goes in the repository or in
-  its GitHub settings. The account, the region, and the role ARN are non-secret
-  repository variables.
-- `infra/iam/` holds the documents that are applied, dumped from the live roles.
-  Nothing synthesizes them and nothing detects drift, so that copy plus
-  `test/deployment.test.ts` is the only thing keeping them honest: change the account,
-  the region, the qualifier, the stack name, or the secret name in context and the test
-  fails until the documents follow.
+  its GitHub settings. The account, the region, and the two role ARNs are non-secret
+  variables on the `production` environment: `AWS_ACCOUNT_ID`, `AWS_REGION`,
+  `AWS_DEPLOY_ROLE_ARN`, and `AWS_CLOUDFORMATION_EXECUTION_ROLE_ARN`.
+- No tracked file holds the real account number or either real role name, and none may
+  gain one. Both roles are supplied as whole ARNs rather than composed from the account
+  and a role name, because composing one puts a role name back in tracked YAML and lets
+  a variable disagree with the ARN built out of it. `AWS_ACCOUNT_ID` exists separately
+  only because the CDK stack environment and the `allowed-account-ids` guard need the
+  account on its own. The workflow validates all four before it builds, prints names and
+  never values, and `test/deployment.test.ts` fails on an embedded account number, role
+  name, or role ARN.
+- The account is therefore not committed either. `infra/cdk.json` carries
+  `lib/config.ts`'s `placeholderAccount` and the deploy job passes the real one as
+  `-c ens-scout:account=$AWS_ACCOUNT_ID` on the `npm run check` that produces the
+  artifact it deploys, which works only because `check` ends with the synth - a test
+  asserts that order, since a `check` ending with the tests would send the context to
+  jest and deploy an artifact built against the placeholder.
+- `infra/iam/` holds templates of the documents that are applied, with an explicit
+  `${PLACEHOLDER}` at every position naming the account or the execution role, and
+  `infra/scripts/render-iam.js` is the one path from a template to a document. Rendering
+  is deterministic, refuses a value of the wrong shape, never names a supplied value in
+  a diagnostic, and writes to the gitignored `infra/iam/rendered/`. Nothing synthesizes
+  the roles and nothing detects drift, so those templates plus `test/deployment.test.ts`
+  are the only thing keeping them honest: change the account, the region, the qualifier,
+  the stack name, or the secret name in context and the test fails until the templates
+  follow. That tie holds because `iam/example-values.json` names the same placeholder
+  account `cdk.json` commits; everything else in a template stays a literal, or the
+  comparison would be against another placeholder and prove nothing.
 
 ## Website invariants
 

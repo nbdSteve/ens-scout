@@ -24,10 +24,14 @@ export const testSecretName = 'ens-scout-test/thegraph-api-key';
 /**
  * testConfig is a complete configuration with no dependence on cdk.json, so a
  * change to the deployed context cannot silently change what these tests assert.
+ *
+ * The account is obviously synthetic, and deliberately not `placeholderAccount`
+ * either: an assertion about the committed context has to be able to fail while these
+ * tests pass, and a repeated digit reads as a test value at a glance.
  */
 export const testConfig: Config = {
   environmentName: 'test',
-  account: '000000000000',
+  account: '111111111111',
   region: 'ap-southeast-2',
   subgraphId: 'test-subgraph-id',
   graphApiKeySecretName: testSecretName,

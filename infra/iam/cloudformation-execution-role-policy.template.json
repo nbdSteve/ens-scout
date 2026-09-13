@@ -20,7 +20,7 @@
         "dynamodb:UpdateTable",
         "dynamodb:UpdateTimeToLive"
       ],
-      "Resource": "arn:aws:dynamodb:ap-southeast-2:000000000000:table/EnsScout-prod-*"
+      "Resource": "arn:aws:dynamodb:ap-southeast-2:${ACCOUNT_ID}:table/EnsScout-prod-*"
     },
     {
       "Sid": "ScannerFunction",
@@ -50,8 +50,8 @@
         "lambda:UpdateFunctionEventInvokeConfig"
       ],
       "Resource": [
-        "arn:aws:lambda:ap-southeast-2:000000000000:function:EnsScout-prod-*",
-        "arn:aws:lambda:ap-southeast-2:000000000000:function:EnsScout-prod-*:*"
+        "arn:aws:lambda:ap-southeast-2:${ACCOUNT_ID}:function:EnsScout-prod-*",
+        "arn:aws:lambda:ap-southeast-2:${ACCOUNT_ID}:function:EnsScout-prod-*:*"
       ]
     },
     {
@@ -73,13 +73,13 @@
         "iam:UpdateRole",
         "iam:UpdateRoleDescription"
       ],
-      "Resource": "arn:aws:iam::000000000000:role/EnsScout-prod-*"
+      "Resource": "arn:aws:iam::${ACCOUNT_ID}:role/EnsScout-prod-*"
     },
     {
       "Sid": "PassTheScannerRoleToLambdaOnly",
       "Effect": "Allow",
       "Action": "iam:PassRole",
-      "Resource": "arn:aws:iam::000000000000:role/EnsScout-prod-*",
+      "Resource": "arn:aws:iam::${ACCOUNT_ID}:role/EnsScout-prod-*",
       "Condition": {
         "StringEquals": {
           "iam:PassedToService": "lambda.amazonaws.com"
@@ -99,15 +99,15 @@
         "logs:UntagResource"
       ],
       "Resource": [
-        "arn:aws:logs:ap-southeast-2:000000000000:log-group:EnsScout-prod-*",
-        "arn:aws:logs:ap-southeast-2:000000000000:log-group:EnsScout-prod-*:*"
+        "arn:aws:logs:ap-southeast-2:${ACCOUNT_ID}:log-group:EnsScout-prod-*",
+        "arn:aws:logs:ap-southeast-2:${ACCOUNT_ID}:log-group:EnsScout-prod-*:*"
       ]
     },
     {
       "Sid": "DescribeLogGroupsTakesTheWholeRegion",
       "Effect": "Allow",
       "Action": "logs:DescribeLogGroups",
-      "Resource": "arn:aws:logs:ap-southeast-2:000000000000:log-group:*"
+      "Resource": "arn:aws:logs:ap-southeast-2:${ACCOUNT_ID}:log-group:*"
     },
     {
       "Sid": "ScanSchedules",
@@ -125,7 +125,7 @@
         "events:TagResource",
         "events:UntagResource"
       ],
-      "Resource": "arn:aws:events:ap-southeast-2:000000000000:rule/EnsScout-prod-*"
+      "Resource": "arn:aws:events:ap-southeast-2:${ACCOUNT_ID}:rule/EnsScout-prod-*"
     },
     {
       "Sid": "UndeliveredEventQueue",
@@ -140,7 +140,7 @@
         "sqs:TagQueue",
         "sqs:UntagQueue"
       ],
-      "Resource": "arn:aws:sqs:ap-southeast-2:000000000000:EnsScout-prod-*"
+      "Resource": "arn:aws:sqs:ap-southeast-2:${ACCOUNT_ID}:EnsScout-prod-*"
     },
     {
       "Sid": "AlarmTopic",
@@ -154,7 +154,7 @@
         "sns:TagResource",
         "sns:UntagResource"
       ],
-      "Resource": "arn:aws:sns:ap-southeast-2:000000000000:EnsScout-prod-*"
+      "Resource": "arn:aws:sns:ap-southeast-2:${ACCOUNT_ID}:EnsScout-prod-*"
     },
     {
       "Sid": "Alarms",
@@ -166,7 +166,7 @@
         "cloudwatch:TagResource",
         "cloudwatch:UntagResource"
       ],
-      "Resource": "arn:aws:cloudwatch:ap-southeast-2:000000000000:alarm:EnsScout-prod-*"
+      "Resource": "arn:aws:cloudwatch:ap-southeast-2:${ACCOUNT_ID}:alarm:EnsScout-prod-*"
     },
     {
       "Sid": "DescribeAlarmsTakesNoResource",
@@ -178,7 +178,7 @@
       "Sid": "ResolveTheGraphCredentialDynamicReference",
       "Effect": "Allow",
       "Action": "secretsmanager:GetSecretValue",
-      "Resource": "arn:aws:secretsmanager:ap-southeast-2:000000000000:secret:ens-scout/thegraph-api-key-*"
+      "Resource": "arn:aws:secretsmanager:ap-southeast-2:${ACCOUNT_ID}:secret:ens-scout/thegraph-api-key-*"
     },
     {
       "Sid": "ReadTheScannerBundleAsset",
@@ -187,10 +187,10 @@
         "s3:GetObject",
         "s3:GetObjectVersion"
       ],
-      "Resource": "arn:aws:s3:::cdk-hnb659fds-assets-000000000000-ap-southeast-2/*",
+      "Resource": "arn:aws:s3:::cdk-hnb659fds-assets-${ACCOUNT_ID}-ap-southeast-2/*",
       "Condition": {
         "StringEquals": {
-          "aws:ResourceAccount": "000000000000"
+          "aws:ResourceAccount": "${ACCOUNT_ID}"
         }
       }
     },
@@ -201,7 +201,7 @@
         "ssm:GetParameter",
         "ssm:GetParameters"
       ],
-      "Resource": "arn:aws:ssm:ap-southeast-2:000000000000:parameter/cdk-bootstrap/hnb659fds/version"
+      "Resource": "arn:aws:ssm:ap-southeast-2:${ACCOUNT_ID}:parameter/cdk-bootstrap/hnb659fds/version"
     }
   ]
 }

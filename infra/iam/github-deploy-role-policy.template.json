@@ -19,7 +19,7 @@
         "cloudformation:GetTemplate",
         "cloudformation:UpdateTerminationProtection"
       ],
-      "Resource": "arn:aws:cloudformation:ap-southeast-2:000000000000:stack/EnsScout-prod/*"
+      "Resource": "arn:aws:cloudformation:ap-southeast-2:${ACCOUNT_ID}:stack/EnsScout-prod/*"
     },
     {
       "Sid": "CloudFormationCallsThatTakeNoResource",
@@ -43,12 +43,12 @@
         "s3:PutObject*"
       ],
       "Resource": [
-        "arn:aws:s3:::cdk-hnb659fds-assets-000000000000-ap-southeast-2",
-        "arn:aws:s3:::cdk-hnb659fds-assets-000000000000-ap-southeast-2/*"
+        "arn:aws:s3:::cdk-hnb659fds-assets-${ACCOUNT_ID}-ap-southeast-2",
+        "arn:aws:s3:::cdk-hnb659fds-assets-${ACCOUNT_ID}-ap-southeast-2/*"
       ],
       "Condition": {
         "StringEquals": {
-          "aws:ResourceAccount": "000000000000"
+          "aws:ResourceAccount": "${ACCOUNT_ID}"
         }
       }
     },
@@ -59,13 +59,13 @@
         "ssm:GetParameter",
         "ssm:GetParameters"
       ],
-      "Resource": "arn:aws:ssm:ap-southeast-2:000000000000:parameter/cdk-bootstrap/hnb659fds/version"
+      "Resource": "arn:aws:ssm:ap-southeast-2:${ACCOUNT_ID}:parameter/cdk-bootstrap/hnb659fds/version"
     },
     {
       "Sid": "PassOnlyTheEnsScoutExecutionRoleAndOnlyToCloudFormation",
       "Effect": "Allow",
       "Action": "iam:PassRole",
-      "Resource": "arn:aws:iam::000000000000:role/EnsScoutCloudFormationExecutionRole",
+      "Resource": "arn:aws:iam::${ACCOUNT_ID}:role/${CLOUDFORMATION_EXECUTION_ROLE_NAME}",
       "Condition": {
         "StringEquals": {
           "iam:PassedToService": "cloudformation.amazonaws.com"

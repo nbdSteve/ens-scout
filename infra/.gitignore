@@ -2,6 +2,7 @@ node_modules/
 cdk.out/
 dist-ts/
 build/
+iam/rendered/
 *.d.ts
 *.js
 !jest.config.js

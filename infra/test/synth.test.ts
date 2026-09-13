@@ -4,7 +4,7 @@ import * as path from 'path';
 import * as cdk from 'aws-cdk-lib';
 import { Template } from 'aws-cdk-lib/assertions';
 
-import { resolveConfig } from '../lib/config';
+import { placeholderAccount, resolveConfig } from '../lib/config';
 import { EnsScoutStack, scannerHandler } from '../lib/ens-scout-stack';
 import { fixtureCode, goSource, repoRoot, synth } from './helpers';
 
@@ -36,8 +36,10 @@ describe('synthesis', () => {
     });
     const template = Template.fromStack(stack);
     // The environment is fixed rather than resolved from ambient credentials, so a
-    // synth cannot silently target whichever account happens to be logged in.
-    expect(stack.account).toBe('000000000000');
+    // synth cannot silently target whichever account happens to be logged in. From a
+    // clean clone that account is the committed placeholder; the production workflow
+    // overrides the one key with `-c` for the synth it deploys.
+    expect(stack.account).toBe(placeholderAccount);
     expect(stack.region).toBe('ap-southeast-2');
     expect(Object.keys(template.toJSON().Resources ?? {}).length).toBeGreaterThan(0);
   });

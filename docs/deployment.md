@@ -1,26 +1,61 @@
 # Deployment
 
-This document records how `EnsScout-prod` reaches AWS account `000000000000` in
-`ap-southeast-2`, and what the identity that deploys it is permitted to do.
+This document records how `EnsScout-prod` reaches its AWS account in `ap-southeast-2`,
+and what the identity that deploys it is permitted to do.
 It holds no credential and no secret value.
+It also names no account number and no role name, and neither does any other tracked
+file: those are public facts about a private deployment, so they live in the protected
+`production` environment's variables and are read from there.
 
 `infra/README.md` covers the CDK application itself, including the out-of-band
 prerequisites, and `.github/workflows/deploy-production.yml` is the only workflow that
 deploys.
+
+## The four variables
+
+Everything the deployment needs to know about the account is a variable on the
+`production` environment.
+There are four, and none of them is secret.
+
+| Variable | What it holds |
+| --- | --- |
+| `AWS_ACCOUNT_ID` | The twelve-digit account, as a bare account number |
+| `AWS_REGION` | `ap-southeast-2` |
+| `AWS_DEPLOY_ROLE_ARN` | The whole ARN of the role GitHub Actions assumes |
+| `AWS_CLOUDFORMATION_EXECUTION_ROLE_ARN` | The whole ARN of the role CloudFormation acts as |
+
+Both roles are supplied as whole ARNs rather than assembled from the account and a role
+name.
+Composing one in the workflow would put a role name back in a tracked file, and it would
+also let a variable disagree with the ARN the workflow built out of it.
+`AWS_ACCOUNT_ID` exists as a separate value because two things genuinely need the account
+on its own: the CDK stack environment, which is an account and a region rather than an
+ARN, and the `allowed-account-ids` guard on the credential step.
+
+The workflow's first step refuses to build anything until all four are present, the
+account is twelve digits and is not the placeholder `infra/cdk.json` commits, the region
+is shaped like a region, both ARNs are IAM role ARNs in the account `AWS_ACCOUNT_ID`
+names, and the two ARNs are not the same role.
+It prints variable names and never values.
+`infra/test/deployment.test.ts` asserts that the step comes before the build and the
+deploy, that every variable the workflow reads is one the step requires, and that each
+one reaches the command that needs it.
 
 ## The path
 
 One manual workflow run deploys, and nothing else can.
 
 1. Someone dispatches `deploy production` on the default branch.
-2. The job declares `environment: production`, so GitHub holds it for the reviewer that
+2. The job checks the four variables described above, before it checks out anything.
+3. The job declares `environment: production`, so GitHub holds it for the reviewer that
    environment requires and refuses any ref the environment's branch policy does not
    name.
-3. The job builds and verifies once with `npm run check`, which leaves the whole cloud
-   assembly in `infra/cdk.out`.
-4. It requests an OIDC token and assumes `EnsScoutGitHubDeployRole`.
-5. It runs `cdk deploy --app cdk.out --role-arn ...EnsScoutCloudFormationExecutionRole`,
-   which deploys the assembly step 3 verified and synthesizes nothing new.
+4. The job builds and verifies once with
+   `npm run check -- --context "ens-scout:account=$AWS_ACCOUNT_ID"`, which leaves the
+   whole cloud assembly in `infra/cdk.out`.
+5. It requests an OIDC token and assumes the role `AWS_DEPLOY_ROLE_ARN` names.
+6. It runs `cdk deploy --app cdk.out --role-arn "$AWS_CLOUDFORMATION_EXECUTION_ROLE_ARN"`,
+   which deploys the assembly step 4 verified and synthesizes nothing new.
 
 The build happens before the credential is obtained, so a failing check costs no AWS
 session at all.
@@ -28,7 +63,17 @@ The deploy step reads the assembly rather than re-running the app, which is what
 the artifact that reaches AWS the one the checks passed rather than an equal one built a
 second time.
 
-Step 3 compiles the scanner, because every CDK command bundles it first, so the Go
+That is also why the account is supplied at step 4 rather than at step 6.
+`--app cdk.out` deploys the assembly, and the stack environment is baked into it, so the
+real account has to be present at the synth that produced the artifact.
+`infra/cdk.json` commits `infra/lib/config.ts`'s `placeholderAccount` instead, which is
+what lets a clean clone, every pull-request check, and every test synthesize the stack
+without the real value.
+`npm run check` ends with the synth, so the trailing arguments reach `cdk synth` and
+nothing else; a test asserts that, because a check script reordered to end with the tests
+would send the context to jest and deploy an artifact built against the placeholder.
+
+Step 4 compiles the scanner, because every CDK command bundles it first, so the Go
 toolchain is part of what this job produces.
 Every `setup-go` step in `.github/workflows/` therefore pins one exact version rather
 than a channel that resolves to whatever was released most recently, and
@@ -56,16 +101,27 @@ Removing the hop is what makes least privilege reachable here.
 
 ## The two roles
 
-The committed copies of all four documents are in `infra/iam/`, and
-`infra/test/deployment.test.ts` asserts them against `lib/deployment.ts` and the
-committed CDK context, so a qualifier, region, account, stack name, or secret name that
-moves in one place and not the other fails a test rather than a deployment.
-They were dumped from the live roles, so the committed copy is what is applied.
+All four applied documents are in `infra/iam/`, as templates.
+The applied documents name the account and the execution role, so every such position is
+an explicit `${PLACEHOLDER}`, `infra/iam/README.md` says which, and
+`infra/scripts/render-iam.js` is the one path from a template to a document.
+Rendering is deterministic and writes to the gitignored `infra/iam/rendered/`, so a
+rendered document can be diffed against what a role really carries.
+Nothing in this repository applies one, and no workflow here has the permission to.
 
-### `arn:aws:iam::000000000000:role/EnsScoutGitHubDeployRole`
+`infra/test/deployment.test.ts` renders the templates with `infra/iam/example-values.json`
+and asserts them against `lib/deployment.ts` and the committed CDK context, so a
+qualifier, region, account, stack name, or secret name that moves in one place and not
+the other fails a test rather than a deployment.
+The example account is the same placeholder `infra/cdk.json` commits, which is what keeps
+those assertions a tie rather than a comparison of two literals.
+Everything else in the templates stays a literal for the same reason: a placeholder for
+the region or the secret name would make the tie tautological.
+
+### The deployment role, `AWS_DEPLOY_ROLE_ARN`
 
 The identity GitHub Actions assumes.
-One inline policy, `EnsScoutGitHubDeploy`, and no attached managed policy.
+One inline policy and no attached managed policy.
 
 Trust: `sts:AssumeRoleWithWebIdentity` through this account's own
 `token.actions.githubusercontent.com` provider, with `StringEquals` on both
@@ -81,9 +137,14 @@ Permissions, five statements:
 | --- | --- |
 | `DeployTheEnsScoutStackAndNoOther` | The CloudFormation calls a deploy makes, on `stack/EnsScout-prod/*` alone |
 | `CloudFormationCallsThatTakeNoResource` | `GetTemplateSummary`, `ListStacks`, `sts:GetCallerIdentity` |
-| `PublishCdkAssetsToTheBootstrapBucket` | Read and write on `cdk-hnb659fds-assets-000000000000-ap-southeast-2`, conditioned on `aws:ResourceAccount` |
+| `PublishCdkAssetsToTheBootstrapBucket` | Read and write on `cdk-hnb659fds-assets-<account>-ap-southeast-2`, conditioned on `aws:ResourceAccount` |
 | `ReadTheBootstrapVersion` | `ssm:GetParameter` on `/cdk-bootstrap/hnb659fds/version` |
 | `PassOnlyTheEnsScoutExecutionRoleAndOnlyToCloudFormation` | `iam:PassRole` on the one execution role, conditioned on `iam:PassedToService` |
+
+That last statement is the tie the `AWS_CLOUDFORMATION_EXECUTION_ROLE_ARN` variable has
+to honour.
+It names one role, so an ARN naming any other one is denied at the deploy step rather
+than widened here.
 
 What it deliberately does not hold:
 
@@ -106,10 +167,10 @@ What it deliberately does not hold:
   The durable resources are `RemovalPolicy.RETAIN` and the table has deletion
   protection, so the data survives a stack deletion.
 
-### `arn:aws:iam::000000000000:role/EnsScoutCloudFormationExecutionRole`
+### The CloudFormation execution role, `AWS_CLOUDFORMATION_EXECUTION_ROLE_ARN`
 
 The identity CloudFormation creates and updates the stack's resources as.
-One inline policy, `EnsScoutStackResources`, and no attached managed policy.
+One inline policy and no attached managed policy.
 Trust: `cloudformation.amazonaws.com` and nothing else.
 
 Every resource it names carries the `EnsScout-prod-` prefix CloudFormation gives an
@@ -140,8 +201,8 @@ Repository `nbdSteve/ens-scout`.
 
 - Environment `production`, with a required reviewer and a deployment branch policy that
   names `main` alone.
-- Repository variables, all three non-secret by nature:
-  `AWS_ACCOUNT_ID`, `AWS_REGION`, and `AWS_DEPLOY_ROLE_ARN`.
+- The four variables above, held on that environment.
+  None is secret by nature, and the workflow refuses to run without them.
 - No Actions secret holds an AWS credential, and there is no AWS access key anywhere in
   the repository or its settings.
   The OIDC token the deploy job requests is the entire credential path, and it is
@@ -149,6 +210,8 @@ Repository `nbdSteve/ens-scout`.
 
 `checks.yml` runs the three repository gates on every pull request and on a push to
 `main`, and requests no `id-token` at all, so nothing on that path can reach the account.
+It also needs none of the four variables: it synthesizes against the committed
+placeholder account, which is the whole reason that placeholder exists.
 
 ## Residual risks
 
@@ -167,5 +230,11 @@ These are accepted rather than closed, and each is a deliberate decision.
    The failure mode is a denied CloudFormation call and a rolled-back stack, not a partial
    deployment of the wrong thing.
 3. Neither role is defined in CDK, so nothing synthesizes them and nothing detects drift.
-   `infra/iam/` plus the test is what keeps the committed copies honest, and the copies
-   were dumped from the live roles.
+   `infra/iam/` plus the test is what keeps the templates honest, and rendering them is
+   deterministic, so a drift check is a diff someone runs rather than something this
+   repository performs.
+4. The account number and the role names are absent from the repository and present in
+   the environment's variables, which moves them out of a public git history and into
+   settings a repository administrator can read.
+   That is the intended trade: it removes them from every clone, every fork, and every
+   search index, and it does not make them secret.
