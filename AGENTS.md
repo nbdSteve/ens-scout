@@ -800,11 +800,12 @@ there could quietly break.
   those three fields are how the hop comes back.
 - The trust policy matches the GitHub subject with `StringEquals`, never `StringLike`,
   and never with a `*` anywhere in it. That single subject,
-  `repo:nbdSteve/ens-scout:environment:production`, is the whole restriction: a
-  pattern such as `repo:nbdSteve/ens-scout:*` admits every branch and every pull
-  request of the repository and bypasses the environment protection entirely. The
-  audience is pinned the same way, because a missing `aud` admits a token minted for
-  another audience.
+  `repo:${GITHUB_REPOSITORY_IDENTITY}:environment:production`, is the whole AWS-side
+  restriction. The placeholder is GitHub's exact immutable
+  `nbdSteve@<owner-id>/ens-scout@<repository-id>` identity segment and neither live
+  numeric identifier is committed. A prefix pattern would admit branches and pull
+  requests the environment excludes. The audience is pinned the same way, because a
+  missing `aud` admits a token minted for another audience.
 - The deployment role holds no permission over anything the stack contains. It
   deploys one CloudFormation stack, publishes assets, reads the bootstrap version, and
   passes one execution role to CloudFormation alone. Solving a denied deployment by

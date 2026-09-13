@@ -11,7 +11,7 @@
 #      main and whose head repository is this repository. The deploy job runs only
 #      when that selector returns the upstream run's full head SHA.
 #   2. The AWS role trusts exactly one subject,
-#      `repo:nbdSteve/ens-scout:environment:production`, so a token minted by any
+#      `repo:${GITHUB_REPOSITORY_IDENTITY}:environment:production`, so a token minted by any
 #      other repository, branch, or environment cannot assume it.
 #   3. The role passes exactly one CloudFormation execution role, which is scoped
 #      to this stack's own resources.

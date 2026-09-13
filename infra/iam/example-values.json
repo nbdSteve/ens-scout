@@ -1,4 +1,5 @@
 {
   "ACCOUNT_ID": "000000000000",
-  "CLOUDFORMATION_EXECUTION_ROLE_NAME": "ExampleCloudFormationExecutionRole"
+  "CLOUDFORMATION_EXECUTION_ROLE_NAME": "ExampleCloudFormationExecutionRole",
+  "GITHUB_REPOSITORY_IDENTITY": "nbdSteve@1/ens-scout@2"
 }

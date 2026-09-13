@@ -17,6 +17,7 @@ const render = require('../scripts/render-iam');
  */
 
 const values: Record<string, string> = render.exampleValues();
+const exampleRepositoryIdentity = 'nbdSteve@1/ens-scout@2';
 
 describe('the example values', () => {
   test('supply every placeholder the templates use, and nothing else', () => {
@@ -29,6 +30,12 @@ describe('the example values', () => {
     // The same placeholder cdk.json commits, so a reviewer can read a whole rendered
     // policy and a synthesized template and see one account in both.
     expect(values.ACCOUNT_ID).toBe(placeholderAccount);
+  });
+
+  test('name a synthetic immutable GitHub repository identity', () => {
+    // The two positive decimals exercise the live immutable-subject shape without
+    // putting either live identifier in the repository.
+    expect(values.GITHUB_REPOSITORY_IDENTITY).toBe(exampleRepositoryIdentity);
   });
 });
 
@@ -101,6 +108,66 @@ describe('rendering one document', () => {
   });
 });
 
+describe('the immutable GitHub repository identity', () => {
+  const template = render.readTemplate('github-deploy-role-trust');
+
+  test('renders the exact immutable production-environment subject', () => {
+    const document = JSON.parse(render.renderIamDocument(template, values));
+    expect(document.Statement[0].Condition).toEqual({
+      StringEquals: {
+        'token.actions.githubusercontent.com:aud': 'sts.amazonaws.com',
+        'token.actions.githubusercontent.com:sub':
+          `repo:${exampleRepositoryIdentity}:environment:production`,
+      },
+    });
+  });
+
+  test('refuses a missing identity', () => {
+    const withoutIdentity = { ...values };
+    delete withoutIdentity.GITHUB_REPOSITORY_IDENTITY;
+    expect(() => render.renderIamDocument(template, withoutIdentity)).toThrow(
+      /GITHUB_REPOSITORY_IDENTITY/,
+    );
+  });
+
+  test.each([
+    ['an extra component', 'nbdSteve@1/ens-scout@2/extra'],
+    ['a missing owner identity', 'nbdSteve/ens-scout@2'],
+    ['a missing repository identity', 'nbdSteve@1/ens-scout'],
+    ['a negative owner identity', 'nbdSteve@-1/ens-scout@2'],
+    ['a negative repository identity', 'nbdSteve@1/ens-scout@-2'],
+    ['a zero owner identity', 'nbdSteve@0/ens-scout@2'],
+    ['a zero repository identity', 'nbdSteve@1/ens-scout@0'],
+    ['a leading-zero identity', 'nbdSteve@01/ens-scout@2'],
+    ['a hexadecimal identity', 'nbdSteve@0x1/ens-scout@2'],
+    ['a fractional identity', 'nbdSteve@1/ens-scout@2.5'],
+    ['a non-decimal identity', 'nbdSteve@one/ens-scout@two'],
+    ['different repository names', 'someone@1/something@2'],
+  ])('refuses %s', (_case, identity) => {
+    expect(() =>
+      render.renderIamDocument(template, {
+        ...values,
+        GITHUB_REPOSITORY_IDENTITY: identity,
+      }),
+    ).toThrow(/GITHUB_REPOSITORY_IDENTITY/);
+  });
+
+  test('never includes a rejected identity in its diagnostic', () => {
+    const supplied = 'nbdSteve@-123/ens-scout@not-decimal';
+    let message = '';
+    try {
+      render.renderIamDocument(template, {
+        ...values,
+        GITHUB_REPOSITORY_IDENTITY: supplied,
+      });
+    } catch (error) {
+      message = (error as Error).message;
+    }
+    expect(message).toContain('GITHUB_REPOSITORY_IDENTITY');
+    expect(message).not.toContain(supplied);
+  });
+});
+
 describe('rendering every document', () => {
   test('refuses a supplied value no template uses', () => {
     // A value nothing substitutes is a placeholder that was renamed in one place and
@@ -132,12 +199,15 @@ describe('the command line', () => {
     const options = render.parseArgv([
       '--account-id',
       placeholderAccount,
+      '--repository-identity',
+      exampleRepositoryIdentity,
       '--execution-role-name',
       'SomeRole',
     ]);
     expect(options.values).toEqual({
       ACCOUNT_ID: placeholderAccount,
       CLOUDFORMATION_EXECUTION_ROLE_NAME: 'SomeRole',
+      GITHUB_REPOSITORY_IDENTITY: exampleRepositoryIdentity,
     });
     expect(options.example).toBe(false);
   });
@@ -145,6 +215,30 @@ describe('the command line', () => {
   test('refuses an argument it does not know, and a flag with no value', () => {
     expect(() => render.parseArgv(['--account', placeholderAccount])).toThrow(/unknown argument/);
     expect(() => render.parseArgv(['--account-id'])).toThrow(/takes a value/);
+  });
+
+  test('refuses duplicate and positional repository identity values without printing them', () => {
+    expect(() =>
+      render.parseArgv([
+        '--repository-identity',
+        exampleRepositoryIdentity,
+        '--repository-identity',
+        exampleRepositoryIdentity,
+      ]),
+    ).toThrow(/only once/);
+
+    let message = '';
+    try {
+      render.parseArgv([
+        '--repository-identity',
+        exampleRepositoryIdentity,
+        exampleRepositoryIdentity,
+      ]);
+    } catch (error) {
+      message = (error as Error).message;
+    }
+    expect(message).toBe('unknown argument');
+    expect(message).not.toContain(exampleRepositoryIdentity);
   });
 
   test('refuses --example beside a value of its own', () => {

@@ -3,9 +3,10 @@
 This document records how `EnsScout-prod` reaches its AWS account in `ap-southeast-2`,
 and what the identity that deploys it is permitted to do.
 It holds no credential and no secret value.
-It also names no account number and no role name, and neither does any other tracked
-file: those are public facts about a private deployment, so they live in the protected
-`production` environment's variables and are read from there.
+It also names no real account number, role name, role ARN, or numeric GitHub repository
+identity. The account and roles live in the protected `production` environment's
+variables; the immutable GitHub identity stays in GitHub's repository configuration and
+is supplied only when the deployment-role trust document is rendered.
 
 `infra/README.md` covers the CDK application itself, including the out-of-band
 prerequisites, and `.github/workflows/deploy-production.yml` is the only workflow that
@@ -127,9 +128,10 @@ Removing the hop is what makes least privilege reachable here.
 ## The two roles
 
 All four applied documents are in `infra/iam/`, as templates.
-The applied documents name the account and the execution role, so every such position is
-an explicit `${PLACEHOLDER}`, `infra/iam/README.md` says which, and
-`infra/scripts/render-iam.js` is the one path from a template to a document.
+The applied documents name the account, the execution role, and the immutable GitHub
+repository identity, so every such position is an explicit `${PLACEHOLDER}`,
+`infra/iam/README.md` says which, and `infra/scripts/render-iam.js` is the one path
+from a template to a document.
 Rendering is deterministic and writes to the gitignored `infra/iam/rendered/`, so a
 rendered document can be diffed against what a role really carries.
 Nothing in this repository applies one, and no workflow here has the permission to.
@@ -138,8 +140,10 @@ Nothing in this repository applies one, and no workflow here has the permission 
 and asserts them against `lib/deployment.ts` and the committed CDK context, so a
 qualifier, region, account, stack name, or secret name that moves in one place and not
 the other fails a test rather than a deployment.
-The example account is the same placeholder `infra/cdk.json` commits, which is what keeps
-those assertions a tie rather than a comparison of two literals.
+The example account is the same placeholder `infra/cdk.json` commits, and the example
+GitHub identity has synthetic positive decimal identifiers, so no live identifier is
+needed to exercise the whole contract.
+That is what keeps the account assertions a tie rather than a comparison of two literals.
 Everything else in the templates stays a literal for the same reason: a placeholder for
 the region or the secret name would make the tie tautological.
 
@@ -151,10 +155,20 @@ One inline policy and no attached managed policy.
 Trust: `sts:AssumeRoleWithWebIdentity` through this account's own
 `token.actions.githubusercontent.com` provider, with `StringEquals` on both
 `:aud = sts.amazonaws.com` and
-`:sub = repo:nbdSteve/ens-scout:environment:production`.
-Matching the subject with `StringEquals` rather than `StringLike` is the whole
-restriction: a pattern such as `repo:nbdSteve/ens-scout:*` would admit every branch and
-every pull request of this repository and bypass the environment protection entirely.
+`:sub = repo:${GITHUB_REPOSITORY_IDENTITY}:environment:production`.
+The placeholder is the exact immutable identity segment reported by the repository OIDC
+customization: `nbdSteve@<owner-id>/ens-scout@<repository-id>`.
+Both identifiers are canonical positive base-10 integers; the renderer refuses a
+missing, duplicate, extra, malformed, signed, zero, leading-zero, or non-decimal value
+without printing it.
+The old repository-name-only subject does not match a token issued under immutable
+subjects.
+Matching the subject with `StringEquals` rather than `StringLike` is the whole AWS-side
+restriction: a prefix pattern would admit contexts the production environment excludes.
+A pull request, an ordinary branch ref, and another environment have a different
+context, while a fork has a different immutable repository identity.
+The selector and the `production` environment's main-only branch policy stop a non-main
+run before the deploy job can request any token.
 
 Permissions, five statements:
 
@@ -231,6 +245,8 @@ Repository `nbdSteve/ens-scout`.
 
 - Environment `production`, with no required reviewers and a custom deployment branch
   policy that names `main` alone.
+- Repository OIDC subjects use GitHub's immutable repository identity. The live numeric
+  values are not committed; the trust template holds `${GITHUB_REPOSITORY_IDENTITY}`.
 - The four variables above, held on that environment.
   None is secret by nature, and the workflow refuses to run without them.
 - No Actions secret holds an AWS credential, and there is no AWS access key anywhere in
@@ -265,8 +281,8 @@ These are accepted rather than closed, and each is a deliberate decision.
    `infra/iam/` plus the test is what keeps the templates honest, and rendering them is
    deterministic, so a drift check is a diff someone runs rather than something this
    repository performs.
-4. The account number and the role names are absent from the repository and present in
-   the environment's variables, which moves them out of a public git history and into
-   settings a repository administrator can read.
+4. The account number, role names, and live numeric GitHub repository identity are absent
+   from the repository. The account and roles are present in the environment's
+   variables, while GitHub itself holds the immutable identity used in OIDC subjects.
    That is the intended trade: it removes them from every clone, every fork, and every
-   search index, and it does not make them secret.
+   search index, and it does not make the account or role names secret.

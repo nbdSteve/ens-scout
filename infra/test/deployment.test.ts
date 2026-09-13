@@ -64,13 +64,14 @@ const assetBucket = assetBucketName(config.account, config.region);
  */
 const exampleValues: Record<string, string> = render.exampleValues();
 const executionRoleArn = `arn:aws:iam::${config.account}:role/${exampleValues.CLOUDFORMATION_EXECUTION_ROLE_NAME}`;
+const exampleRepositoryIdentity = 'nbdSteve@1/ens-scout@2';
 
 /**
  * The subject the deployment role trusts. It is a literal here on purpose: the point
  * of the assertion is that this exact string, and no pattern that could match another
  * branch, environment, or repository, is what the role admits.
  */
-const trustedSubject = 'repo:nbdSteve/ens-scout:environment:production';
+const trustedSubject = `repo:${exampleRepositoryIdentity}:environment:production`;
 
 function iamDocument(name: string): { Version: string; Statement: Statement[] } {
   return JSON.parse(render.renderIamDocument(render.readTemplate(name), exampleValues));
@@ -82,6 +83,14 @@ function statements(name: string): Statement[] {
 
 function actions(document: Statement[]): string[] {
   return document.flatMap((statement) => asList(statement.Action) as string[]);
+}
+
+function admitsWebIdentitySubject(statement: Statement, subject: string): boolean {
+  const equals = statement.Condition?.StringEquals;
+  return (
+    equals?.['token.actions.githubusercontent.com:aud'] === 'sts.amazonaws.com' &&
+    equals?.['token.actions.githubusercontent.com:sub'] === subject
+  );
 }
 
 function statementNamed(document: Statement[], sid: string): Statement {
@@ -277,11 +286,23 @@ describe('the GitHub deployment role trust policy', () => {
   });
 
   test('matches the subject exactly, never by pattern', () => {
-    // StringLike with a `*` anywhere in the subject is the widening to catch:
-    // `repo:nbdSteve/ens-scout:*` admits every branch and every pull request of this
-    // repository, which is exactly the environment protection being bypassed.
+    // StringLike with a wildcard anywhere in the subject is the widening to catch:
+    // it admits branches and pull requests that the production environment excludes.
     expect(Object.keys(trust[0].Condition ?? {})).toEqual(['StringEquals']);
     expect(JSON.stringify(trust[0].Condition)).not.toContain('*');
+  });
+
+  test('admits the immutable production subject and rejects every neighbouring context', () => {
+    expect(admitsWebIdentitySubject(trust[0], trustedSubject)).toBe(true);
+    for (const subject of [
+      `repo:${exampleRepositoryIdentity}:pull_request`,
+      `repo:${exampleRepositoryIdentity}:ref:refs/heads/feature/not-main`,
+      `repo:${exampleRepositoryIdentity}:environment:staging`,
+      'repo:someone-else@3/ens-scout@4:environment:production',
+      'repo:nbdSteve/ens-scout:environment:production',
+    ]) {
+      expect(admitsWebIdentitySubject(trust[0], subject)).toBe(false);
+    }
   });
 });
 
@@ -875,6 +896,18 @@ describe('the committed IAM templates', () => {
     // once and look like a policy change instead of a mismatched example.
     expect(exampleValues.ACCOUNT_ID).toBe(config.account);
     expect(config.account).toBe(placeholderAccount);
+  });
+
+  test('render against a synthetic immutable repository identity', () => {
+    expect(exampleValues.GITHUB_REPOSITORY_IDENTITY).toBe(exampleRepositoryIdentity);
+    const source = JSON.parse(render.readTemplate('github-deploy-role-trust'));
+    expect(source.Statement[0].Condition).toEqual({
+      StringEquals: {
+        'token.actions.githubusercontent.com:aud': 'sts.amazonaws.com',
+        'token.actions.githubusercontent.com:sub':
+          'repo:${GITHUB_REPOSITORY_IDENTITY}:environment:production',
+      },
+    });
   });
 
   test('carry no account number', () => {

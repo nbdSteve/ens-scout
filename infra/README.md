@@ -85,7 +85,8 @@ GitHub configuration, and the residual risks.
 `.github/workflows/deploy-production.yml` is the only workflow that deploys, and no
 command run during development here touches AWS.
 
-The target account is the one deployment value this repository does not commit.
+The target account, role names, role ARNs, and live numeric GitHub repository identity
+are deployment values this repository does not commit.
 `cdk.json` carries `lib/config.ts`'s `placeholderAccount`, which is what lets a clean
 clone, every pull-request check, and every test synthesize the stack, and the workflow
 supplies the real account from the `AWS_ACCOUNT_ID` variable as
@@ -106,7 +107,8 @@ credentials directly, and three things must exist before either.
    Create it out of band.
    This stack references the secret and never creates, rotates, or overwrites it.
 3. The two roles the templates in `iam/` describe, if the deployment goes through the
-   workflow, and the four `production` environment variables that name them.
+   workflow, the immutable repository identity supplied when their trust is rendered,
+   and the four `production` environment variables that name the account and roles.
 
 The stack creates the alarm topic and deliberately adds no subscription to it, so
 subscribing is a deployment step rather than something the template does.
@@ -237,14 +239,15 @@ are configuration in GitHub, so no template can describe either, and both have t
 with `lib/deployment.ts` and with the committed context.
 It renders the templates through `scripts/render-iam.js` with `iam/example-values.json`
 and asserts the rendered documents, because the committed form carries placeholders
-rather than an account.
+rather than live deployment identifiers.
 It derives the asset bucket, the bootstrap version parameter, the stack ARN, and the
 secret ARN from those two sources and requires the documents to name exactly them; it
 pins the trust policy's subject, audience, and condition operator; it pins the statements
 that grant anything on `*`; it synthesizes with `deploymentSynthesizer()` and requires
-the stack artifact to name none of the bootstrap roles; and it requires every template to
-hold no twelve-digit run and to name no role but a placeholder or one under the stack's
-own prefix.
+the stack artifact to name none of the bootstrap roles; it proves the immutable subject
+rejects the legacy subject and neighbouring pull-request, fork, branch, and environment
+contexts; and it requires every template to hold no twelve-digit run and to name no role
+but a placeholder or one under the stack's own prefix.
 It parses the workflow YAML into mappings, lists, and scalars through the YAML parser
 already present in the locked Jest dependency graph, so comments and formatting cannot
 decide an assertion.
@@ -266,9 +269,10 @@ the deployment either way, so the assertion is what keeps the identifiers out of
 tree rather than a reviewer's attention.
 
 `test/iam-render.test.ts` covers the render script itself: that the example values fill
-every placeholder and no more, that rendering is deterministic and canonical, that a
-value of the wrong shape is refused, that a refusal names the placeholder and never the
-value supplied for it, and that the output directory is gitignored.
+every placeholder and no more, that rendering is deterministic and canonical, that
+missing, extra, duplicate, malformed, non-positive, and non-decimal repository
+identities are refused, that a refusal names the placeholder and never the value
+supplied for it, and that the output directory is gitignored.
 That last set is what makes it safe to render the real documents locally.
 
 ## Layout

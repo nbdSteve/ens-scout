@@ -4,10 +4,11 @@
 /**
  * Renders the deployment role documents in `iam/` from their templates.
  *
- * The applied documents name the target account and the CloudFormation execution
- * role, and neither belongs in a public repository, so what is committed is a
- * template with an explicit `${PLACEHOLDER}` at every such position. This script is
- * the one path from a template to a document, and `iam/README.md` describes it.
+ * The applied documents name the target account, the CloudFormation execution role,
+ * and GitHub's immutable repository identity. None belongs in a public repository, so
+ * what is committed is a template with an explicit `${PLACEHOLDER}` at every such
+ * position. This script is the one path from a template to a document, and
+ * `iam/README.md` describes it.
  *
  * Three properties matter, and all three are asserted by `test/iam-render.test.ts`:
  *
@@ -20,8 +21,8 @@
  *      ARN that matches nothing, which denies every call at the deployment rather
  *      than at the moment the mistake was made.
  *   3. Nothing it prints or throws contains a supplied value. The run that renders
- *      the real documents is exactly the run whose output must not carry the account
- *      number, so every message names the placeholder and never its value.
+ *      the real documents is exactly the run whose output must not carry any of
+ *      those identifiers, so every message names the placeholder and never its value.
  */
 
 const fs = require('fs');
@@ -42,6 +43,11 @@ const placeholderRules = {
   ACCOUNT_ID: /^[0-9]{12}$/,
   // The character set IAM allows in a role name, and its length limit.
   CLOUDFORMATION_EXECUTION_ROLE_NAME: /^[\w+=,.@-]{1,64}$/,
+  // The exact prefix shape GitHub reports when immutable repository subjects are
+  // enabled. Both identities are canonical positive decimal integers: accepting a
+  // sign, zero, a leading zero, or another numeric notation would render a subject
+  // GitHub never issues.
+  GITHUB_REPOSITORY_IDENTITY: /^nbdSteve@[1-9][0-9]*\/ens-scout@[1-9][0-9]*$/,
 };
 
 const placeholderPattern = /\$\{([A-Za-z0-9_]+)\}/g;
@@ -134,6 +140,7 @@ function usage() {
     'usage:',
     '  node scripts/render-iam.js --example [--out-dir <dir>]',
     '  node scripts/render-iam.js --account-id <twelve digits>',
+    '      --repository-identity <owner@owner-id/repository@repository-id>',
     '      --execution-role-name <name> [--out-dir <dir>]',
   ].join('\n');
 }
@@ -143,6 +150,7 @@ function parseArgv(argv) {
   const flags = new Map([
     ['--account-id', 'ACCOUNT_ID'],
     ['--execution-role-name', 'CLOUDFORMATION_EXECUTION_ROLE_NAME'],
+    ['--repository-identity', 'GITHUB_REPOSITORY_IDENTITY'],
   ]);
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index];
@@ -150,19 +158,27 @@ function parseArgv(argv) {
       options.example = true;
       continue;
     }
-    const next = argv[index + 1];
-    if (next === undefined) {
-      throw new Error(`${argument} takes a value`);
-    }
-    index += 1;
     if (argument === '--out-dir') {
+      const next = argv[index + 1];
+      if (next === undefined) {
+        throw new Error('--out-dir takes a value');
+      }
+      index += 1;
       options.outDir = path.resolve(next);
       continue;
     }
     const placeholder = flags.get(argument);
     if (placeholder === undefined) {
-      throw new Error(`unknown argument ${argument}`);
+      throw new Error('unknown argument');
     }
+    const next = argv[index + 1];
+    if (next === undefined) {
+      throw new Error(`${argument} takes a value`);
+    }
+    if (Object.prototype.hasOwnProperty.call(options.values, placeholder)) {
+      throw new Error(`${argument} may be supplied only once`);
+    }
+    index += 1;
     options.values[placeholder] = next;
   }
   if (options.example && Object.keys(options.values).length > 0) {

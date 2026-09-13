@@ -7,14 +7,15 @@ detects drift: this directory plus `../test/deployment.test.ts` is what keeps th
 honest.
 
 The `*.template.json` files are committed source. They are templates rather than the
-applied documents because the applied documents name the account and the execution
-role, and neither belongs in a public repository. Every such position is an explicit
-`${PLACEHOLDER}`:
+applied documents because the applied documents name the account, the execution role,
+and GitHub's immutable repository identity, and none belongs in a public repository.
+Every such position is an explicit `${PLACEHOLDER}`:
 
 | Placeholder | What it is | Where the real value lives |
 | --- | --- | --- |
 | `${ACCOUNT_ID}` | The twelve-digit target account | Protected `production` environment variable `AWS_ACCOUNT_ID` |
 | `${CLOUDFORMATION_EXECUTION_ROLE_NAME}` | The role CloudFormation acts as | The role-name part of protected `production` environment variable `AWS_CLOUDFORMATION_EXECUTION_ROLE_ARN`; the full ARN is not rendered |
+| `${GITHUB_REPOSITORY_IDENTITY}` | GitHub's immutable `owner@owner-id/repository@repository-id` identity segment | The live repository OIDC customization; supplied out of band when rendering and never stored in a workflow variable |
 
 Everything else stays a literal, because it is committed elsewhere in this repository
 already and the test ties the documents to that copy: the region and the secret name
@@ -26,21 +27,25 @@ A placeholder for one of those would make the tie tautological.
 
 ```powershell
 node scripts/render-iam.js --example
-node scripts/render-iam.js --account-id <twelve digits> --execution-role-name <name>
+node scripts/render-iam.js --account-id <twelve digits> --repository-identity <owner@owner-id/repository@repository-id> --execution-role-name <name>
 ```
 
 Both write to `iam/rendered/`, which is ignored by git; rendered documents are never
 committed in place of the `*.template.json` source.
 The rendering is deterministic - the same inputs produce the same bytes - and it
 refuses a placeholder it does not know, a placeholder no value was supplied for, a
-supplied value no template uses, and a value that is not shaped like the thing it
-names.
+supplied value no template uses, a duplicate command-line value, and a value that is
+not shaped like the thing it names.
+The repository identity must name exactly `nbdSteve` and `ens-scout`, with one
+canonical positive decimal identity after each name. Missing, extra, signed, zero,
+leading-zero, and non-decimal forms are refused.
 No diagnostic it prints contains a supplied value, because the run that renders the
-real documents is the run whose output must stay free of the account number.
+real documents is the run whose output must stay free of every supplied identifier.
 
 `--example` renders with `example-values.json`, whose account is the same placeholder
-`../cdk.json` commits, so the example documents and the committed CDK context agree
-and a reviewer can read a whole rendered policy without knowing the real account.
+`../cdk.json` commits and whose GitHub identity uses synthetic positive decimals.
+The example documents and the committed CDK context therefore agree, and a reviewer
+can read a whole rendered policy without knowing any live identifier.
 
 Rendered documents are applied out of band with `aws iam put-role-policy` and
 `aws iam update-assume-role-policy`. Nothing in this repository applies them, and no
