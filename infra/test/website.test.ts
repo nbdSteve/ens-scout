@@ -92,7 +92,16 @@ describe('the public website', () => {
       (resource) =>
         (
           resource.Properties as {
-            CachePolicyConfig: { Comment: string; MinTTL: number; DefaultTTL: number; MaxTTL: number };
+            CachePolicyConfig: {
+              Comment: string;
+              MinTTL: number;
+              DefaultTTL: number;
+              MaxTTL: number;
+              ParametersInCacheKeyAndForwardedToOrigin: {
+                EnableAcceptEncodingBrotli: boolean;
+                EnableAcceptEncodingGzip: boolean;
+              };
+            };
           }
         ).CachePolicyConfig,
     );
@@ -102,7 +111,14 @@ describe('the public website', () => {
           Comment: 'The HTML shell and unhashed static files always revalidate',
           MinTTL: 0,
           DefaultTTL: 0,
-          MaxTTL: 0,
+          // A zero maximum makes this a disabled cache policy, which CloudFront
+          // rejects when either Accept-Encoding cache-key flag is enabled. The S3
+          // object metadata below is what requires every request to revalidate.
+          MaxTTL: 1,
+          ParametersInCacheKeyAndForwardedToOrigin: expect.objectContaining({
+            EnableAcceptEncodingBrotli: true,
+            EnableAcceptEncodingGzip: true,
+          }),
         }),
         expect.objectContaining({
           Comment: 'Vite content-hashed assets are immutable',

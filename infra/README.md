@@ -371,11 +371,14 @@ function rewrites only extensionless shell routes on the default behavior.
 the distribution defines no custom error response, so a missing immutable asset
 cannot return `index.html`.
 
-**Four cache classes.** The HTML shell and unhashed files do not cache, Vite's
-content-hashed assets cache for one year as immutable, snapshot GET/HEAD traffic
-uses the API's short cache lifetime under a one-hour ceiling, and health,
-fresh-check, and other `/api/*` traffic is cache-disabled. `internal/api` remains
-the authority for ETag, `Cache-Control`, CORS, and `no-store`.
+**Four cache classes.** The HTML shell and unhashed files always revalidate; their
+cache policy has a one-second maximum only because CloudFront rejects compression
+settings on a policy whose three TTLs are all zero, while the deployed objects carry
+`no-cache, must-revalidate`. Vite's content-hashed assets cache for one year as
+immutable, snapshot GET/HEAD traffic uses the API's short cache lifetime under a
+one-hour ceiling, and health, fresh-check, and other `/api/*` traffic is
+cache-disabled. `internal/api` remains the authority for ETag, `Cache-Control`, CORS,
+and `no-store`.
 The API entrypoint also sets the raw snapshot ceiling to 4 MiB, leaving room for
 the JSON-escaped Lambda proxy envelope under the buffered response limit.
 

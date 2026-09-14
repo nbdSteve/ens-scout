@@ -55,6 +55,12 @@
       ]
     },
     {
+      "Sid": "InvokeWebsiteDeploymentProvider",
+      "Effect": "Allow",
+      "Action": "lambda:InvokeFunction",
+      "Resource": "arn:aws:lambda:ap-southeast-2:${ACCOUNT_ID}:function:EnsScout-prod-CustomCDKBucketDeployment*"
+    },
+    {
       "Sid": "LambdaLayers",
       "Effect": "Allow",
       "Action": [
@@ -64,8 +70,10 @@
         "lambda:PublishLayerVersion"
       ],
       "Resource": [
-        "arn:aws:lambda:ap-southeast-2:${ACCOUNT_ID}:layer:EnsScout-prod-*",
-        "arn:aws:lambda:ap-southeast-2:${ACCOUNT_ID}:layer:EnsScout-prod-*:*"
+        "arn:aws:lambda:ap-southeast-2:${ACCOUNT_ID}:layer:PublicSiteDeployWebsiteAwsCliLayer*",
+        "arn:aws:lambda:ap-southeast-2:${ACCOUNT_ID}:layer:PublicSiteDeployWebsiteAwsCliLayer*:*",
+        "arn:aws:lambda:ap-southeast-2:${ACCOUNT_ID}:layer:PublicSiteDeployWebsiteAssetsAwsCliLayer*",
+        "arn:aws:lambda:ap-southeast-2:${ACCOUNT_ID}:layer:PublicSiteDeployWebsiteAssetsAwsCliLayer*:*"
       ]
     },
     {
@@ -124,14 +132,12 @@
         "s3:CreateBucket",
         "s3:DeleteBucket",
         "s3:DeleteBucketCors",
-        "s3:DeleteBucketEncryption",
         "s3:DeleteBucketLifecycle",
         "s3:DeleteBucketOwnershipControls",
         "s3:DeleteBucketPolicy",
         "s3:DeleteBucketWebsite",
         "s3:GetBucketAcl",
         "s3:GetBucketCors",
-        "s3:GetBucketEncryption",
         "s3:GetBucketLocation",
         "s3:GetBucketLogging",
         "s3:GetBucketOwnershipControls",
@@ -140,11 +146,11 @@
         "s3:GetBucketTagging",
         "s3:GetBucketVersioning",
         "s3:GetBucketWebsite",
+        "s3:GetEncryptionConfiguration",
         "s3:GetLifecycleConfiguration",
         "s3:ListBucket",
         "s3:PutBucketAcl",
         "s3:PutBucketCors",
-        "s3:PutBucketEncryption",
         "s3:PutBucketLifecycle",
         "s3:PutBucketLogging",
         "s3:PutBucketOwnershipControls",
@@ -152,7 +158,8 @@
         "s3:PutBucketPublicAccessBlock",
         "s3:PutBucketTagging",
         "s3:PutBucketVersioning",
-        "s3:PutBucketWebsite"
+        "s3:PutBucketWebsite",
+        "s3:PutEncryptionConfiguration"
       ],
       "Resource": [
         "arn:aws:s3:::ensscout-prod-*",
@@ -167,7 +174,8 @@
         "apigateway:GET",
         "apigateway:PATCH",
         "apigateway:POST",
-        "apigateway:PUT"
+        "apigateway:PUT",
+        "apigateway:TagResource"
       ],
       "Resource": [
         "arn:aws:apigateway:ap-southeast-2::/apis",
@@ -304,7 +312,10 @@
         "secretsmanager:UntagResource",
         "secretsmanager:UpdateSecret"
       ],
-      "Resource": "arn:aws:secretsmanager:ap-southeast-2:${ACCOUNT_ID}:secret:EnsScout-prod-*"
+      "Resource": [
+        "arn:aws:secretsmanager:ap-southeast-2:${ACCOUNT_ID}:secret:PublicSiteCheckClientSecret*",
+        "arn:aws:secretsmanager:ap-southeast-2:${ACCOUNT_ID}:secret:PublicSiteOriginSecret*"
+      ]
     },
     {
       "Sid": "GenerateServingSecretValues",

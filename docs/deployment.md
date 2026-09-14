@@ -216,9 +216,10 @@ Most resources it names carry the `EnsScout-prod-` prefix CloudFormation gives a
 auto-named resource. The exceptions are pinned in
 `infra/test/deployment.test.ts`: regional or no-resource describe calls, the
 existing Graph secret, the bootstrap bucket and version parameter, the lowercase
-S3 bucket name AWS requires, API Gateway's ID-addressed paths, and the CloudFront
-and random-secret-generation calls whose APIs do not provide a stack-name resource
-scope. A new exception is a failing test rather than a quiet widening.
+S3 bucket name AWS requires, API Gateway's ID-addressed paths, the two generated
+serving-secret prefixes, the two CDK bucket-deployment layer prefixes, and the
+CloudFront and random-secret-generation calls whose APIs do not provide a stack-name
+resource scope. A new exception is a failing test rather than a quiet widening.
 
 What it deliberately does not hold:
 
@@ -230,10 +231,14 @@ What it deliberately does not hold:
   creation.
 - One `iam:PassRole`, on `role/EnsScout-prod-*`, conditioned on
   `iam:PassedToService = lambda.amazonaws.com`.
+- Publish, read, and delete versions of only the two AWS CLI layers CDK generates for
+  the shell and immutable-asset bucket deployments, under their
+  `PublicSiteDeployWebsite...AwsCliLayer` prefixes.
 - `secretsmanager:GetSecretValue` on the existing Graph secret, plus create,
   update, add-version, delete, describe, tag, and read on
-  `secret:EnsScout-prod-*` for the two generated serving secrets, and
-  `GetRandomPassword` for their generated values.
+  the `secret:PublicSiteCheckClientSecret*` and
+  `secret:PublicSiteOriginSecret*` prefixes for the two generated serving secrets,
+  and `GetRandomPassword` for their generated values.
   The Graph credential reaches the function as a CloudFormation dynamic reference that
   this role resolves, and the generated check/origin values reach their consumers the
   same way. Those grants are here and not on any runtime role;

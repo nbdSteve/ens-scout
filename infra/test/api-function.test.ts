@@ -67,6 +67,29 @@ describe('the production read API', () => {
     template.resourceCountIs('AWS::Lambda::Url', 0);
   });
 
+  test('allows API Gateway to invoke the HTTP API default route ARN', () => {
+    const permissions = Object.values(template.findResources('AWS::Lambda::Permission')).filter(
+      (resource) => resource.Properties.Principal === 'apigateway.amazonaws.com',
+    );
+    expect(permissions).toHaveLength(1);
+    expect(permissions[0].Properties).toEqual(
+      expect.objectContaining({
+        Action: 'lambda:InvokeFunction',
+        FunctionName: {
+          'Fn::GetAtt': [expect.stringMatching(/^PublicSiteApiFunction/), 'Arn'],
+        },
+      }),
+    );
+    const sourceArn = permissions[0].Properties.SourceArn as {
+      'Fn::Join': [string, unknown[]];
+    };
+    expect(sourceArn['Fn::Join'][0]).toBe('');
+    expect(sourceArn['Fn::Join'][1].at(-1)).toBe('/*/*');
+    expect(sourceArn['Fn::Join'][1]).toContainEqual({
+      Ref: expect.stringMatching(/^PublicSiteHttpApi/),
+    });
+  });
+
   test('passes only production wiring and a response bound below the integration ceiling', () => {
     const variables = environmentVariables(template, originSecretEnvironment);
     expect(Object.keys(variables).sort()).toEqual(

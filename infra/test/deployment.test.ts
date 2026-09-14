@@ -418,6 +418,22 @@ describe('the CloudFormation execution role', () => {
     expect(actions(policy).filter((action) => action === 'iam:PassRole')).toHaveLength(1);
   });
 
+  test('manages only the two CDK website-deployment layers', () => {
+    const layers = statementNamed(policy, 'LambdaLayers');
+    expect(actions([layers])).toEqual([
+      'lambda:DeleteLayerVersion',
+      'lambda:GetLayerVersion',
+      'lambda:GetLayerVersionPolicy',
+      'lambda:PublishLayerVersion',
+    ]);
+    expect(asList(layers.Resource)).toEqual([
+      `arn:aws:lambda:${config.region}:${config.account}:layer:PublicSiteDeployWebsiteAwsCliLayer*`,
+      `arn:aws:lambda:${config.region}:${config.account}:layer:PublicSiteDeployWebsiteAwsCliLayer*:*`,
+      `arn:aws:lambda:${config.region}:${config.account}:layer:PublicSiteDeployWebsiteAssetsAwsCliLayer*`,
+      `arn:aws:lambda:${config.region}:${config.account}:layer:PublicSiteDeployWebsiteAssetsAwsCliLayer*:*`,
+    ]);
+  });
+
   test('names this stack own resources everywhere but the listed exceptions', () => {
     // CloudFormation names an auto-named resource `<stackName>-<logicalId>-<random>`,
     // so the stack name is a real prefix and every resource this role touches carries
@@ -433,6 +449,22 @@ describe('the CloudFormation execution role', () => {
         'ResolveTheGraphCredentialDynamicReference',
         [
           `arn:aws:secretsmanager:${config.region}:${config.account}:secret:${config.graphApiKeySecretName}-*`,
+        ],
+      ],
+      [
+        'LambdaLayers',
+        [
+          `arn:aws:lambda:${config.region}:${config.account}:layer:PublicSiteDeployWebsiteAwsCliLayer*`,
+          `arn:aws:lambda:${config.region}:${config.account}:layer:PublicSiteDeployWebsiteAwsCliLayer*:*`,
+          `arn:aws:lambda:${config.region}:${config.account}:layer:PublicSiteDeployWebsiteAssetsAwsCliLayer*`,
+          `arn:aws:lambda:${config.region}:${config.account}:layer:PublicSiteDeployWebsiteAssetsAwsCliLayer*:*`,
+        ],
+      ],
+      [
+        'GeneratedServingSecrets',
+        [
+          `arn:aws:secretsmanager:${config.region}:${config.account}:secret:PublicSiteCheckClientSecret*`,
+          `arn:aws:secretsmanager:${config.region}:${config.account}:secret:PublicSiteOriginSecret*`,
         ],
       ],
       [
@@ -488,9 +520,10 @@ describe('the CloudFormation execution role', () => {
         'secretsmanager:UpdateSecret',
       ]),
     );
-    expect(generated.Resource).toBe(
-      `arn:aws:secretsmanager:${config.region}:${config.account}:secret:${stackName}-*`,
-    );
+    expect(asList(generated.Resource)).toEqual([
+      `arn:aws:secretsmanager:${config.region}:${config.account}:secret:PublicSiteCheckClientSecret*`,
+      `arn:aws:secretsmanager:${config.region}:${config.account}:secret:PublicSiteOriginSecret*`,
+    ]);
     const random = statementNamed(policy, 'GenerateServingSecretValues');
     expect(actions([random])).toEqual(['secretsmanager:GetRandomPassword']);
   });
@@ -518,6 +551,31 @@ describe('synthesis under the deployment synthesizer', () => {
   });
   const assembly = app.synth();
   const artifact = assembly.getStackByName(stackName);
+  const template = artifact.template as {
+    Resources?: Record<string, { Type?: string }>;
+  };
+
+  function logicalIds(resourceType: string): string[] {
+    return Object.entries(template.Resources ?? {})
+      .filter(([, resource]) => resource.Type === resourceType)
+      .map(([logicalId]) => logicalId)
+      .sort();
+  }
+
+  function resourceNamePrefixes(sid: string, marker: string): string[] {
+    const statement = statementNamed(statements('cloudformation-execution-role-policy'), sid);
+    return [
+      ...new Set(
+        (asList(statement.Resource) as string[]).map((resource) => {
+          const start = resource.indexOf(marker);
+          if (start < 0) {
+            throw new Error(`statement ${sid} has a resource outside ${marker}`);
+          }
+          return resource.slice(start + marker.length).replace(/\*.*/, '');
+        }),
+      ),
+    ].sort();
+  }
 
   test('depends on none of the CDK bootstrap roles', () => {
     // This is what the narrow deployment policy rests on. Any of these three present
@@ -546,6 +604,47 @@ describe('synthesis under the deployment synthesizer', () => {
       expect(destination.assumeRoleArn).toBeUndefined();
     }
     expect(artifact.stackTemplateAssetObjectUrl).toContain(`s3://${assetBucket}/`);
+  });
+
+  test('keeps the generated-secret grants tied to both synthesized secret resources', () => {
+    const logical = logicalIds('AWS::SecretsManager::Secret');
+    const prefixes = resourceNamePrefixes('GeneratedServingSecrets', ':secret:');
+    expect(logical).toHaveLength(2);
+    expect(prefixes).toHaveLength(2);
+    for (const logicalId of logical) {
+      expect(prefixes.filter((prefix) => logicalId.startsWith(prefix))).toHaveLength(1);
+    }
+    for (const prefix of prefixes) {
+      expect(logical.filter((logicalId) => logicalId.startsWith(prefix))).toHaveLength(1);
+    }
+  });
+
+  test('keeps the layer grants tied to both synthesized website-deployment layers', () => {
+    const logical = logicalIds('AWS::Lambda::LayerVersion');
+    const prefixes = resourceNamePrefixes('LambdaLayers', ':layer:');
+    expect(logical).toHaveLength(2);
+    expect(prefixes).toHaveLength(2);
+    for (const logicalId of logical) {
+      expect(prefixes.filter((prefix) => logicalId.startsWith(prefix))).toHaveLength(1);
+    }
+    for (const prefix of prefixes) {
+      expect(logical.filter((logicalId) => logicalId.startsWith(prefix))).toHaveLength(1);
+    }
+  });
+
+  test('invokes only the synthesized website-deployment provider function', () => {
+    const statement = statementNamed(
+      statements('cloudformation-execution-role-policy'),
+      'InvokeWebsiteDeploymentProvider',
+    );
+    expect(actions([statement])).toEqual(['lambda:InvokeFunction']);
+    const providers = logicalIds('AWS::Lambda::Function').filter((logicalId) =>
+      logicalId.startsWith('CustomCDKBucketDeployment'),
+    );
+    expect(providers).toHaveLength(1);
+    expect(asList(statement.Resource)).toEqual([
+      `arn:aws:lambda:${config.region}:${config.account}:function:${stackName}-CustomCDKBucketDeployment*`,
+    ]);
   });
 });
 

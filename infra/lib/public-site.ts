@@ -109,7 +109,9 @@ export class PublicSite extends Construct {
       {
         payloadFormatVersion: apigwv2.PayloadFormatVersion.VERSION_2_0,
         timeout: apiIntegrationTimeout,
-        scopePermissionToRoute: false,
+        // The $default route invokes an execute-api ARN ending in /*/*, without
+        // the resource-path segment used by named routes.
+        scopePermissionToRoute: true,
       },
     );
     this.httpApi = new apigwv2.HttpApi(this, 'HttpApi', {
@@ -143,7 +145,11 @@ export class PublicSite extends Construct {
       comment: 'The HTML shell and unhashed static files always revalidate',
       minTtl: Duration.seconds(0),
       defaultTtl: Duration.seconds(0),
-      maxTtl: Duration.seconds(0),
+      // CloudFront rejects Accept-Encoding cache-key settings when all three TTLs
+      // are zero. The shell objects carry `no-cache, must-revalidate`, so the
+      // non-zero ceiling makes the policy valid without letting a request skip
+      // revalidation; it only bounds an object whose metadata was somehow absent.
+      maxTtl: Duration.seconds(1),
       enableAcceptEncodingBrotli: true,
       enableAcceptEncodingGzip: true,
     });
