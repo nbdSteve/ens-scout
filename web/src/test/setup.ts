@@ -20,9 +20,8 @@ afterEach(() => {
  * for a preference nobody expressed, and the listener pair is real so a component
  * can subscribe and unsubscribe.
  *
- * A test that cares which way a query answers - the ambient optical loop, at
- * either breakpoint and under either motion preference - replaces this with its
- * own fake rather than reaching through it.
+ * A test that cares which way a query answers replaces this with its own fake
+ * rather than reaching through it.
  */
 if (typeof window.matchMedia !== 'function') {
   window.matchMedia = (media: string): MediaQueryList => {

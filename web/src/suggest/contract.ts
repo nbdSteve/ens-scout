@@ -73,7 +73,7 @@ export const THEME_MAX_CHARS = 60
 /**
  * How many names the recommender may consider, and therefore how many the model is ever
  * shown. The shortlist is built by `shortlist.ts` from the loaded snapshot and the
- * filters already applied to the table, so this bounds the prompt and nothing else.
+ * filters already applied to the name field, so this bounds the prompt and nothing else.
  */
 export const SHORTLIST_MAX = 24
 

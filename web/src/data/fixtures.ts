@@ -24,7 +24,8 @@ export function isFixtureId(value: unknown): value is FixtureId {
 
 /** What each fixture demonstrates, shown in the local-preview notice. */
 export const FIXTURE_DESCRIPTION: Readonly<Record<FixtureId, string>> = {
-  preview: 'One name in every lifecycle status, scanned within its expected schedule.',
+  preview:
+    'The committed lifecycle fixture, expanded in this frontend with a dense set of available names for layout review.',
   stale: 'The same names, scanned three days earlier, so every staleness warning fires.',
 }
 
@@ -52,5 +53,11 @@ const LOADERS: Readonly<Record<FixtureId, () => Promise<FixturePayload>>> = {
 
 /** Loads one fixture's snapshot document and latest pointer, unvalidated. */
 export function loadFixture(id: FixtureId): Promise<FixturePayload> {
-  return LOADERS[id]()
+  return LOADERS[id]().then(async (payload) => {
+    if (id !== 'preview') {
+      return payload
+    }
+    const { densePreview } = await import('./densePreview')
+    return densePreview(payload)
+  })
 }

@@ -130,18 +130,12 @@ describe('VerifyBar actions', () => {
     expect(screen.queryByRole('button', { name: 'Clear selection' })).toBeNull()
   })
 
-  /*
-   * ENS is named on the action as well as on the link, because the visitor decides to
-   * check here and a check is the thing most easily mistaken for an answer.
-   */
-  it('states that ENS decides, and that a check reserves nothing', () => {
+  it('keeps the active selection bar compact instead of repeating explanatory prose', () => {
     mount({ selected: ['aaaa.eth'] })
 
-    expect(
-      screen.getByText(
-        /not a reservation, and ENS is the final authority on whether a name can be registered/,
-      ),
-    ).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Check these now' })).toBeVisible()
+    expect(screen.queryByText(/not a reservation/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/final authority/)).not.toBeInTheDocument()
   })
 })
 

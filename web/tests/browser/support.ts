@@ -19,10 +19,8 @@ import { expect, test, type BrowserContext, type Locator, type Page } from '@pla
  * `stale` fixture. It does not need to: moving the clock forward past a source
  * list's window makes the same snapshot stale, which is the code path that matters.
  *
- * The page opens on the available view, which the fixture answers with two of its
- * ten names. So a test about the table itself - every status, every countdown, the
- * longest strings, ten rows - asks for `view=all` rather than reading whatever the
- * landing view happens to hold.
+ * The frontend expands the preview with a dense available-name set for layout
+ * coverage. The committed snapshot remains the source of lifecycle behavior.
  */
 
 /**
@@ -105,11 +103,8 @@ export function results(page: Page): Locator {
 /**
  * Opens a `<details>` by its summary, and waits until it is open.
  *
- * Two things on the page are disclosures - the extra filters and the scan details -
- * and their content is display:none until asked for. A `boundingBox()` inside a
- * closed one is `null` and a `getBoundingClientRect()` is all zeroes, so a layout
- * or contrast assertion made against a closed disclosure passes without checking
- * anything. Every test that measures or inspects that content opens it first.
+ * A `boundingBox()` inside a closed disclosure is `null`, so layout and contrast
+ * checks open the relevant panel first.
  */
 async function open(page: Page, name: string): Promise<void> {
   const summary = page.locator('summary').filter({ hasText: name })
@@ -121,12 +116,23 @@ async function open(page: Page, name: string): Promise<void> {
 
 /** Opens the source-list, sort, and status controls. */
 export function openMore(page: Page): Promise<void> {
-  return open(page, 'More filters')
+  return open(page, 'More')
 }
 
-/** Opens the provenance, per-list schedules, counts, lifecycle rules, and method. */
-export function openDetails(page: Page): Promise<void> {
-  return open(page, 'Scan details, source lists, and method')
+/** Opens the compact length controls. */
+export function openLength(page: Page): Promise<void> {
+  return open(page, 'Length')
+}
+
+/** Opens snapshot provenance and notices in the accessible Data drawer. */
+export async function openData(page: Page): Promise<Locator> {
+  await page.getByRole('banner').getByRole('button', { name: /^Data/ }).click()
+  const drawer = page.getByRole('dialog', { name: 'Data' })
+  await expect(drawer).toBeVisible()
+  await drawer.evaluate(async (node) => {
+    await Promise.all(node.getAnimations().map(async (animation) => animation.finished))
+  })
+  return drawer
 }
 
 const WCAG_TAGS = ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa']
@@ -177,5 +183,5 @@ export function searchOf(page: Page): string {
  * of two would depend on document order rather than on meaning.
  */
 export function matchCount(page: Page): Locator {
-  return page.getByRole('status').filter({ hasText: /names? match/ })
+  return page.locator('.editorial-heading__count')
 }

@@ -27,12 +27,19 @@ import { ensAppUrl } from '../snapshot/lifecycle'
  */
 export interface EnsAppLinkProps {
   readonly name: string
+  readonly children?: ReactNode
+  readonly className?: string
 }
 
-export function EnsAppLink({ name }: EnsAppLinkProps): ReactNode {
+export function EnsAppLink({ name, children, className }: EnsAppLinkProps): ReactNode {
   return (
-    <a className="ens-link" href={ensAppUrl(name)} rel="noopener noreferrer" target="_blank">
-      <span className="mono">{name}</span>{' '}
+    <a
+      className={className === undefined ? 'ens-link' : `ens-link ${className}`}
+      href={ensAppUrl(name)}
+      rel="noopener noreferrer"
+      target="_blank"
+    >
+      {children ?? <span className="mono">{name}</span>}{' '}
       <span className="visually-hidden">
         on the ENS app, which is the final authority on whether it can be registered, opens in a new
         tab

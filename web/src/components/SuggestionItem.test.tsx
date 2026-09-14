@@ -208,7 +208,7 @@ describe('picking a suggestion for a check', () => {
     expect(screen.getByRole('checkbox', { name: 'Fresh check moss.eth' })).toBeInTheDocument()
   })
 
-  it('reports a tick to the same handler the table uses', async () => {
+  it('reports a tick to the same handler the name field uses', async () => {
     const onToggle = vi.fn<(name: string) => void>()
     mount({ verify: binding({ onToggle }) })
 

@@ -28,7 +28,7 @@ export function SummaryCounts({ metadata }: SummaryCountsProps): ReactNode {
     <section className="card summary" aria-labelledby="summary-heading">
       <div>
         {/* An `h3`, for the same reason as the scan card: this sits inside the
-            disclosure below the results, not at the top level of the page. */}
+            Data drawer, not at the top level of the page. */}
         <h3 className="card__title" id="summary-heading">
           What this scan found
         </h3>

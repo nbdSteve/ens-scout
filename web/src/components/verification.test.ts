@@ -8,7 +8,7 @@ import { rowVerifiedName, rowVerification, rowVerifyNote, type VerifyBinding } f
  *
  * Both cells of a row read one `RowVerification`, so a disagreement between the link
  * and the fresh status would be a bug in exactly one function. These tests are that
- * function's, and `ResultsTable.test.tsx` proves the cells really read it.
+ * function's, and `NameField.test.tsx` proves the cells really read it.
  */
 
 const CHECKED_AT = new Date('2026-03-01T12:00:00Z')

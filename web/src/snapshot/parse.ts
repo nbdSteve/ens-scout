@@ -30,7 +30,7 @@ import type {
  * the wire format promises is checked here: the format version, the canonical
  * name ordering, the derived counts, the source totals, and the staleness
  * thresholds. A document that breaks one is a malformed document, and the caller
- * renders an explicit error instead of a half-populated table.
+ * renders an explicit error instead of a half-populated discovery field.
  *
  * What is deliberately *not* checked is the ENS lifecycle: this reader never
  * derives a grace end or a premium end from an expiry, and never decides whether

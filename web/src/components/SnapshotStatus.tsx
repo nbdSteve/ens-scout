@@ -49,8 +49,8 @@ export function SnapshotStatus({
   return (
     <section className="card scan" aria-labelledby="scan-heading">
       <div>
-        {/* An `h3`, because this card lives inside the disclosure below the
-            results rather than at the top level of the page. */}
+        {/* An `h3`, because this card lives inside the Data drawer below its
+            heading rather than at the top level of the page. */}
         <h3 className="card__title" id="scan-heading">
           Scan
         </h3>

@@ -884,9 +884,8 @@ never the ENS availability authority.
 
 - Never classify, and never derive one boundary from another. The snapshot
   carries the status, the expiry, the grace end, and the premium end, so the
-  browser reads them. A countdown reaching zero means the recorded moment has
-  passed on that device's clock, not that the name moved on. Only a later scan
-  can say that, and the passed case must say so in words.
+  browser reads them. Time passing on a device never moves a published result
+  into another status; only a later scan or fresh check can provide a newer claim.
 - Keep `src/snapshot/contract.ts` to the few values a reader cannot derive from
   the payload: the accepted format version, the cadence intervals, and the
   staleness factor. Per-group staleness needs each cadence's interval and the
@@ -917,13 +916,13 @@ never the ENS availability authority.
   here too, because a suggested name is less verified than a scanned one. Expiry is
   judged against the instant the caller renders at, so `?now=` moves it and an expired
   check is demonstrable.
-- `components/verification.ts` is the one per-row derivation, and the table is handed a
-  binding or nothing. Nothing means the deployment has no verifier, and then there are
+- `components/verification.ts` is the one per-name derivation, and the spatial field is
+  handed a binding or nothing. Nothing means the deployment has no verifier, and then there are
   no tick boxes and no outbound links at all, because a link the gate cannot judge is
   one this page cannot stand behind.
 - A snapshot answer and a fresh answer are two claims about two different moments, so
   the page shows them as two and states the instant the fresh one was obtained. When a
-  fresh check fails, the row keeps saying what the snapshot said and says the check did
+  fresh check fails, the name cell keeps the snapshot presentation and says the check did
   not happen; it never presents the snapshot status as the verified one, and it never
   clears the visitor's selection or their draft. Every outbound action says ENS decides,
   because a name the index does not hold may still fail to register.
@@ -935,16 +934,16 @@ never the ENS availability authority.
   with a default, so a code Go adds is a type error here instead of silently becoming
   the vaguest kind. There is deliberately no rendered countdown to a retry: the wait is
   a decision the page acts on, not a number on screen that keeps aging.
-- A fixture-mode name is therefore never a link, so a browser test reads row headers
-  rather than links. Reading links collected nothing and quietly turned every order
+- A fixture-mode name is therefore never a link, so a browser test reads the visible
+  name labels rather than links. Reading links collected nothing and quietly turned every order
   comparison in `url-state.spec.ts` into `[]` against `[]`.
 - No comment anywhere in `web/src/` may name a forbidden literal. Vite ships source
   maps, so every comment there is a file `dist/` serves and the `assets` project scans;
   reword the comment rather than narrowing the pattern.
 - `resolveSourceGroups` is the one place a list's freshness is decided, and it
-  measures each list from that list's own `lastScannedAt`. The trust line, the
-  banner, and the per-list tile all read it, so a stopped schedule is reported the
-  same way in all three. `parseSources` refuses a payload without those instants
+  measures each list from that list's own `lastScannedAt`. The terse snapshot badge,
+  the warning in the Data drawer, and the per-list tile all read it, so a stopped
+  schedule is reported the same way in all three. `parseSources` refuses a payload without those instants
   instead of falling back to the snapshot-wide scan time, and the tile states the
   instant beside the figure derived from it: a carried list is older than the scan
   time above it, so the schedule alone would not be relatable to anything.
@@ -956,37 +955,28 @@ never the ENS availability authority.
 - Fixture selection is build-time, so a browser test cannot switch fixtures at
   run time. To exercise a stale snapshot in the browser, move the clock forward
   against the `preview` fixture instead.
-- Always honour `?now=` and always announce it. The committed fixtures are
-  permanently stale against a real clock, so the simulated clock is how the page
-  is demonstrated. A page that quietly used a different time than it displayed
-  would be worse than a stale one.
-- The list is the page. Nothing explanatory goes above it: the first screen is the
-  view's title with its count, one trust line, the view tabs, search with the length
-  pair, and then names. Provenance, per-list schedules, lifecycle wording, and method
-  all live in the one disclosure below the results. That budget is measured at 1440x900
-  by `the first screen is the answer, not an introduction`, so anything new above the
-  list is charged against a name row. The `preview` fixture holds two available names,
-  which is why that test asks for `view=all`.
-- The page carries no brand and no header, and both are tested rather than merely
-  absent. There is deliberately no `banner` landmark, so `accessibility.spec.ts` asserts
-  a count of zero: an empty header landmark would send a screen-reader user to a dead
-  stop. The favicon deliberately carries no `role` and no `aria-label`, because the
-  browser already labels the tab with the document title and an accessible name there
-  was how the product name kept being read out.
-- The top-left 240 by 120 CSS pixel area holds nothing but the skip link while it has
-  focus, and the optical layers behind the page. Clear it downwards with block-start
-  padding, never sideways with an inline indent: the content column starts at x=224 at
-  1440px and at x=42 at 834px, so an indent satisfies the rule on a desktop and
-  silently fails on a tablet. `--corner-clear` is a fixed pixel length rather than a
-  rem on purpose, so a larger root font size cannot satisfy it and a smaller one cannot
-  break it.
-- The optical background in `src/optics/` is ambient and time-driven only. It reads no
-  pointer, hover, focus, selected name, or composer coordinate, and it imports nothing
-  from `components/` or `state/`, so a coordinate is unavailable rather than merely
-  unused. Reduced motion freezes it in a deliberate static composition rather than a
-  stalled one, and `index.css` pins all seven custom properties so the page is static
-  before any script runs; `constellation.spec.ts` compares those pins numerically
-  against `staticFrame`, because nothing else joins the stylesheet to `ambient.ts`.
+- Always honour `?now=` and always announce it. The terse snapshot strip names the
+  preview day, and the Data drawer explains the exact simulated instant and offers the
+  way back to real time. The committed fixtures are permanently stale against a real
+  clock, so a page that quietly used a different time than it displayed would be worse
+  than a stale one.
+- The spatial name field is the primary discovery path. Above it stays only the
+  near-white editorial header, the view title and count, the compact black filter dock,
+  and the terse snapshot strip. Provenance, schedule detail, lifecycle wording, URL
+  advisories, and method live in the accessible Data drawer. At 1440x900 the first six
+  available names must be fully visible; at 320x568 the first name must begin above
+  320px. `layout.spec.ts` owns those budgets.
+- Keep Available as the default view and keep the frontend-only `preview` augmentation
+  dense enough to exercise the composition without changing the committed Go fixture.
+  It includes at least twelve available names plus long labels for containment coverage.
+- The header is a real `banner` landmark with the local ENS Scout CSS mark, Data, and
+  the outbound ENS action. Do not import or copy Graph artwork or branding.
+- `state/nameVisual.ts` is the one deterministic seed for per-name bloom position,
+  accent, and entry delay. These values are decorative and carry no lifecycle meaning.
+  `NameField` may update one field-level light from pointer coordinates through a single
+  queued animation frame; hover and keyboard focus must produce equivalent cell feedback.
+  Reduced motion disables entry drift, transforms, drawer motion, and pointer-following
+  updates while preserving every interaction.
 - A length range whose bounds cross is kept and reported, never repaired. `parseQuery`
   holds it, `serializeQuery` round-trips it, `isInvertedRange` is the one predicate for
   it, and `filterResults` skips the length filter rather than applying a range no label
@@ -1005,22 +995,19 @@ never the ENS availability authority.
   same value in a link must reach the same words, and the wording names the requirement
   rather than the span: 3.5 sits between 1 and 64 and is still not a label length.
 - A box holding a value that names no length is reported from the box, never from the URL.
-  `useLengthDrafts` lives above the toolbar because the advisory renders above the list and
-  both have to read the same draft. A refused bound is not in the URL at all, so anything
+  `useLengthDrafts` lives above the toolbar because the Data drawer and field both need
+  the same draft. A refused bound is not in the URL at all, so anything
   derived from the URL reports it for one render and then loses it while the box carries on
   showing a number that filters nothing. The notice therefore lasts exactly as long as the
   mismatch, across a keystroke elsewhere, a sort change, and a back navigation.
-- Every query value the page was asked for and is not applying goes in the one `Not applied`
-  band, because each is one line and a second band above the list is charged against a name
-  row by `the first screen is the answer, not an introduction`. A list problem gets a band of
-  its own: it needs a recovery link rather than a line, and the two list cases are mutually
-  exclusive, so it never costs more than one.
-  The advisories block, not the band, is the polite live region, and it is mounted from the
+- Every query value the page was asked for and is not applying goes in the Data drawer's
+  one `Not applied` notice. A list problem gets its own drawer notice because it needs a
+  recovery link and the two list cases are mutually exclusive.
+  The hidden advisories block, not the visible notice, is the polite live region, and it is mounted from the
   first paint even when it holds nothing. A region rendered only when it has something to say
   enters the DOM together with its first line, and a live region created with its content is
-  announced by nothing - which was the common case here, because one line is usually all
-  there is. Keep it mounted and keep it collapsed while empty; do not move the region back
-  onto the band. An assertive region is wrong for the same block, because its length lines
+  announced by nothing. Keep it mounted and keep it visually hidden while empty; do not move
+  the live semantics onto the drawer notice. An assertive region is wrong for the same block, because its length lines
   change while the visitor types and would be read over them on every digit. Each length line
   carries the id its box points `aria-describedby` at and is keyed by the box rather than by
   its wording, so correcting a rejected value rewrites the text in place instead of removing
@@ -1047,7 +1034,7 @@ never the ENS availability authority.
   reload in one of them and left with a button that could not succeed in the other.
 - Whether a named source list exists is decided in `App`, not in `parseQuery`, which never
   sees a snapshot. Two opposite things go wrong and the visitor has to be told which: an
-  unattributable snapshot shows every row, and a snapshot with no such list shows none.
+  unattributable snapshot shows every name, and a snapshot with no such list shows none.
 - The local cache key carries the wire version, so a `FormatVersion` bump orphans the
   previous key: nothing reads it and nothing replaces it. `cache.ts` sweeps every
   `ens-scout.snapshot.v<n>` key that is not the current one, on the clear path, after a
@@ -1082,22 +1069,12 @@ never the ENS availability authority.
   `src/`. A document the production parser helped construct agrees with it by
   construction, and what those specs are for is the parser refusing one: a different
   covered set, a newer format version, a refusal body carrying text.
-- Separate inline metadata with space, not with a separator element. The trust line
-  and the clock notice wrap at ordinary widths, and an interpunct or bullet of its
-  own becomes the last glyph of a wrapped line, pointing at nothing.
-- Never set `display: block` on a table part. It silently removes the table
-  roles a screen reader navigates by. Do responsive work with column widths and
-  wrapping instead.
-- `.results__scroll` is `position: relative` because it has to clip, not because
-  anything in it is positioned against it. An `overflow` ancestor clips an absolutely
-  positioned descendant only when it is in that descendant's containing-block chain,
-  and the table is full of them: left static, the `visually-hidden` announcements and
-  the caption resolved against an ancestor above it, escaped the clip, and put a whole
-  column's width back into the document - a page that scrolls sideways at 320px with
-  nothing out there to find. Its `overflow-y` is `hidden` rather than left alone for a
-  second reason: `visible` computes to `auto` beside an `auto` on the other axis, and
-  the rows arrive by translating upwards, so the vertical axis would grow a scrollbar
-  for the length of every entry animation.
+- Keep decorative separators in the snapshot strip `aria-hidden`, so its accessible
+  reading remains terse and does not announce punctuation as content.
+- The name field reflows three columns to two and then one. Every grid track and flex
+  child that can contain a name uses `minmax(0, 1fr)` or `min-width: 0`, and long labels
+  wrap inside their own cell. Never restore a nested horizontal scroller or make the
+  document depend on clipping to satisfy 320px reflow.
 - Pin dependencies exactly and commit `package-lock.json`. ESLint and TypeScript
   sit below the current latest on purpose; `web/README.md` records which upstream
   ranges hold them there.
@@ -1202,8 +1179,8 @@ measured; these are the rules behind the code.
   Whether the runtime then tries to download weights depends on whether the machine has an adapter with `shader-f16`, which a CI container may lack and a developer's laptop may have.
   Removing the guard makes the suite contact a model host on some machines and not others.
   It is also why a browser test drives an unsupported device through the probe's verdict rather than by removing `navigator.gpu`, which no launch flag does.
-- A suggestion is gated exactly like a scanned row and there is no shortcut. `SuggestionItem`
-  derives its row through the same `rowVerification` the table uses, so one fresh check
+- A suggestion is gated exactly like a scanned name and there is no shortcut. `SuggestionItem`
+  derives its verification through the same `rowVerification` the spatial field uses, so one fresh check
   covering the name and still current is the only thing that opens an outbound link. If
   anything a suggested name is less verified than a scanned one, since it was chosen for how
   it reads rather than for what the index said.

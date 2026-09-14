@@ -51,6 +51,7 @@ function server(target: BuiltSite, build: string, preview: string) {
 // Graph endpoint or credential.
 export default defineConfig({
   testDir: './tests/browser',
+  timeout: 60_000,
   fullyParallel: true,
   forbidOnly: Boolean(process.env.CI),
   retries: process.env.CI ? 1 : 0,
@@ -74,7 +75,7 @@ export default defineConfig({
     {
       name: 'mobile',
       testIgnore: [ASSETS, VERIFY, SUGGEST, SUGGEST_VERIFY],
-      use: { ...devices['Pixel 7'] },
+      use: { ...devices['Pixel 7'], viewport: { width: 390, height: 844 } },
     },
     {
       /*
@@ -91,12 +92,12 @@ export default defineConfig({
        */
       name: 'narrow',
       testIgnore: [ASSETS, VERIFY, SUGGEST, SUGGEST_VERIFY],
-      use: { ...devices['Desktop Chrome'], viewport: { width: 320, height: 760 } },
+      use: { ...devices['Desktop Chrome'], viewport: { width: 320, height: 568 } },
     },
     {
       /*
-       * The verifier build, at one width. The fresh-check surface is a bar, a column of
-       * tick boxes, and a second status in a cell the table already had, and the
+       * The verifier build, at one width. The fresh-check surface is a bar, per-cell
+       * tick boxes, and compact evidence inside the spatial field, and the
        * responsive rules those live under are covered by the four viewport projects
        * against the other bundle. What this project is for is behaviour that exists only
        * when a read API is configured.

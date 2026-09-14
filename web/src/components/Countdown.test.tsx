@@ -37,7 +37,7 @@ describe('Countdown ahead of the clock', () => {
     render(<Countdown boundary={boundary('2026-03-04T15:04:05Z')} now={NOW} />)
 
     // A value that changes every second must not be announced every second, and
-    // fifty rows of them would make the table unusable.
+    // fifty instances would create needless work.
     expect(screen.getByText('3d 03:04:05')).toHaveAttribute('aria-hidden', 'true')
     expect(screen.getByText('registration expires in 3 days 3 hours')).toBeInTheDocument()
   })

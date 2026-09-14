@@ -21,12 +21,12 @@ import { MINUTE, SCANNED_AT, since, visit } from './support'
  * exists. `VITE_API_BASE_URL` is what turns the tick boxes and the outbound links on at
  * all, so a suite against the fixture build can prove there are no links and this one is
  * what proves the links that do appear were earned. `verify.spec.ts` does the same for the
- * results table; what is different here is that a suggested name has been chosen for how it
+ * spatial name field; what is different here is that a suggested name has been chosen for how it
  * reads rather than for what the index said about it, so if anything it is less verified
  * than a scanned one and the same gate is the least that can apply.
  *
  * There is deliberately no path in `src/` that could differ. `SuggestionItem` derives its
- * row through `rowVerification`, which is the function the table uses, which calls
+ * cell through `rowVerification`, which is the function the field uses, which calls
  * `verify/gate.ts`, which takes no parameter a caller could use to claim a name is special.
  * These tests are what proves that arrangement end to end - through a real POST, a real
  * response, the real parser, and the real gate - rather than in a unit test that hands the
@@ -47,17 +47,17 @@ function suggestions(page: Page) {
   return page.locator('.suggestion')
 }
 
-/** One suggestion's own list item, so an assertion cannot drift onto a table row. */
+/** One suggestion's own list item, so an assertion cannot drift onto the main field. */
 function suggestionFor(page: Page, name: string) {
   return suggestions(page).filter({ hasText: name })
 }
 
-/** The tick box inside the panel, which is the panel's own and not the table's. */
+/** The tick box inside the panel, which is the panel's own and not the main field's. */
 function suggestionTick(page: Page, name: string) {
   return panel(page).getByRole('checkbox', { name: `Fresh check ${name}` })
 }
 
-/** The panel's own check action, which is not the table's bar. */
+/** The panel's own check action, which is not the field's bar. */
 function panelCheck(page: Page) {
   return panel(page).getByRole('button', { name: 'Check the ticked names now' })
 }
@@ -224,7 +224,7 @@ test('a refused check leaves the suggestion unlinked and quotes nothing', async 
   await expect(suggestions(page)).not.toHaveCount(0)
 })
 
-test('a check made from the table also opens the matching suggestion', async ({ page }) => {
+test('a check made from the name field also opens the matching suggestion', async ({ page }) => {
   await open(page)
   const offered = await askForNames(page)
   const first = offered[0] ?? AMBER
@@ -234,13 +234,13 @@ test('a check made from the table also opens the matching suggestion', async ({ 
   })
 
   /*
-   * Ticked in the table, not in the panel, and checked with the table's own bar.
+   * Ticked in the field, not in the panel, and checked with the field's own bar.
    *
    * One verified set for the page, because there is one gate. A second store for the panel
    * would be a second answer to whether a name may be acted on, and a visitor who has just
-   * checked a name in the table would find the same name unlinked below.
+   * checked a name in the field would find the same name unlinked below.
    */
-  await page.getByRole('row').filter({ hasText: first }).getByRole('checkbox').check()
+  await page.locator('.name-cell').filter({ hasText: first }).getByRole('checkbox').check()
   await checkButton(page).click()
 
   await expect(ensLinkFor(page, first)).toHaveCount(1)
@@ -274,7 +274,7 @@ test('a fresh status that disagrees with the scan is what the suggestion carries
    * both rather than reconciling them.
    */
   await expect(suggestionFor(page, first).getByRole('link')).toHaveCount(1)
-  await expect(page.getByRole('row').filter({ hasText: first })).toContainText('Registered')
+  await expect(page.locator('.name-cell').filter({ hasText: first })).toContainText('Registered')
   await expect(suggestionFor(page, first)).toContainText('Registered')
   await expect(suggestionFor(page, first).locator('time')).toHaveAttribute('datetime', since(0))
 })

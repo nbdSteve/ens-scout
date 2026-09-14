@@ -39,9 +39,10 @@ export function ViewTabs({ current, counts, hrefForView }: ViewTabsProps): React
                 href={hrefForView(view.id)}
                 title={view.summary}
               >
-                {view.label} <span className="views__count">{count.toLocaleString('en-GB')}</span>{' '}
+                {view.label}{' '}
                 <span className="visually-hidden">
-                  {count === 1 ? 'name matches' : 'names match'}. {view.summary}
+                  {count.toLocaleString('en-GB')} {count === 1 ? 'name matches' : 'names match'}.{' '}
+                  {view.summary}
                 </span>
               </a>
             </li>

@@ -1,5 +1,5 @@
 import { codePointLength, codePoints, compareNames } from '../format/text'
-import { fnv1a } from '../constellation/compose'
+import { fnv1a } from '../state/nameVisual'
 import type { SnapshotResult } from '../snapshot/types'
 import { EXPLANATION_MAX_CHARS, SHORTLIST_MAX, SUGGESTIONS_MAX } from './contract'
 import { preferenceKey, termsOf, type Preference } from './vibes'

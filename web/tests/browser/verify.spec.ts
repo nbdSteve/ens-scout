@@ -5,6 +5,7 @@ import {
   checkDocument,
   checkingButton,
   ensLinkFor,
+  fieldLinks,
   failureBanner,
   fulfilCheck,
   hold,
@@ -13,7 +14,6 @@ import {
   refuseCheck,
   rowFor,
   stubCheck,
-  tableLinks,
   tickBox,
   type CheckAnswer,
   type CheckedName,
@@ -77,9 +77,8 @@ test('no name is a link until a fresh check covers it', async ({ page }) => {
   await openVerified(page, { view: 'all' })
 
   // The whole rule, stated as a count. A published snapshot on its own earns no
-  // outbound link anywhere on the page, whatever any row's status says.
-  await expect(tableLinks(page)).toHaveCount(0)
-  await expect(page.getByText('No fresh check')).toHaveCount(ALL_NAMES.length)
+  // outbound link anywhere in the field, whatever any recorded status says.
+  await expect(fieldLinks(page)).toHaveCount(0)
 
   // And the bar draws nothing until there is a selection, so the first screen still
   // opens on the names.
@@ -109,8 +108,8 @@ test('a check that lands links the name out and states when it was read', async 
 
   // Exactly the ticked name was asked about, and only it was covered.
   expect(asked).toEqual([AMBER])
-  await expect(tableLinks(page)).toHaveCount(1)
-  await expect(rowFor(page, ORB)).toContainText('No fresh check')
+  await expect(fieldLinks(page)).toHaveCount(1)
+  await expect(rowFor(page, ORB).getByRole('link')).toHaveCount(0)
 })
 
 test('a fresh status that disagrees with the scan is shown beside it', async ({ page }) => {
@@ -130,11 +129,10 @@ test('a fresh status that disagrees with the scan is shown beside it', async ({ 
   await tickBox(page, AMBER).check()
   await checkButton(page).click()
 
-  // Both statuses, in that order, in the one cell: the scan's, then the instant the
-  // index was read, then what it said. Neither replaces the other.
-  await expect(rowFor(page, AMBER)).toContainText(
-    /Available\s*Fresh check 12:00:00 UTC\s*Registered/,
-  )
+  // The view heading is the scan's status, so the compact cell does not repeat it.
+  // Fresh evidence remains explicit and may contradict that recorded view.
+  await expect(page.getByRole('heading', { level: 1 })).toHaveAccessibleName('Available .eth names')
+  await expect(rowFor(page, AMBER)).toContainText(/Fresh check 12:00:00 UTC\s*Registered/)
 })
 
 test('a check that has lapsed takes the link away and says so', async ({ page }) => {
@@ -149,9 +147,9 @@ test('a check that has lapsed takes the link away and says so', async ({ page })
 
   // The answer is still the newest thing anyone read, so it stays on screen with its
   // instant. What it no longer does is open the link.
-  await expect(rowFor(page, AMBER)).toContainText('Fresh check has lapsed')
+  await expect(rowFor(page, AMBER)).toContainText('Fresh check lapsed')
   await expect(rowFor(page, AMBER)).toContainText('Fresh check 11:55:00 UTC')
-  await expect(tableLinks(page)).toHaveCount(0)
+  await expect(fieldLinks(page)).toHaveCount(0)
 })
 
 test('a check in flight is announced and the button stops offering', async ({ page }) => {
@@ -168,8 +166,8 @@ test('a check in flight is announced and the button stops offering', async ({ pa
 
   // Observed while the request is outstanding, not raced past it.
   await expect(checkingButton(page)).toBeDisabled()
-  await expect(rowFor(page, AMBER)).toContainText('Fresh check running')
-  await expect(tableLinks(page)).toHaveCount(0)
+  await expect(rowFor(page, AMBER)).toContainText('Checking')
+  await expect(fieldLinks(page)).toHaveCount(0)
 
   gate.release()
   await expect(ensLinkFor(page, AMBER)).toBeVisible()
@@ -199,8 +197,8 @@ test('a throttled check keeps the selection and adds no status', async ({ page }
   // snapshot status was promoted into a fresh one.
   await expect(tickBox(page, AMBER)).toBeChecked()
   await expect(page.getByText(`1 of ${BOUND} names selected`)).toBeVisible()
-  await expect(tableLinks(page)).toHaveCount(0)
-  await expect(rowFor(page, AMBER)).toContainText('No fresh check')
+  await expect(fieldLinks(page)).toHaveCount(0)
+  await expect(rowFor(page, AMBER).getByRole('link')).toHaveCount(0)
 })
 
 test('an answer covering different names is refused whole', async ({ page }) => {
@@ -218,8 +216,8 @@ test('an answer covering different names is refused whole', async ({ page }) => 
   await expect(failureBanner(page)).toContainText(
     'The answer did not match what this site accepts, so it was not used.',
   )
-  await expect(tableLinks(page)).toHaveCount(0)
-  await expect(rowFor(page, ORB)).toContainText('No fresh check')
+  await expect(fieldLinks(page)).toHaveCount(0)
+  await expect(rowFor(page, ORB).getByRole('link')).toHaveCount(0)
 })
 
 test('an answer in a newer format offers a reload rather than a retry', async ({ page }) => {
@@ -258,7 +256,7 @@ test('an unreachable endpoint says no name was verified', async ({ page }) => {
     'The check could not be made. No name was verified.',
   )
   await expect(page.getByRole('button', { name: 'Try again' })).toBeVisible()
-  await expect(tableLinks(page)).toHaveCount(0)
+  await expect(fieldLinks(page)).toHaveCount(0)
 })
 
 test('nothing from a refusal body reaches the page', async ({ page }) => {
@@ -368,11 +366,8 @@ test('a page with a failed check has no accessibility violations', async ({ page
   await expectAccessible(page)
 })
 
-test('the tick column and the check bar do not make the page scroll sideways', async ({ page }) => {
-  // WCAG 1.4.10 Reflow, at the width the four viewport projects cover for the other
-  // bundle. They cannot cover this one: the tick column and the bar exist only when a
-  // read API is configured, and a fourth column is the widest the table ever gets.
-  await page.setViewportSize({ width: 320, height: 760 })
+test('selection and fresh evidence preserve one-column reflow at 320 by 568', async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 568 })
   await openVerified(page, { view: 'all' })
 
   await stubCheck(page, async (route) => {
@@ -383,23 +378,14 @@ test('the tick column and the check bar do not make the page scroll sideways', a
   await checkButton(page).click()
   await expect(ensLinkFor(page, AMBER)).toBeVisible()
 
-  // The page itself reflows: nothing a visitor has to swipe the whole document for.
   expect(await scrollsSideways(page)).toBe(false)
-
-  /*
-   * And the width the fourth column needs is held by the table's own container rather
-   * than hidden. This is the exemption WCAG 1.4.10 makes for a data table, and it is
-   * only an exemption while the overflow is reachable: `tabIndex` is what puts the
-   * container in the tab order, since the tick boxes are the only focusable things in
-   * the table and they all sit on the start edge.
-   */
-  const scroller = page.getByRole('group', { name: 'Names' })
-  const overflow = await scroller.evaluate((node) => ({
-    scrolls: node.scrollWidth > node.clientWidth,
-    tabIndex: node.tabIndex,
-  }))
-  expect(overflow).toEqual({ scrolls: true, tabIndex: 0 })
-
-  await scroller.focus()
-  await expect(scroller).toBeFocused()
+  const widths = await page.locator('.name-cell').evaluateAll((nodes) =>
+    nodes.map((node) => {
+      const box = node.getBoundingClientRect()
+      return { left: box.left, right: box.right, viewport: document.documentElement.clientWidth }
+    }),
+  )
+  expect(widths.every(({ left, right, viewport }) => left >= 0 && right <= viewport + 0.5)).toBe(
+    true,
+  )
 })

@@ -92,7 +92,7 @@ describe('Pagination range', () => {
     const range = screen.getByText(/Showing 51 to 100 of 980 names/)
     expect(range).toBeInTheDocument()
     expect(range).toHaveTextContent('page 2 of 20')
-    // It describes the table, so it is not part of the way to move around it.
+    // It describes the visible names, so it is not part of the way to move around them.
     expect(range.closest('nav')).toBeNull()
   })
 

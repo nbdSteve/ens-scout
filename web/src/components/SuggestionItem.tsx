@@ -7,15 +7,15 @@ import { rowVerifiedName, rowVerification, rowVerifyNote, type VerifyBinding } f
 /**
  * One suggested name.
  *
- * A suggestion earns an outbound link exactly the way a scanned row does, through
+ * A suggestion earns an outbound link exactly the way a scanned name does, through
  * `rowVerification` and therefore through `verify/gate.ts`: a fresh check has to cover the
  * name and still be current. There is no shortcut here and no way to ask for one. If
  * anything, a suggested name is less verified than a scanned one - it was chosen for how
  * it reads rather than for what the index said about it - so the same gate is the least
  * that can apply.
  *
- * The derivation is the same function the table uses, not a copy of it. That matters more
- * than the few lines it saves: two per-row derivations would be two answers to the
+ * The derivation is the same function the spatial field uses, not a copy of it. That matters more
+ * than the few lines it saves: two per-name derivations would be two answers to the
  * question of whether a name may be acted on, and they would drift.
  *
  * The sentence beneath is fixed text from `shortlist.ts`, derived from the deterministic
@@ -54,7 +54,7 @@ export function SuggestionItem({ suggestion, verify, now }: SuggestionItemProps)
           <EnsAppLink name={suggestion.name} />
         ) : (
           /*
-           * Plain text rather than a disabled link, for the reason `ResultRow` gives:
+           * Plain text rather than a disabled link, for the reason `NameCell` gives:
            * there is nowhere to go yet, so there is nothing to disable, and a greyed-out
            * link still reads as a link and still invites a click.
            */

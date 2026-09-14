@@ -416,7 +416,7 @@ describe('the answer', () => {
 
 describe('checking what was suggested', () => {
   /*
-   * The same bounded fresh check the table uses, because a suggested name earns an outbound
+   * The same bounded fresh check the name field uses, because a suggested name earns an outbound
    * link on the same evidence a scanned one does and on no less.
    */
   it('offers the check, and says ENS decides', async () => {

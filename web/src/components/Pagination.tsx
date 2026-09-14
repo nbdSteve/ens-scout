@@ -7,13 +7,13 @@ import type { ReactNode } from 'react'
  * through the pages a visitor actually looked at, and a middle-click opens page
  * four in a new tab. Buttons that mutated state would give up all three.
  *
- * The row range is stated outside the navigation, because it describes the table
+ * The visible range is stated outside the navigation, because it describes the name field
  * rather than being a way to move around it.
  */
 export interface PaginationProps {
   readonly page: number
   readonly pageCount: number
-  /** One-based index of the first and last row shown, from `applyQuery`. */
+  /** One-based index of the first and last name shown, from `applyQuery`. */
   readonly firstRow: number
   readonly lastRow: number
   readonly total: number
@@ -66,7 +66,7 @@ export function Pagination({
 }: PaginationProps): ReactNode {
   return (
     <div className="pager">
-      <p className="pager__range">
+      <span className="pager__range">
         Showing {formatCount(firstRow)} to {formatCount(lastRow)} of {formatCount(total)}{' '}
         {total === 1 ? 'name' : 'names'}
         {pageCount > 1 && (
@@ -75,7 +75,7 @@ export function Pagination({
             &middot; page {formatCount(page)} of {formatCount(pageCount)}
           </>
         )}
-      </p>
+      </span>
 
       {pageCount > 1 && (
         <nav aria-label="Result pages">

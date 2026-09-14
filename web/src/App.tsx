@@ -1,25 +1,34 @@
-import { useMemo, type ReactNode } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type MouseEvent,
+  type ReactNode,
+} from 'react'
+import { DataDrawer } from './components/DataDrawer'
+import { DiscoveryHeader } from './components/DiscoveryHeader'
 import { EmptyState } from './components/EmptyState'
 import { ErrorState } from './components/ErrorState'
+import { FilterDock } from './components/FilterDock'
 import { LoadingState } from './components/LoadingState'
+import { NameField } from './components/NameField'
 import { Notice } from './components/Notice'
 import { Pagination } from './components/Pagination'
-import { ResultsTable } from './components/ResultsTable'
-import { SimulatedClockNotice } from './components/SimulatedClockNotice'
+import { SnapshotBadge } from './components/SnapshotBadge'
 import { SnapshotDetails } from './components/SnapshotDetails'
 import { StaleWarning } from './components/StaleWarning'
 import { StoredCopyNotice } from './components/StoredCopyNotice'
 import { SuggestPanel } from './components/SuggestPanel'
-import { Toolbar } from './components/Toolbar'
-import { TrustLine } from './components/TrustLine'
 import { VerifyBar } from './components/VerifyBar'
 import type { VerifyBinding } from './components/verification'
-import { ViewTabs } from './components/ViewTabs'
 import { appConfig, type AppConfig } from './config/env'
-import { Optics } from './optics/Optics'
+import { formatAbsolute, toIsoSecond } from './format/time'
 import type { Status } from './snapshot/contract'
-import type { SnapshotResult } from './snapshot/types'
 import { deriveAttribution } from './snapshot/attribution'
+import { resolveSourceGroups } from './snapshot/staleness'
+import type { SnapshotResult } from './snapshot/types'
 import { applyQuery, countByStatus, filterResults } from './state/filter'
 import { CLEAR_FILTERS, isFiltered } from './state/query'
 import { useFreshCheck, type FreshCheckDeps } from './state/useFreshCheck'
@@ -30,45 +39,30 @@ import { useSuggest, type SuggestDeps } from './state/useSuggest'
 import { useUrlState } from './state/useUrlState'
 import { VIEWS, viewOrDefault } from './state/views'
 
-/**
- * The page.
- *
- * The names come first. A visitor arrives with one question - which names are open -
- * so the first screen is the answer to it: the view they are in, how many names it
- * holds, one line saying when the scan was taken and that these are recorded
- * statuses, the views, the two controls most likely to be used, and then rows.
- * Everything else is below them.
- *
- * That ordering is not a demotion of the caveats. The two that a reader must not be
- * able to miss are still above the list and still unmissable: the trust line always
- * states the scan time and that nothing here is a live check, and an overdue source
- * list raises a real alert. What moved below is the long form - the full provenance,
- * the per-list schedules, the published counts, the lifecycle rules, the method - and
- * it moved because at full length it filled the first screen and pushed the names
- * out of sight. A caveat nobody scrolls past the names to read is not a caveat.
- *
- * Anything that is both conditional and about trust stays in the advisories block
- * above the list: a simulated clock, part of the query that could not be applied, a
- * stored copy shown because this visit could not replace it, an out-of-date list. Each
- * is rare, each changes how the rows below should be read, and none of them is
- * something to find later.
- */
 export interface AppProps {
-  /** Overridden in tests. Defaults to the build-time configuration. */
   readonly config?: AppConfig
   readonly deps?: SnapshotDeps
   readonly verifyDeps?: FreshCheckDeps
   readonly suggestDeps?: SuggestDeps
 }
 
-/** One array, so the shortlist's dependency identity does not change every render. */
 const NO_RESULTS: readonly SnapshotResult[] = []
+
+const VIEW_HEADING: Readonly<Record<string, string>> = {
+  available: 'Available',
+  premium: 'Premium',
+  expiring: 'Expiring',
+  grace: 'Grace period',
+  all: 'All scanned',
+}
 
 export function App({ config = appConfig, deps, verifyDeps, suggestDeps }: AppProps): ReactNode {
   const { query, warnings, setQuery, hrefFor } = useUrlState()
   const now = useNow(query.now)
   const store = useSnapshot(config, deps)
   const check = useFreshCheck(config, now, verifyDeps)
+  const [dataOpen, setDataOpen] = useState(false)
+  const dataReturnFocus = useRef<HTMLElement | null>(null)
 
   const snapshot = store.snapshot
   const attribution = useMemo(
@@ -91,9 +85,6 @@ export function App({ config = appConfig, deps, verifyDeps, suggestDeps }: AppPr
         : countByStatus(snapshot.results, query, context),
     [snapshot, query, context],
   )
-  // How many rows each view would show under the filters currently in force. The
-  // view's own status preset is applied and any hand-picked statuses are dropped,
-  // since those belong to the view they were picked in and do not carry across.
   const viewCounts = useMemo<ReadonlyMap<string, number>>(() => {
     const counts = new Map<string, number>()
     if (snapshot !== null) {
@@ -109,26 +100,12 @@ export function App({ config = appConfig, deps, verifyDeps, suggestDeps }: AppPr
   }, [snapshot, query, context])
 
   const view = viewOrDefault(query.view)
+  const heading = VIEW_HEADING[view.id] ?? view.label
   const filtered = isFiltered(query)
   const resetHref = hrefFor(CLEAR_FILTERS)
-
-  /*
-   * The two length boxes are held here, not in the toolbar, because the advisory below
-   * has to read the same boxes the visitor is typing into. A bound the parser refused is
-   * not in the URL, so nothing derived from the URL can report it for longer than the one
-   * render it was written on.
-   */
   const lengthDrafts = useLengthDrafts(query.length)
   const notApplied = warnings.length + lengthDrafts.advisories.length
 
-  /*
-   * What the table needs to know about fresh checks, or null when there is no verifier.
-   *
-   * Null is fixture mode, and it turns off the tick boxes and every outbound link. That
-   * is the honest reading of a build with no read API configured: nothing here can be
-   * re-checked, so nothing here has earned a link to a registration page. `SnapshotDetails`
-   * says so once, rather than every row saying it.
-   */
   const verify = useMemo<VerifyBinding | null>(
     () =>
       check.available
@@ -143,18 +120,6 @@ export function App({ config = appConfig, deps, verifyDeps, suggestDeps }: AppPr
     [check.available, check.selected, check.full, check.pending, check.verified, check.toggle],
   )
 
-  /*
-   * The recommender, and the milestone it waits for.
-   *
-   * `interactive` is exactly the condition the names themselves render under, so nothing
-   * model-related begins until a visitor can already read, filter, and check the snapshot.
-   * That is the promise the whole feature is built around: the optional model is an
-   * addition to a page that works without it, so it must never be on the path to it.
-   *
-   * The shortlist is drawn from `page.matched`, the whole filtered set rather than the
-   * current page, because a visitor filtering to a hundred names is describing what they
-   * want considered - not which fifty of them they happen to be looking at.
-   */
   const interactive =
     snapshot !== null && store.origin !== null && attribution !== null && page !== null
   const suggest = useSuggest(
@@ -162,14 +127,6 @@ export function App({ config = appConfig, deps, verifyDeps, suggestDeps }: AppPr
     suggestDeps ?? {},
   )
 
-  /**
-   * What is wrong with the chosen source list, or null when nothing is.
-   *
-   * Two different things can be, and they leave the page looking opposite ways: a
-   * snapshot that cannot attribute any name to a list shows every row, and a snapshot
-   * that simply has no such list shows none. Both are settled here rather than in
-   * `parseQuery`, which never sees a snapshot and so cannot know which ids exist.
-   */
   const listProblem = useMemo<'unattributable' | 'unknown' | null>(() => {
     if (query.list === null || snapshot === null || attribution === null) {
       return null
@@ -180,262 +137,219 @@ export function App({ config = appConfig, deps, verifyDeps, suggestDeps }: AppPr
     return snapshot.metadata.sources.some((source) => source.id === query.list) ? null : 'unknown'
   }, [query.list, snapshot, attribution])
 
+  const hasStaleSource = useMemo(
+    () =>
+      snapshot !== null &&
+      resolveSourceGroups(snapshot.metadata, now).some((group) => group.scanAge.isStale),
+    [snapshot, now],
+  )
+  const hasDataNotice =
+    query.now !== null ||
+    notApplied > 0 ||
+    listProblem !== null ||
+    store.failure !== null ||
+    hasStaleSource
+
+  const openData = useCallback((event: MouseEvent<HTMLButtonElement>): void => {
+    dataReturnFocus.current = event.currentTarget
+    setDataOpen(true)
+  }, [])
+  const closeData = useCallback((): void => {
+    setDataOpen(false)
+  }, [])
+
+  useEffect(() => {
+    document.title = view.title
+  }, [view.title])
+
   return (
     <>
-      {/*
-       * First, and outside every other element. The optical layers blend against
-       * the paper itself, so any wrapper between them and the body would isolate
-       * them and flatten the whole background.
-       */}
-      <Optics />
+      <div className="site-shell">
+        <a className="skip-link" href="#results">
+          Skip to the names
+        </a>
 
-      {/*
-       * The only thing in the top-left corner, and only while it has focus. The page
-       * carries no name, no logo, and no bar: a visitor arrived to read names, and a
-       * strip of branding above them would be the first thing they had to look past.
-       * There is deliberately no `banner` landmark, which is what the two landmark
-       * tests now assert.
-       */}
-      <a className="skip-link" href="#results">
-        Skip to the names
-      </a>
+        <DiscoveryHeader dataOpen={dataOpen} hasNotice={hasDataNotice} onOpenData={openData} />
 
-      <main id="main">
-        <div className="page">
-          <div className="lede">
-            {/*
-             * The view names the page. It is also what the results region is
-             * labelled by, so a screen reader that jumps straight to the table is
-             * told which list it has landed in.
-             */}
-            <h1 className="lede__title" id="page-title">
-              {view.title}
-            </h1>
-            {page !== null && (
-              <p className="lede__count" role="status">
-                {page.total.toLocaleString('en-GB')}{' '}
-                {page.total === 1 ? 'name matches' : 'names match'}
-              </p>
-            )}
-          </div>
-
-          {snapshot !== null && <TrustLine now={now} snapshot={snapshot} />}
-
-          {/*
-           * The block is the polite region, and it is always mounted even when it holds
-           * nothing. A region that is rendered only when it has something to say enters the
-           * DOM together with its first line, and a live region created with its content is
-           * the case where a screen reader announces nothing at all - which is the common
-           * case here, since one line is usually all there is. Mounted from the first paint,
-           * a line appearing is a mutation inside a region that already exists, so it is
-           * announced without depending on `aria-relevant`, which NVDA does not implement.
-           * It is styled to collapse while empty, so it costs no space above the names.
-           *
-           * Every banner inside that appears later than the first paint declares its own
-           * `role="alert"`, which governs its own subtree, so this changes how one thing is
-           * announced: the `Not applied` band, which is the one fed by a text box.
-           */}
-          <div aria-live="polite" className="advisories">
-            {query.now !== null && (
-              <SimulatedClockNotice now={now} realHref={hrefFor({ now: null })} />
-            )}
-
-            {/*
-             * One band for every query value the page was asked for and is not applying,
-             * whether it came from a link, a keystroke, or a box still holding something
-             * that names no length. Titled without naming a link, because a visitor who
-             * followed none must not be told one was at fault.
-             *
-             * Announced by the block above rather than by a region of its own, because the
-             * length lines change while the visitor types and a band that appears with its
-             * first line already inside it is never announced at all. Each line carries the
-             * id its box points `aria-describedby` at, and is keyed by the box rather than by
-             * its wording, so editing a rejected value rewrites the text in place instead of
-             * removing the line and adding it back.
-             */}
-            {notApplied > 0 && (
-              <Notice tone="warn" title="Not applied">
-                <ul className="notice__list">
-                  {warnings.map((warning) => (
-                    <li key={warning}>{warning}</li>
-                  ))}
-                  {lengthDrafts.advisories.map((advisory) => (
-                    <li id={advisory.id} key={advisory.end}>
-                      {advisory.text}
-                    </li>
-                  ))}
-                </ul>
-              </Notice>
-            )}
-
-            {/*
-             * A list filter that could not be honoured. `filterResults` returns every
-             * row when attribution cannot be verified, so without this the page would
-             * show the whole snapshot as though the filter had applied - and the only
-             * explanation would be inside a disclosure that is closed by default.
-             *
-             * Worded about the list and not about where it came from. A followed link is
-             * the usual route, but a visitor who chose a list against a cached snapshot
-             * and then received an unattributable one lands here having followed nothing.
-             */}
-            {listProblem === 'unattributable' && attribution !== null && (
-              <Notice tone="warn" voice="alert" title="List filter not applied">
-                <p>
-                  This snapshot does not say which names are on{' '}
-                  <span className="mono">{query.list}</span>, so every name is shown. Reason:{' '}
-                  {attribution.reason ?? 'attribution could not be verified'}.
-                </p>
-                <p>
-                  <a href={hrefFor({ list: null })}>Show every list instead</a>
-                </p>
-              </Notice>
-            )}
-
-            {/*
-             * The opposite case, and the one that would otherwise render an empty page with
-             * no explanation: the filter applied perfectly well and matched nothing, because
-             * the snapshot carries no list under that id. A renamed word list is enough to
-             * do it to a link that used to work.
-             */}
-            {listProblem === 'unknown' && (
-              <Notice tone="warn" voice="alert" title="Unknown list">
-                <p>
-                  This snapshot has no list named <span className="mono">{query.list}</span>, so no
-                  name matches.
-                </p>
-                <p>
-                  <a href={hrefFor({ list: null })}>Show every list instead</a>
-                </p>
-              </Notice>
-            )}
-
-            {store.failure !== null && store.snapshot !== null && (
-              <StoredCopyNotice failure={store.failure} onRetry={store.retry} />
-            )}
-
-            {snapshot !== null && <StaleWarning metadata={snapshot.metadata} now={now} />}
-          </div>
-        </div>
-
-        {(store.phase === 'loading' || store.phase === 'failed') && (
-          <div className="page">
-            <div className="stack">
+        <main id="main">
+          {(store.phase === 'loading' || store.phase === 'failed') && (
+            <div className="page load-state">
               {store.phase === 'loading' && <LoadingState />}
               {store.phase === 'failed' && store.failure !== null && (
                 <ErrorState failure={store.failure} onRetry={store.retry} />
               )}
             </div>
-          </div>
-        )}
+          )}
 
-        {snapshot !== null && store.origin !== null && attribution !== null && page !== null && (
-          <>
-            {/*
-             * The stage is full-bleed and carries its own dark palette, so the names
-             * are read against nothing else. `.page` is repeated inside it rather
-             * than the stage being stretched out of the column: a `100vw` block
-             * includes the scrollbar and would make the document scroll sideways.
-             */}
-            <div className="stage">
-              <div className="page">
-                <ViewTabs
-                  counts={viewCounts}
-                  current={view.id}
-                  hrefForView={(id) => hrefFor({ view: id })}
-                />
-                <Toolbar
+          {snapshot !== null && store.origin !== null && attribution !== null && page !== null && (
+            <>
+              <div className="page discovery">
+                <div className="editorial-heading">
+                  <h1 id="page-title">
+                    <span className="editorial-heading__word">{heading}</span>{' '}
+                    <span className="editorial-heading__suffix">.eth names</span>
+                  </h1>
+                  <span className="editorial-heading__count" role="status">
+                    {page.total.toLocaleString('en-GB')} {page.total === 1 ? 'name' : 'names'}
+                  </span>
+                </div>
+
+                <FilterDock
                   attribution={attribution}
+                  currentView={view.id}
+                  hrefForView={(id) => hrefFor({ view: id })}
                   lengthDrafts={lengthDrafts}
                   query={query}
                   resetHref={resetHref}
                   setQuery={setQuery}
                   sources={snapshot.metadata.sources}
                   statusCounts={statusCounts}
+                  viewCounts={viewCounts}
                 />
-                <section aria-labelledby="page-title" className="results-panel" id="results">
-                  {/*
-                   * The fresh-check action, above the names and inside the panel. It draws
-                   * nothing until the visitor ticks something or a check fails, so the
-                   * first screen still opens on the answer.
-                   */}
-                  {check.available && (
-                    <VerifyBar
-                      checking={check.checking}
-                      failure={check.failure}
-                      onCheck={check.check}
-                      onClear={check.clearSelection}
-                      onDismiss={check.dismissFailure}
-                      selected={check.selected}
-                    />
-                  )}
-                  {page.total === 0 ? (
-                    <EmptyState filtered={filtered} resetHref={resetHref} viewLabel={view.label} />
-                  ) : (
-                    <>
-                      <ResultsTable
-                        direction={query.direction}
-                        now={now}
-                        rows={page.rows}
-                        sort={query.sort}
-                        verify={verify}
-                      />
-                      <Pagination
-                        firstRow={page.firstRow}
-                        hrefForPage={(n) => hrefFor({ page: n })}
-                        lastRow={page.lastRow}
-                        page={page.page}
-                        pageCount={page.pageCount}
-                        total={page.total}
-                      />
-                    </>
-                  )}
-                </section>
+
+                <SnapshotBadge
+                  dataOpen={dataOpen}
+                  now={now}
+                  onOpenData={openData}
+                  preview={query.now !== null}
+                  snapshot={snapshot}
+                />
               </div>
-            </div>
 
-            <p aria-atomic="true" aria-live="polite" className="visually-hidden">
-              {check.announcement}
+              <section aria-labelledby="page-title" className="spectrum" id="results">
+                {check.available && (
+                  <VerifyBar
+                    checking={check.checking}
+                    failure={check.failure}
+                    onCheck={check.check}
+                    onClear={check.clearSelection}
+                    onDismiss={check.dismissFailure}
+                    selected={check.selected}
+                  />
+                )}
+
+                {page.total === 0 ? (
+                  <EmptyState filtered={filtered} resetHref={resetHref} viewLabel={view.label} />
+                ) : (
+                  <>
+                    <NameField
+                      label={view.title}
+                      now={now}
+                      rows={page.rows}
+                      showStatus={view.id !== 'available'}
+                      transitionKey={view.id}
+                      verify={verify}
+                    />
+                    <Pagination
+                      firstRow={page.firstRow}
+                      hrefForPage={(number) => hrefFor({ page: number })}
+                      lastRow={page.lastRow}
+                      page={page.page}
+                      pageCount={page.pageCount}
+                      total={page.total}
+                    />
+                  </>
+                )}
+              </section>
+
+              <p aria-atomic="true" aria-live="polite" className="visually-hidden">
+                {check.announcement}
+              </p>
+              <div aria-live="polite" className="visually-hidden">
+                {warnings.map((warning) => (
+                  <span key={warning}>{warning}</span>
+                ))}
+                {listProblem === 'unattributable' && (
+                  <span>The requested source-list filter could not be applied.</span>
+                )}
+                {listProblem === 'unknown' && (
+                  <span>The requested source list is not in this snapshot.</span>
+                )}
+              </div>
+
+              <div className="page recommendations">
+                <SuggestPanel
+                  checking={check.checking}
+                  now={now}
+                  onCheck={check.check}
+                  store={suggest}
+                  verify={verify}
+                />
+              </div>
+            </>
+          )}
+        </main>
+      </div>
+
+      <DataDrawer onClose={closeData} open={dataOpen} returnFocusRef={dataReturnFocus}>
+        {query.now !== null && (
+          <Notice tone="info" title="Preview clock">
+            <p>
+              Ages and countdowns use{' '}
+              <time className="mono" dateTime={toIsoSecond(now)}>
+                {formatAbsolute(now)}
+              </time>
+              .
             </p>
-
-            {/*
-             * Below the names, deliberately. `the first screen is the answer, not an
-             * introduction` charges anything above the list against a name row, and a
-             * visitor who wants a recommendation scrolls to it; one who wants the list
-             * never has to. It is also why the panel starts nothing until `interactive`.
-             */}
-            <div className="page">
-              <SuggestPanel
-                checking={check.checking}
-                now={now}
-                onCheck={check.check}
-                store={suggest}
-                verify={verify}
-              />
-            </div>
-
-            <div className="page">
-              <SnapshotDetails
-                cachedAt={store.cachedAt}
-                config={config}
-                confirmedCurrent={store.confirmedCurrent}
-                now={now}
-                origin={store.origin}
-                snapshot={snapshot}
-              />
-            </div>
-          </>
+            <p>
+              <a href={hrefFor({ now: null })}>Use the real time instead</a>
+            </p>
+          </Notice>
         )}
-      </main>
 
-      <footer className="footer">
-        <div className="page">
-          <p>
-            <strong>ENS decides, not this page.</strong> Every status here is what one scan
-            recorded, not a live check. Confirm availability and price at{' '}
-            <a href="https://app.ens.domains/">app.ens.domains</a> before you register.
-          </p>
-        </div>
-      </footer>
+        {notApplied > 0 && (
+          <Notice tone="warn" title="Not applied">
+            <ul className="notice__list">
+              {warnings.map((warning) => (
+                <li key={warning}>{warning}</li>
+              ))}
+              {lengthDrafts.advisories.map((advisory) => (
+                <li key={advisory.end}>{advisory.text}</li>
+              ))}
+            </ul>
+          </Notice>
+        )}
+
+        {listProblem === 'unattributable' && attribution !== null && (
+          <Notice tone="warn" title="List filter not applied">
+            <p>
+              This snapshot cannot prove which names belong to{' '}
+              <span className="mono">{query.list}</span>, so the full view is shown.
+            </p>
+            <p>
+              <a href={hrefFor({ list: null })}>Show every list instead</a>
+            </p>
+          </Notice>
+        )}
+
+        {listProblem === 'unknown' && (
+          <Notice tone="warn" title="Unknown list">
+            <p>
+              This snapshot has no list named <span className="mono">{query.list}</span>.
+            </p>
+            <p>
+              <a href={hrefFor({ list: null })}>Show every list instead</a>
+            </p>
+          </Notice>
+        )}
+
+        {store.failure !== null && store.snapshot !== null && (
+          <StoredCopyNotice failure={store.failure} onRetry={store.retry} />
+        )}
+
+        {snapshot !== null && <StaleWarning metadata={snapshot.metadata} now={now} />}
+
+        {snapshot !== null && store.origin !== null && (
+          <SnapshotDetails
+            cachedAt={store.cachedAt}
+            config={config}
+            confirmedCurrent={store.confirmedCurrent}
+            now={now}
+            origin={store.origin}
+            snapshot={snapshot}
+          />
+        )}
+      </DataDrawer>
     </>
   )
 }

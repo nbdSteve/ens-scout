@@ -70,7 +70,7 @@ export const VIEWS: readonly ViewDefinition[] = [
   },
   {
     id: 'grace',
-    label: 'Grace period',
+    label: 'Grace',
     title: 'Grace period .eth names',
     summary:
       'Expired and owner-only until the grace period ends. Soonest to leave the grace period first.',
@@ -79,7 +79,7 @@ export const VIEWS: readonly ViewDefinition[] = [
   },
   {
     id: 'all',
-    label: 'All names',
+    label: 'All',
     title: 'All scanned .eth names',
     summary: 'Every name in the snapshot, whatever its state at the scan time.',
     statuses: [],

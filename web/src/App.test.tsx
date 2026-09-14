@@ -4,32 +4,11 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import { App } from './App'
 import type { AppConfig } from './config/env'
 import type { SnapshotDocument } from './snapshot/types'
-import type { FreshCheckDeps } from './state/useFreshCheck'
 import type { SnapshotDeps } from './state/useSnapshot'
 import { buildLatestDocument, buildSnapshotDocument, SCANNED_AT } from './test/factory'
 
-/**
- * What the page puts first.
- *
- * A visitor arrives with one question - which names are open - so these tests pin
- * the two decisions that answer it, both of which are easy to undo by accident while
- * moving anything else around: a link with no view parameter lands on Available, and
- * the names are rendered before the long-form provenance rather than after it.
- *
- * Order here is document order, which is what a screen reader, a keyboard, and a
- * reader with no CSS all follow. Whether three rows also *fit* on a 1440x900 screen
- * is a geometry question that only a real browser can answer, so the Playwright
- * suite owns that half.
- */
-
-/** No API is configured, so the page reads the fixture the deps supply. */
 const CONFIG: AppConfig = { apiBaseUrl: null, fixtureId: 'preview' }
 
-/**
- * Three available names and two that are not, so the default view has rows to show
- * and there is something for it to leave out. The source lists are sized to match the
- * label lengths, which is what lets attribution be proven rather than guessed.
- */
 const DOCUMENT = buildSnapshotDocument({
   results: [
     { name: 'aaa.eth', status: 'available' },
@@ -50,254 +29,168 @@ const DOCUMENT = buildSnapshotDocument({
   ],
 })
 
-const DEPS: SnapshotDeps = {
-  loadFixture: () => Promise.resolve({ snapshot: DOCUMENT, latest: buildLatestDocument(DOCUMENT) }),
-  storage: null,
+function depsFor(document: SnapshotDocument = DOCUMENT): SnapshotDeps {
+  return {
+    loadFixture: () =>
+      Promise.resolve({ snapshot: document, latest: buildLatestDocument(document) }),
+    storage: null,
+  }
 }
 
-const API_DEPS: SnapshotDeps = {
-  storage: null,
-  fetchImpl: (input, init) => {
-    const request = new Request(input, init)
-    const body = request.url.endsWith('/api/latest') ? buildLatestDocument(DOCUMENT) : DOCUMENT
-    return Promise.resolve(
-      new Response(JSON.stringify(body), {
-        status: 200,
-        headers: { 'content-type': 'application/json' },
-      }),
-    )
-  },
-}
-
-/**
- * An hour after the scan, so the snapshot is inside its schedule and no staleness
- * alert fires. The committed fixtures are permanently stale against a real clock,
- * and the simulated clock is the supported way to say which instant is meant.
- */
 const NOW = new Date(SCANNED_AT.getTime() + 60 * 60 * 1000)
 
-async function mount(search = `?now=${NOW.toISOString().slice(0, 19)}Z`): Promise<void> {
+async function mount(
+  search = `?now=${NOW.toISOString().slice(0, 19)}Z`,
+  document: SnapshotDocument = DOCUMENT,
+): Promise<void> {
   window.history.replaceState(null, '', `/${search}`)
-  render(<App config={CONFIG} deps={DEPS} />)
-  // The fixture load is asynchronous, so nothing below is true until it settles.
-  await screen.findByRole('table')
+  render(<App config={CONFIG} deps={depsFor(document)} />)
+  await screen.findByRole('list', { name: /\.eth names$/ })
 }
 
-/** True when `later` comes after `earlier` in document order. */
-function follows(earlier: Element, later: Element): boolean {
-  return (earlier.compareDocumentPosition(later) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0
+function nameList(): HTMLElement {
+  return screen.getByRole('list', { name: /\.eth names$/ })
 }
 
-function resultsRegion(): HTMLElement {
-  return screen.getByRole('region', { name: 'Available .eth names' })
+async function openData(user: ReturnType<typeof userEvent.setup>): Promise<HTMLElement> {
+  const header = screen.getByRole('banner')
+  const trigger = within(header).getByRole('button', { name: /Data/ })
+  await user.click(trigger)
+  return screen.getByRole('dialog', { name: 'Data' })
 }
 
 beforeEach(() => {
   window.history.replaceState(null, '', '/')
 })
 
-describe('App default view', () => {
-  it('lands on Available when the link names no view', async () => {
+describe('ENS Spectrum discovery path', () => {
+  it('lands on Available, renders names as a list, and contains no table', async () => {
     await mount()
 
-    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('Available .eth names')
-    expect(screen.getByRole('link', { name: /^Available/ })).toHaveAttribute('aria-current', 'page')
-
-    // Only the available names, and all of them.
-    const names = screen.getAllByRole('rowheader').map((cell) => cell.textContent)
-    expect(names).toHaveLength(3)
-    for (const name of names) {
-      expect(name).toMatch(/^(aaa|bbb|ccc)\.eth/)
-    }
+    expect(screen.getByRole('heading', { level: 1 })).toHaveAccessibleName('Available .eth names')
+    expect(screen.getByRole('link', { name: /^Available 3 names match/ })).toHaveAttribute(
+      'aria-current',
+      'page',
+    )
+    expect(within(nameList()).getAllByRole('listitem')).toHaveLength(3)
+    expect(screen.queryByRole('table')).not.toBeInTheDocument()
   })
 
-  it('leaves the default view out of the link, so the shared link is the short one', async () => {
+  it('keeps the main discovery surface terse and free of row prose', async () => {
+    await mount()
+
+    expect(document.querySelector('.discovery p')).toBeNull()
+    expect(document.querySelector('#results p')).toBeNull()
+    expect(document.querySelector('.trustline')).toBeNull()
+    expect(document.querySelector('footer')).toBeNull()
+    expect(screen.queryByText(/What happens next/)).not.toBeInTheDocument()
+  })
+
+  it('keeps Available canonical as the absence of a view parameter', async () => {
     await mount()
     const params = new URLSearchParams(window.location.search)
     expect(params.get('view')).toBeNull()
     expect(params.get('now')).toBe(`${NOW.toISOString().slice(0, 19)}Z`)
   })
 
-  it('says so, and still lands on Available, when the link names a view that is gone', async () => {
-    // The clock is named too, so the only alert on the page is the one under test.
+  it('puts search, lifecycle, Length, and More in one compact filter region', async () => {
+    await mount()
+    const filters = screen.getByRole('region', { name: 'Filter names' })
+
+    expect(within(filters).getByRole('searchbox', { name: 'Search names' })).toBeVisible()
+    expect(within(filters).getByRole('navigation', { name: 'Views' })).toBeVisible()
+    expect(within(filters).getByText('Length')).toBeVisible()
+    expect(within(filters).getByText('More')).toBeVisible()
+  })
+
+  it('uses the snapshot strip for preview time, ENS verification, and Data', async () => {
+    await mount()
+
+    expect(screen.getByText('Preview', { exact: false })).toHaveTextContent('Preview · Mar 1')
+    expect(screen.getByRole('link', { name: /Verify on ENS/ })).toHaveAttribute(
+      'href',
+      'https://app.ens.domains/',
+    )
+    expect(screen.getAllByRole('button', { name: /Data/ })).toHaveLength(2)
+  })
+})
+
+describe('Data drawer', () => {
+  it('is closed by default, opens accessibly, and restores focus when closed', async () => {
+    const user = userEvent.setup()
+    await mount()
+    const trigger = within(screen.getByRole('banner')).getByRole('button', { name: /Data/ })
+
+    expect(screen.queryByRole('dialog', { name: 'Data' })).not.toBeInTheDocument()
+    await user.click(trigger)
+    const drawer = screen.getByRole('dialog', { name: 'Data' })
+    expect(drawer).toBeVisible()
+    expect(within(drawer).getByRole('button', { name: 'Close Data' })).toHaveFocus()
+
+    await user.keyboard('{Escape}')
+    expect(screen.queryByRole('dialog', { name: 'Data' })).not.toBeInTheDocument()
+    expect(trigger).toHaveFocus()
+  })
+
+  it('moves preview-clock explanation and provenance behind Data', async () => {
+    const user = userEvent.setup()
+    await mount()
+
+    expect(screen.queryByText('Preview clock')).not.toBeInTheDocument()
+    const drawer = await openData(user)
+    expect(within(drawer).getByText('Preview clock')).toBeVisible()
+    expect(within(drawer).getByRole('link', { name: 'Use the real time instead' })).toHaveAttribute(
+      'href',
+      './',
+    )
+    expect(within(drawer).getByRole('heading', { name: 'Scan' })).toBeVisible()
+    expect(within(drawer).getByRole('heading', { name: 'What each status means' })).toBeVisible()
+  })
+
+  it('keeps rejected URL values out of the field and explains them in Data', async () => {
+    const user = userEvent.setup()
     await mount(`?view=nope&now=${NOW.toISOString().slice(0, 19)}Z`)
 
-    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('Available .eth names')
-    // The band is a named region rather than an alert: its length lines change while the
-    // visitor types, so it must not interrupt a screen reader on every digit.
-    expect(screen.getByRole('region', { name: 'Not applied' })).toHaveTextContent(
+    expect(screen.getByRole('heading', { level: 1 })).toHaveAccessibleName('Available .eth names')
+    expect(screen.queryByText('Not applied')).not.toBeInTheDocument()
+    const drawer = await openData(user)
+    expect(within(drawer).getByText('Not applied')).toBeVisible()
+    expect(drawer).toHaveTextContent(
       'The link asked for an unknown view, so Available .eth names is shown instead.',
     )
-    // The link is rewritten to one that round-trips, and the explanation survives
-    // that rewrite - the whole point of it is that the address bar no longer says
-    // what was dropped.
-    expect(new URLSearchParams(window.location.search).get('view')).toBeNull()
   })
 
-  it('holds the polite region open before there is anything to announce', async () => {
-    await mount()
-
-    /*
-     * A live region has to exist before the mutation it should announce. Rendered only when
-     * it has something to say, it would enter the DOM together with its first line and a
-     * screen reader would announce nothing at all - so the block is mounted from the first
-     * paint and the band appears inside it.
-     */
-    const region = document.querySelector('[aria-live="polite"]')
-    expect(region).not.toBeNull()
-    expect(screen.queryByRole('region', { name: 'Not applied' })).not.toBeInTheDocument()
-
-    await userEvent.setup().type(screen.getByLabelText('Shortest label length'), '100')
-
-    expect(region).toContainElement(screen.getByRole('region', { name: 'Not applied' }))
-  })
-
-  it('drops the explanation once the visitor changes something', async () => {
+  it('explains an unattributable list filter without replacing the names', async () => {
     const user = userEvent.setup()
-    await mount(`?view=nope&now=${NOW.toISOString().slice(0, 19)}Z`)
-
-    await user.type(screen.getByLabelText('Search names'), 'a')
-
-    expect(screen.queryByRole('region', { name: 'Not applied' })).not.toBeInTheDocument()
-  })
-})
-
-describe('App list filter that cannot be honoured', () => {
-  /**
-   * The same five names, but the source lists no longer state a label length, so
-   * `deriveAttribution` cannot prove which list each name came from and refuses.
-   * `filterResults` then admits every row for a `?list=` link, which is the case the
-   * advisory exists for.
-   */
-  const UNATTRIBUTABLE: SnapshotDocument = {
-    ...DOCUMENT,
-    metadata: {
-      ...DOCUMENT.metadata,
-      sources: [
-        {
-          id: 'wordlist',
-          path: 'data/words/wordlist.txt',
-          cadence: 'daily',
-          names: 5,
-          last_scanned_at: DOCUMENT.metadata.scanned_at,
-        },
-      ],
-    },
-  }
-
-  async function mountUnattributable(search: string): Promise<void> {
-    window.history.replaceState(null, '', `/${search}`)
-    render(
-      <App
-        config={CONFIG}
-        deps={{
-          loadFixture: () =>
-            Promise.resolve({
-              snapshot: UNATTRIBUTABLE,
-              latest: buildLatestDocument(UNATTRIBUTABLE),
-            }),
-          storage: null,
-        }}
-      />,
-    )
-    await screen.findByRole('table')
-  }
-
-  it('says the list filter was not applied, rather than showing every name as if it had', async () => {
-    await mountUnattributable(`?view=all&list=four-letters&now=${NOW.toISOString().slice(0, 19)}Z`)
-
-    const notice = screen.getByRole('alert')
-    // Named by the list, not by how the list was asked for: a visitor who chose it from
-    // the toolbar against an earlier snapshot reaches this having followed no link.
-    expect(notice).toHaveTextContent('This snapshot does not say which names are on four-letters')
-    expect(notice).toHaveTextContent('so every name is shown')
-    expect(
-      within(notice).getByRole('link', { name: 'Show every list instead' }),
-    ).toBeInTheDocument()
-
-    // And the rows really are the whole snapshot, which is what makes the advisory
-    // necessary rather than merely tidy.
-    expect(screen.getAllByRole('rowheader')).toHaveLength(5)
-  })
-
-  it('raises nothing when no list was asked for', async () => {
-    await mountUnattributable(`?view=all&now=${NOW.toISOString().slice(0, 19)}Z`)
-    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
-  })
-})
-
-describe('App list filter naming a list that is not there', () => {
-  /** The list matches nothing, so the table never arrives and the empty state settles. */
-  async function mountEmpty(search: string): Promise<void> {
-    window.history.replaceState(null, '', `/${search}`)
-    render(<App config={CONFIG} deps={DEPS} />)
-    await screen.findByRole('heading', { name: 'No names to show' })
-  }
-
-  it('says the list is unknown rather than showing an unexplained empty page', async () => {
-    // Attribution is available here, so the filter applies perfectly well and matches
-    // nothing. A renamed word list does this to a link that used to work.
-    await mountEmpty(`?view=all&list=six-letters&now=${NOW.toISOString().slice(0, 19)}Z`)
-
-    const notice = screen.getByRole('alert')
-    expect(notice).toHaveTextContent('This snapshot has no list named six-letters')
-    expect(notice).toHaveTextContent('so no name matches')
-    expect(
-      within(notice).getByRole('link', { name: 'Show every list instead' }),
-    ).toBeInTheDocument()
-
-    // The page really is empty, which is what the notice is there to explain.
-    expect(screen.queryAllByRole('rowheader')).toHaveLength(0)
-  })
-
-  it('says nothing about a list the snapshot does carry', async () => {
-    await mount(`?view=all&list=three-letters&now=${NOW.toISOString().slice(0, 19)}Z`)
-    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
-    expect(screen.getAllByRole('rowheader')).toHaveLength(3)
-  })
-})
-
-describe('App order', () => {
-  it('renders the names before any of the long-form detail', async () => {
-    await mount()
-
-    const results = resultsRegion()
-    const firstRow = within(results).getAllByRole('rowheader')[0]
-    expect(firstRow).toBeDefined()
-
-    // The heading and the trust line are the only things above the list, and the
-    // trust line is there because a reader must not be able to miss it.
-    const title = screen.getByRole('heading', { level: 1 })
-    expect(follows(title, results)).toBe(true)
-
-    // Everything a reader may want to check is below the names, not above them.
-    for (const detail of [
-      'Scan details, source lists, and method',
-      'Scanned at',
-      'Expected cadence',
-      'Source lists',
-      'What this scan found',
-      'What each status means',
-      'What each view holds',
-    ]) {
-      expect(follows(results, screen.getByText(detail))).toBe(true)
+    const unattributable: SnapshotDocument = {
+      ...DOCUMENT,
+      metadata: {
+        ...DOCUMENT.metadata,
+        sources: [
+          {
+            id: 'wordlist',
+            path: 'data/words/wordlist.txt',
+            cadence: 'daily',
+            names: 5,
+            last_scanned_at: DOCUMENT.metadata.scanned_at,
+          },
+        ],
+      },
     }
+    await mount(
+      `?view=all&list=four-letters&now=${NOW.toISOString().slice(0, 19)}Z`,
+      unattributable,
+    )
+
+    expect(within(nameList()).getAllByRole('listitem')).toHaveLength(5)
+    const drawer = await openData(user)
+    expect(drawer).toHaveTextContent('List filter not applied')
+    expect(drawer).toHaveTextContent('so the full view is shown')
   })
+})
 
-  it('keeps the detail out of the way until it is asked for', async () => {
-    const user = userEvent.setup()
-    await mount()
-
-    const summary = screen.getByText('Scan details, source lists, and method')
-    expect(screen.getByRole('heading', { name: 'What each status means' })).not.toBeVisible()
-
-    await user.click(summary)
-
-    expect(screen.getByRole('heading', { name: 'What each status means' })).toBeVisible()
-    expect(screen.getByRole('heading', { name: 'Scan' })).toBeVisible()
-  })
-
-  it('starts the tab order with a link straight to the names', async () => {
+describe('keyboard order', () => {
+  it('starts with a skip link that targets the name field', async () => {
     const user = userEvent.setup()
     await mount()
 
@@ -305,85 +198,9 @@ describe('App order', () => {
     const skip = screen.getByRole('link', { name: 'Skip to the names' })
     expect(skip).toHaveFocus()
     expect(skip).toHaveAttribute('href', '#results')
-    expect(resultsRegion()).toHaveAttribute('id', 'results')
-  })
-})
-
-describe('App trust', () => {
-  it('states the scan time and that nothing is a live check, above the list', async () => {
-    await mount()
-
-    const results = resultsRegion()
-    const trust = screen.getByText(/Recorded statuses, not a live check/)
-    expect(follows(trust, results)).toBe(true)
-    // The exact instant, unrounded and in UTC, on the same line: two people
-    // comparing notes have to be able to tell whether it is the same scan.
-    expect(trust.closest('p')).toHaveTextContent('2026-03-01 12:00:00 UTC')
-  })
-
-  it('announces a simulated clock rather than quietly using it', async () => {
-    await mount()
-
-    const notice = screen.getByRole('region', { name: 'Showing a simulated time' })
-    expect(notice).toHaveTextContent('Simulated time.')
-    expect(within(notice).getByRole('link', { name: 'Use the real time instead' })).toHaveAttribute(
-      'href',
-      './',
+    expect(screen.getByRole('region', { name: 'Available .eth names' })).toHaveAttribute(
+      'id',
+      'results',
     )
-  })
-})
-
-describe('App fresh-check completion', () => {
-  it('announces one result while updating the table and suggestion', async () => {
-    const config: AppConfig = { apiBaseUrl: 'https://read.example', fixtureId: 'preview' }
-    let checkedNames: readonly string[] = []
-    const verifyDeps: FreshCheckDeps = {
-      requestCheck: (options) => {
-        checkedNames = options.names
-        return Promise.resolve({
-          checkedAt: NOW,
-          expiresAt: new Date(NOW.getTime() + 60 * 1000),
-          names: options.names,
-          results: options.names.map((name) => ({
-            name,
-            label: name.slice(0, -4),
-            status: 'registered',
-            expiry: new Date(NOW.getTime() + 24 * 60 * 60 * 1000),
-            graceEnds: null,
-            premiumEnds: null,
-          })),
-        })
-      },
-    }
-    window.history.replaceState(null, '', `/?now=${NOW.toISOString().slice(0, 19)}Z`)
-    render(<App config={config} deps={API_DEPS} verifyDeps={verifyDeps} />)
-    await screen.findByRole('table')
-    const user = userEvent.setup()
-
-    await user.click(screen.getByRole('button', { name: 'Suggest names' }))
-    const panel = screen.getByRole('region', { name: 'Find a name you would actually use' })
-    const suggestionCheckbox = within(panel).getAllByRole('checkbox')[0]
-    expect(suggestionCheckbox).toBeDefined()
-    await user.click(suggestionCheckbox!)
-    await user.click(within(panel).getByRole('button', { name: 'Check the ticked names now' }))
-
-    const checkedName = checkedNames[0]
-    if (checkedName === undefined) {
-      throw new Error('the suggestion check sent no name')
-    }
-    const message = `Fresh check completed. ${checkedName} returned Registered. Its ENS link is now actionable.`
-    const completion = await screen.findByText(message)
-    expect(completion).toHaveAttribute('aria-live', 'polite')
-
-    const namePattern = new RegExp(`^${checkedName.replace('.', '\\.')}`)
-    expect(within(resultsRegion()).getByRole('link', { name: namePattern })).toBeVisible()
-    expect(within(panel).getByRole('link', { name: namePattern })).toBeVisible()
-    expect(within(resultsRegion()).getByText('Registered')).toBeVisible()
-    expect(within(panel).getByText('Registered')).toBeVisible()
-
-    const matchingRegions = [...document.querySelectorAll('[aria-live="polite"]')].filter(
-      (region) => region.textContent === message,
-    )
-    expect(matchingRegions).toEqual([completion])
   })
 })

@@ -57,14 +57,14 @@ describe('ViewTabs', () => {
     mount('?view=premium')
 
     expect(tab('Premium')).toHaveAttribute('aria-current', 'page')
-    expect(tab('All names')).not.toHaveAttribute('aria-current')
+    expect(tab('All')).not.toHaveAttribute('aria-current')
   })
 
   it('leaves the default view out of the link', () => {
     mount('?view=premium')
 
     expect(tab('Available')).toHaveAttribute('href', './')
-    expect(tab('All names')).toHaveAttribute('href', '?view=all')
+    expect(tab('All')).toHaveAttribute('href', '?view=all')
     expect(tab('Expiring')).toHaveAttribute('href', '?view=expiring')
   })
 
@@ -87,15 +87,15 @@ describe('ViewTabs', () => {
   it('states how many names each view would show under the filters in force', () => {
     mount()
 
-    expect(tab('All names')).toHaveAccessibleName(/^All names 4 names match/)
+    expect(tab('All')).toHaveAccessibleName(/^All 4 names match/)
     expect(tab('Available')).toHaveAccessibleName(/^Available 1 name matches/)
-    expect(tab('Grace period')).toHaveAccessibleName(/^Grace period 1 name matches/)
+    expect(tab('Grace')).toHaveAccessibleName(/^Grace 1 name matches/)
   })
 
   it('narrows the counts when a search is in force, so none of them overpromises', () => {
     mount('?q=bbbb')
 
-    expect(tab('All names')).toHaveAccessibleName(/^All names 1 name matches/)
+    expect(tab('All')).toHaveAccessibleName(/^All 1 name matches/)
     expect(tab('Available')).toHaveAccessibleName(/^Available 0 names match/)
     expect(tab('Premium')).toHaveAccessibleName(/^Premium 1 name matches/)
   })

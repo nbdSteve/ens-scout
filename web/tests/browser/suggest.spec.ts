@@ -143,11 +143,13 @@ test.describe('the core page never waits for the model', () => {
     const watch = await open(page)
 
     /*
-     * The milestone, asserted as the page's own content rather than as a metric. The rows
+     * The milestone, asserted as the page's own content rather than as a metric. The names
      * are rendered, a filter applies, and the recommender answers - all with the model
      * chunk not yet requested and the fake not yet asked anything.
      */
-    await expect(page.getByRole('row').filter({ hasText: ZAP })).toBeVisible()
+    await expect(
+      page.getByRole('listitem', { name: new RegExp(ZAP.replace('.', '\\.')) }),
+    ).toBeVisible()
     expect(chunkRequests, 'the model chunk was fetched before the grace elapsed').toEqual([])
     expect(await events(page)).toEqual([])
 
@@ -158,7 +160,9 @@ test.describe('the core page never waits for the model', () => {
 
     // And the search field still filters, which is the other half of interactive.
     await page.getByRole('searchbox').fill('zap')
-    await expect(page.getByRole('row').filter({ hasText: AMBER })).toHaveCount(0)
+    await expect(
+      page.getByRole('listitem', { name: new RegExp(AMBER.replace('.', '\\.')) }),
+    ).toHaveCount(0)
 
     expectNoModelHostAttempts(watch)
   })

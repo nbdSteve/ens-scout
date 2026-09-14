@@ -16,7 +16,7 @@ import { visit } from './support'
  * That bundle is built with `VITE_API_BASE_URL` set, which is what turns the tick
  * boxes and the outbound links on, and it therefore loads its snapshot over the
  * network rather than from a fixture compiled into it. Both the snapshot and the
- * pointer are served here out of the committed `preview` fixture, so the rows, the
+ * pointer are served here out of the committed `preview` fixture, so the cells, the
  * counts, and the statuses are exactly the ones the other four projects assert
  * against - the only difference between the two bundles is whether a check can be
  * made at all.
@@ -202,7 +202,7 @@ export interface Held {
 /**
  * A response the test decides when to send.
  *
- * The in-flight state - the button reading `Checking` and disabled, the rows saying
+ * The in-flight state - the button reading `Checking` and disabled, the cells saying
  * a check is running - only exists while a request is outstanding, so it has to be
  * observed rather than raced. The initial `release` throws so a misuse fails loudly
  * instead of silently never resolving.
@@ -238,19 +238,19 @@ export function checkingButton(page: Page): Locator {
   return page.getByRole('button', { name: 'Checking' })
 }
 
-/** One name's row, whichever cells it currently has. */
+/** One spatial name cell, including its controls and current evidence. */
 export function rowFor(page: Page, name: string): Locator {
-  return page.getByRole('row').filter({ hasText: name })
+  return page.locator('.name-cell').filter({ hasText: name })
 }
 
-/** The row's outbound link, which exists only while a fresh check covers the name. */
+/** The cell's outbound link, which exists only while a fresh check covers the name. */
 export function ensLinkFor(page: Page, name: string): Locator {
   return rowFor(page, name).getByRole('link')
 }
 
-/** Every link inside the table, for the case where there must be none. */
-export function tableLinks(page: Page): Locator {
-  return page.getByRole('table').getByRole('link')
+/** Every outbound link inside the name field, for the case where there must be none. */
+export function fieldLinks(page: Page): Locator {
+  return page.locator('.name-field').getByRole('link')
 }
 
 /** The failed-check banner, which declares `role="alert"` from `VerifyBar`. */

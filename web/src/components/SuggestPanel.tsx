@@ -19,7 +19,7 @@ import type { VerifyBinding } from './verification'
  * It sits below the list, not above it, and that is the same budget decision
  * `the first screen is the answer, not an introduction` makes everywhere else: a visitor
  * who came to read names gets names, and anything explaining a feature they have not asked
- * for is charged against a row. It is also what keeps the promise that the base product
+ * for is charged against a visible name. It is also what keeps the promise that the base product
  * does not depend on the model - the panel can be in any of its states, including none of
  * them, and the page above it is unaffected.
  *
@@ -29,7 +29,7 @@ import type { VerifyBinding } from './verification'
  * deterministic shortlist evidence, and `suggest/parse.ts` accepts no generated prose.
  *
  * A suggestion is a reading recommendation and never a statement about availability. The
- * tick boxes and the links are the same ones the table uses, through the same gate, so a
+ * selection controls and links use the same verification gate as the name field, so a
  * suggested name reaches the ENS app only once a fresh check has covered it.
  */
 export interface SuggestPanelProps {

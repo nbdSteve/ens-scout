@@ -7,11 +7,11 @@ import { reloadDocument } from './recovery'
 /**
  * The fresh-check action.
  *
- * It lives inside the results panel, directly above the table, and it renders only once
+ * It lives inside the results panel, directly above the name field, and it renders only once
  * the visitor has ticked something or a check has failed. That is a first-screen budget
  * decision rather than a layout one: `the first screen is the answer, not an
- * introduction` charges anything above the list against a name row, and a bar explaining
- * a feature nobody has used yet would cost a row on every visit.
+ * introduction` charges anything above the field against a visible name, and a bar explaining
+ * a feature nobody has used yet would hide one on every visit.
  *
  * The failure banner is here rather than in the advisories block at the top of the page.
  * A failed check is about an action the visitor just took, so it belongs beside the
@@ -77,12 +77,6 @@ export function VerifyBar({
           )}
         </div>
       </div>
-
-      <p className="verify-bar__note">
-        A fresh check re-reads the ENS index for the selected names and opens their links for a
-        short while. It is not a reservation, and ENS is the final authority on whether a name can
-        be registered.
-      </p>
 
       {failure !== null && (
         <Notice tone="warn" voice="alert" title="Fresh check failed">

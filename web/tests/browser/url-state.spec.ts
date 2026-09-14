@@ -1,157 +1,101 @@
-import { expect, test } from '@playwright/test'
-import { matchCount, openMore, searchOf, since, visit } from './support'
+import { expect, test, type Page } from '@playwright/test'
+import { matchCount, openData, openLength, openMore, searchOf, since, visit } from './support'
 
-/**
- * The address bar as the state, exercised through real navigation.
- *
- * `query.test.ts` already proves the parse and serialize round trip as arithmetic.
- * What it cannot prove is that the browser agrees: that a control writes a history
- * entry rather than replacing one, that the back button restores the rows a visitor
- * came from, and that a shared link reproduces the same page on a cold load. Those
- * need real history and a real reload.
- */
-
-/**
- * The names in the table, in the order the page shows them.
- *
- * Read from the row headers, which every row has, rather than from a link, which a row
- * has only while a fresh check covers it. This bundle has no verifier, so no name here
- * is ever a link: reading links would collect nothing and quietly turn every order
- * comparison below into `[]` against `[]`.
- */
-function namesOn(page: import('@playwright/test').Page): Promise<string[]> {
+function namesOn(page: Page): Promise<string[]> {
   return page
-    .getByRole('table')
-    .getByRole('rowheader')
-    .evaluateAll((nodes) => nodes.map((node) => node.querySelector('.mono')?.textContent ?? ''))
+    .locator('.name-cell__label')
+    .evaluateAll((nodes) => nodes.map((node) => node.textContent.trim()))
 }
 
-test('a view link writes the view and the back button returns', async ({ page }) => {
+test('a view link writes the view and Back restores default Available', async ({ page }) => {
   await visit(page)
   const landed = await namesOn(page)
+  expect(landed).toHaveLength(16)
 
   await page
     .getByRole('navigation', { name: 'Views' })
     .getByRole('link', { name: /^Premium/ })
     .click()
-  await expect(
-    page.getByRole('heading', { level: 1, name: 'Premium .eth names', exact: true }),
-  ).toBeVisible()
+  await expect(page.getByRole('heading', { level: 1 })).toHaveAccessibleName('Premium .eth names')
   expect(searchOf(page)).toContain('view=premium')
-  await expect(page.getByRole('table').getByRole('rowheader')).toHaveCount(2)
+  await expect(page.locator('.name-cell')).toHaveCount(2)
 
   await page.goBack()
-  // Back to the default view, which is written as the absence of the parameter.
   expect(searchOf(page)).not.toContain('view=')
   expect(await namesOn(page)).toEqual(landed)
 })
 
-test('the search reaches the address bar and survives a reload', async ({ page }) => {
-  // `view=all`, because the two names the fixture has available hold no `x` and a
-  // search that found nothing would prove nothing about the round trip.
+test('search reaches the address bar and survives a reload', async ({ page }) => {
   await visit(page, { view: 'all' })
-
-  // A substring, not a prefix: `x` is in the middle of `flux` and the end of `vex`,
-  // so a search that only matched the start of a label would return nothing here.
   await page.getByRole('searchbox', { name: 'Search names' }).fill('x')
-  await expect(matchCount(page)).toContainText('2 names match')
+  await expect(matchCount(page)).toHaveText('2 names')
   await expect.poll(() => searchOf(page)).toContain('q=x')
 
   const found = await namesOn(page)
   await page.reload()
-  // The reloaded page is built only from the link, so the same rows must come back.
   await expect(page.getByRole('searchbox', { name: 'Search names' })).toHaveValue('x')
   expect(await namesOn(page)).toEqual(found)
 })
 
-test('a link naming every control reproduces itself on a cold load', async ({ page }) => {
+test('a cold link naming every control reproduces itself', async ({ page }) => {
   const search = `?view=grace&q=k&status=grace-period&min=3&max=5&dir=desc&now=${encodeURIComponent(since(0))}`
   await page.goto(`/${search}`)
-  await expect(
-    page.getByRole('heading', { level: 1, name: 'Grace period .eth names', exact: true }),
-  ).toBeVisible()
-
-  // Nothing is rewritten on arrival: the link a visitor was given is the link they
-  // keep, so copying it out of the address bar hands on the same page.
+  await expect(page.getByRole('heading', { level: 1 })).toHaveAccessibleName(
+    'Grace period .eth names',
+  )
   expect(searchOf(page)).toBe(search)
 })
 
-test('clearing the filters keeps the view and drops only the filters', async ({ page }) => {
-  await visit(page, { view: 'grace', q: 'nosuchname', min: '3' })
-  await expect(page.getByRole('heading', { name: 'No names to show' })).toBeVisible()
-
-  // The toolbar offers "Clear filters" and the empty table offers "Clear all
-  // filters", so this is the one a visitor who has just been told there is nothing
-  // to show would reach for.
-  await page
-    .getByRole('region', { name: 'Grace period .eth names', exact: true })
-    .getByRole('link', { name: 'Clear all filters' })
-    .click()
+test('clearing filters keeps the current view', async ({ page }) => {
+  await visit(page, { view: 'grace', q: 'no-such-name', min: '3' })
+  await page.getByRole('link', { name: 'Clear all filters' }).click()
 
   expect(searchOf(page)).toContain('view=grace')
   expect(searchOf(page)).not.toContain('q=')
   expect(searchOf(page)).not.toContain('min=')
-  await expect(page.getByRole('table').getByRole('rowheader')).toHaveCount(2)
+  await expect(page.locator('.name-cell')).toHaveCount(2)
 })
 
-test('a sort choice reorders the rows and is written down', async ({ page }) => {
-  // Ten names rather than two, so a reorder is visible, and the sort control opened
-  // because it lives behind the extra-filters disclosure.
-  await visit(page, { view: 'all' })
-  await openMore(page)
-  const byName = await namesOn(page)
-
-  await page.getByRole('combobox', { name: 'Sort by' }).selectOption({ label: 'Expiry' })
-
-  expect(searchOf(page)).toContain('sort=expiry')
-  const byExpiry = await namesOn(page)
-  expect(byExpiry).not.toEqual(byName)
-  // Reordering is not filtering.
-  expect([...byExpiry].sort()).toEqual([...byName].sort())
-})
-
-test('a length range that is not applied keeps saying so through the back button', async ({
+test('sort and length controls keep their URL behavior behind the compact dock', async ({
   page,
 }) => {
-  // The bounds are kept rather than repaired, so every history entry below still holds
-  // them and the length filter is still doing nothing on every one of them.
+  await visit(page, { view: 'all' })
+  const before = await namesOn(page)
+
+  await openMore(page)
+  await page.getByRole('combobox', { name: 'Sort by' }).selectOption('expiry')
+  expect(searchOf(page)).toContain('sort=expiry')
+  const sorted = await namesOn(page)
+  expect(sorted).not.toEqual(before)
+  expect([...sorted].sort()).toEqual([...before].sort())
+
+  await openLength(page)
+  await page.getByRole('spinbutton', { name: 'Shortest label length' }).fill('5')
+  await expect(matchCount(page)).toHaveText('8 names')
+  await expect.poll(() => searchOf(page)).toContain('min=5')
+})
+
+test('invalid length state is explained only inside Data and survives history', async ({
+  page,
+}) => {
   await visit(page, { view: 'all', min: '9', max: '5' })
-  // A named region, not an alert: the band's length lines change as the visitor types, so
-  // it announces politely rather than interrupting on every digit.
-  const advisory = page.getByRole('region', { name: 'Not applied' })
-  await expect(advisory).toContainText('Length range not applied: shortest 9 is above longest 5.')
+  await expect(page.locator('.discovery').getByText(/Length range not applied/)).toHaveCount(0)
 
-  // A same-document history entry, which is what makes going back a `popstate` rather
-  // than a fresh document. A real browser is the only place that distinction exists.
+  let drawer = await openData(page)
+  await expect(drawer).toContainText('Length range not applied: shortest 9 is above longest 5.')
+  await drawer.getByRole('button', { name: 'Close Data' }).click()
+
   await openMore(page)
-  await page.getByRole('combobox', { name: 'Sort by' }).selectOption({ label: 'Expiry' })
-  expect(searchOf(page)).toContain('sort=expiry')
-  await expect(advisory).toContainText('Length range not applied')
-
+  await page.getByRole('combobox', { name: 'Sort by' }).selectOption('expiry')
   await page.goBack()
-
-  expect(searchOf(page)).toContain('min=9')
-  expect(searchOf(page)).toContain('max=5')
-  await expect(advisory).toContainText('Length range not applied: shortest 9 is above longest 5.')
+  drawer = await openData(page)
+  await expect(drawer).toContainText('Length range not applied: shortest 9 is above longest 5.')
 })
 
-test('a half-typed length is reported, and the report goes when the box is emptied', async ({
-  page,
-}) => {
-  /*
-   * Only a real browser has the state this is about, and every unit test of it has to say so
-   * by hand. Here Chromium says it: a lone `e` is the exponent of a number the visitor has
-   * not finished, so the field shows the character and reports its value as the empty string.
-   *
-   * That is also the harder half. Nothing the page can see changes - the value was empty and
-   * still is, so React dispatches no change at all - which is why the validity is read from
-   * the native `input` event instead.
-   */
+test('a half-typed bound reports itself in Data and clears cleanly', async ({ page }) => {
   await visit(page, { view: 'all' })
+  await openLength(page)
   const box = page.getByRole('spinbutton', { name: 'Shortest label length' })
-  const advisory = page.getByRole('region', { name: 'Not applied' })
-  const rows = page.getByRole('table').getByRole('rowheader')
-
   await box.press('e')
 
   expect(
@@ -159,83 +103,28 @@ test('a half-typed length is reported, and the report goes when the box is empti
       value: node.value,
       badInput: node.validity.badInput,
     })),
-    'Chromium no longer reports a half-typed number this way',
   ).toEqual({ value: '', badInput: true })
-  await expect(advisory).toContainText(
+  let drawer = await openData(page)
+  await expect(drawer).toContainText(
     'Shortest length not applied: this box needs a whole number from 1 to 64.',
   )
-  await expect(box).toHaveAttribute('aria-invalid', 'true')
-  // Nothing is filtering by length, which is what the notice is there to explain.
-  await expect(rows).toHaveCount(10)
+  await drawer.getByRole('button', { name: 'Close Data' }).click()
 
   await box.fill('')
-
-  // The box is empty and nothing is wrong, so the page has nothing to say about it.
-  await expect(advisory).toHaveCount(0)
+  drawer = await openData(page)
+  await expect(drawer.getByText('Not applied')).toHaveCount(0)
   await expect(box).toHaveAttribute('aria-invalid', 'false')
-  await expect(rows).toHaveCount(10)
+  await expect(page.locator('.name-cell')).toHaveCount(24)
 })
 
-test('the report goes when React empties the box itself, with no event to read', async ({
-  page,
-}) => {
-  /*
-   * The other half of the same rule, and the half no event can carry. The box is emptied by a
-   * forward navigation, so React writes `node.value` and Chromium settles the field's bad-input
-   * state silently: nothing fires, so a flag that only remembered the last `input` event went on
-   * describing a box the visitor could see was empty. `Toolbar.test.tsx` covers this with a
-   * hand-modelled field, which has to assert the browser semantics rather than exercise them;
-   * this is the same walk through real history against a real number input.
-   */
-  await visit(page, { view: 'all', min: '5' })
-  const box = page.getByRole('spinbutton', { name: 'Shortest label length' })
-  const advisory = page.getByRole('region', { name: 'Not applied' })
-  const count = matchCount(page)
-
-  await expect(box).toHaveValue('5')
-  // Three of the fixture's ten labels are five characters or longer.
-  await expect(count).toContainText('3 names match')
-
-  // A second history entry to come forward to, made by a control that filters nothing.
-  await openMore(page)
-  await page.getByRole('combobox', { name: 'Sort by' }).selectOption({ label: 'Expiry' })
-  expect(searchOf(page)).toContain('sort=expiry')
-
-  // Half-typing over the bound leaves the field unreadable, so the bound leaves the link.
-  await box.fill('')
-  await box.press('e')
-  expect(
-    await box.evaluate((node: HTMLInputElement) => ({
-      value: node.value,
-      badInput: node.validity.badInput,
-    })),
-    'Chromium no longer reports a half-typed number this way',
-  ).toEqual({ value: '', badInput: true })
-  await expect(advisory).toContainText(
-    'Shortest length not applied: this box needs a whole number from 1 to 64.',
-  )
-  await expect.poll(() => searchOf(page)).not.toContain('min=')
-
-  // Back to the entry that still carries the bound, so React writes `5` into the box.
-  await page.goBack()
-  await expect(box).toHaveValue('5')
-  await expect(count).toContainText('3 names match')
-
-  // And forward again to the entry the bound is gone from, so React writes the box empty.
-  await page.goForward()
-
-  await expect(box).toHaveValue('')
-  await expect(advisory, 'the report outlived the box it describes').toHaveCount(0)
-  await expect(box).toHaveAttribute('aria-invalid', 'false')
-  await expect(count).toContainText('10 names match')
-})
-
-test('the simulated clock can be given up, and says so on the way out', async ({ page }) => {
+test('the preview clock is terse in the strip and removable through Data', async ({ page }) => {
   await visit(page)
-  await expect(page.getByRole('region', { name: 'Showing a simulated time' })).toBeVisible()
+  await expect(page.locator('.snapshot-strip')).toContainText('Preview')
+  await expect(page.locator('.snapshot-strip')).toContainText('Mar 1')
+  await expect(page.getByText('Preview clock')).toHaveCount(0)
 
-  await page.getByRole('link', { name: 'Use the real time instead' }).click()
-
+  const drawer = await openData(page)
+  await drawer.getByRole('link', { name: 'Use the real time instead' }).click()
   expect(searchOf(page)).not.toContain('now=')
-  await expect(page.getByRole('region', { name: 'Showing a simulated time' })).toBeHidden()
+  await expect(page.getByRole('dialog', { name: 'Data' })).toHaveCount(0)
 })

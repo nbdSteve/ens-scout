@@ -23,9 +23,9 @@ export function formatAbsolute(date: Date): string {
 }
 
 /**
- * The same instant as its two halves, so a caller in a narrow column can keep each
+ * The same instant as its two halves, so a caller in a narrow detail column can keep each
  * half whole and break only between them. Left as one string, the browser is free
- * to break after every `-` and every `:`, and in a phone-width table cell
+ * to break after every `-` and every `:`, and in a phone-width detail panel
  * `2026-03-04 12:00:00 UTC` becomes four lines.
  */
 export function splitAbsolute(date: Date): { readonly day: string; readonly clock: string } {

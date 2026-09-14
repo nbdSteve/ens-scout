@@ -85,7 +85,7 @@ function Harness({
   )
 }
 
-function mount(search = '?view=all', attribution?: Attribution): void {
+function mount(search = '?view=all', attribution?: Attribution, openLength = true): void {
   window.history.replaceState(null, '', `/${search}`)
   const snapshot = buildSnapshot()
   render(
@@ -95,11 +95,18 @@ function mount(search = '?view=all', attribution?: Attribution): void {
       <Harness attribution={attribution} snapshot={snapshot} />
     ),
   )
+  if (openLength) {
+    const length = document.querySelector<HTMLDetailsElement>('.dock-popover--length')
+    if (length === null) {
+      throw new Error('Length disclosure was not rendered')
+    }
+    length.open = true
+  }
 }
 
 /** Opens the disclosure the way a visitor does, so what it holds becomes usable. */
 async function openMore(user: ReturnType<typeof userEvent.setup>): Promise<void> {
-  await user.click(screen.getByText('More filters'))
+  await user.click(screen.getByText('More', { selector: 'summary' }))
 }
 
 /**
@@ -202,19 +209,24 @@ beforeEach(() => {
 })
 
 describe('Toolbar disclosure', () => {
-  it('shows search and length at once, and keeps the rest one control away', async () => {
+  it('shows search and both compact disclosures without exposing their panels', async () => {
     const user = userEvent.setup()
-    mount()
+    mount('?view=all', undefined, false)
 
-    // The two a visitor reaches for on arrival are on screen without asking.
+    // The primary control and both one-word disclosure labels stay in the dock.
     expect(screen.getByLabelText('Search names')).toBeVisible()
-    expect(screen.getByLabelText('Shortest label length')).toBeVisible()
-    expect(screen.getByLabelText('Longest label length')).toBeVisible()
+    expect(screen.getByText('Length', { selector: 'summary' })).toBeVisible()
+    expect(screen.getByText('More', { selector: 'summary' })).toBeVisible()
+    expect(screen.getByLabelText('Shortest label length')).not.toBeVisible()
+    expect(screen.getByLabelText('Longest label length')).not.toBeVisible()
 
-    // The rest is in the DOM, so find-in-page and the tests reach it, but it is
-    // not taking up the screen until it is asked for.
+    // The panels are present for semantics and form state, but consume no discovery space.
     expect(screen.getByLabelText('Sort by')).not.toBeVisible()
     expect(screen.getByRole('checkbox', { name: 'Available (1)' })).not.toBeVisible()
+
+    await user.click(screen.getByText('Length', { selector: 'summary' }))
+    expect(screen.getByLabelText('Shortest label length')).toBeVisible()
+    expect(screen.getByLabelText('Longest label length')).toBeVisible()
 
     await openMore(user)
 

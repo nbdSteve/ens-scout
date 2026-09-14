@@ -22,7 +22,7 @@ import type { Boundary, BoundaryKind } from '../snapshot/lifecycle'
  *
  * The ticking value is hidden from assistive technology and paired with a coarse
  * static sentence. A value that changes every second would otherwise be announced
- * every second, and fifty of them on one page would make the table unusable.
+ * every second, and fifty of them on one page would create needless work.
  */
 export interface CountdownProps {
   readonly boundary: Boundary
