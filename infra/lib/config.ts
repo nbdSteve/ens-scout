@@ -10,8 +10,8 @@ import { Duration } from 'aws-cdk-lib';
  * Secrets Manager secret that holds it, so its value never enters the repository,
  * the context, or the synthesized template.
  *
- * `ens-scout:account` is the one key `cdk.json` deliberately does not commit the
- * real value of. See `placeholderAccount`.
+ * The account, hosted-zone ID, and certificate ARN are the deployment identifiers
+ * `cdk.json` deliberately does not commit. See the placeholder constants below.
  */
 export const contextKeys = {
   environmentName: 'ens-scout:environmentName',
@@ -20,6 +20,10 @@ export const contextKeys = {
   subgraphId: 'ens-scout:subgraphId',
   graphApiKeySecretName: 'ens-scout:graphApiKeySecretName',
   graphApiKeySecretField: 'ens-scout:graphApiKeySecretField',
+  siteDomainName: 'ens-scout:siteDomainName',
+  siteHostedZoneName: 'ens-scout:siteHostedZoneName',
+  siteHostedZoneId: 'ens-scout:siteHostedZoneId',
+  siteCertificateArn: 'ens-scout:siteCertificateArn',
   snapshotTtlAttribute: 'ens-scout:snapshotTtlAttribute',
   logRetentionDays: 'ens-scout:logRetentionDays',
   dlqRetentionDays: 'ens-scout:dlqRetentionDays',
@@ -56,6 +60,14 @@ export interface Config {
   readonly subgraphId: string;
   readonly graphApiKeySecretName: string;
   readonly graphApiKeySecretField: string;
+  /** The public alternate name served by the CloudFront distribution. */
+  readonly siteDomainName: string;
+  /** The existing public Route 53 zone containing `siteDomainName`. */
+  readonly siteHostedZoneName: string;
+  /** The existing public Route 53 zone ID; supplied by the production environment. */
+  readonly siteHostedZoneId: string;
+  /** The existing us-east-1 ACM viewer certificate; supplied by the production environment. */
+  readonly siteCertificateArn: string;
   /**
    * The DynamoDB TTL attribute. It must match `attrExpiresAt` in
    * `internal/dynamo`, or a superseded snapshot's chunks are never removed.
@@ -89,22 +101,17 @@ export const defaultScanTuning: ScanTuning = {
 };
 
 /**
- * placeholderAccount is the account `cdk.json` commits for `ens-scout:account`.
+ * Safe deployment-specific stand-ins committed for credential-free synthesis.
  *
- * The account number is public information about a private deployment, so this
- * repository does not carry it: the real one is the GitHub repository variable
- * `AWS_ACCOUNT_ID`, and the production workflow supplies it to the synth that
- * produces the artifact it deploys, with
- * `-c ens-scout:account=<the variable>`.
- *
- * A placeholder rather than an absent key, because `resolveConfig` fails closed on a
- * missing account and every pull-request check, every local synth, and every test in
- * this directory has to be able to synthesize the stack without the real value. It is
- * obviously not an account anyone owns, so a synth that reached AWS with it would be
- * refused rather than land somewhere unexpected, and the deploy workflow refuses it
- * explicitly before it builds anything.
+ * The production workflow supplies the real account, hosted-zone ID, and certificate
+ * ARN. Keeping shaped placeholders here lets a clean clone resolve and test the whole
+ * stack while ensuring an unqualified deployment cannot land in the production
+ * account or manage its DNS.
  */
 export const placeholderAccount = '000000000000';
+export const placeholderHostedZoneId = 'Z00000000000000000000';
+export const placeholderCertificateArn =
+  `arn:aws:acm:us-east-1:${placeholderAccount}:certificate/00000000-0000-0000-0000-000000000000`;
 
 /**
  * functionTimeout is the Lambda timeout.
@@ -124,13 +131,26 @@ export const functionTimeout = Duration.minutes(13);
  * a silent default would put a real scan against the wrong subgraph or table.
  */
 export function resolveConfig(scope: Construct): Config {
+  const account = requireDigits(scope, contextKeys.account, 12);
+  const siteDomainName = requireDomainName(scope, contextKeys.siteDomainName);
+  const siteHostedZoneName = requireDomainName(scope, contextKeys.siteHostedZoneName);
+  if (!siteDomainName.endsWith(`.${siteHostedZoneName}`)) {
+    throw new Error(
+      `context key ${contextKeys.siteDomainName} must name a subdomain of ${contextKeys.siteHostedZoneName}`,
+    );
+  }
+
   return {
     environmentName: requireString(scope, contextKeys.environmentName),
-    account: requireDigits(scope, contextKeys.account, 12),
+    account,
     region: requireString(scope, contextKeys.region),
     subgraphId: requireString(scope, contextKeys.subgraphId),
     graphApiKeySecretName: requireString(scope, contextKeys.graphApiKeySecretName),
     graphApiKeySecretField: requireString(scope, contextKeys.graphApiKeySecretField),
+    siteDomainName,
+    siteHostedZoneName,
+    siteHostedZoneId: requireHostedZoneId(scope, contextKeys.siteHostedZoneId),
+    siteCertificateArn: requireCertificateArn(scope, contextKeys.siteCertificateArn, account),
     snapshotTtlAttribute: requireString(scope, contextKeys.snapshotTtlAttribute),
     logRetentionDays: requireNumber(scope, contextKeys.logRetentionDays),
     dlqRetentionDays: requireNumber(scope, contextKeys.dlqRetentionDays),
@@ -159,6 +179,43 @@ function requireDigits(scope: Construct, key: string, digits: number): string {
   const value = requireString(scope, key);
   if (!new RegExp(`^[0-9]{${digits}}$`).test(value)) {
     throw new Error(`context key ${key} must be exactly ${digits} digits`);
+  }
+  return value;
+}
+
+function requireDomainName(scope: Construct, key: string): string {
+  const value = requireString(scope, key);
+  const labels = value.split('.');
+  if (
+    value.length > 253 ||
+    labels.length < 2 ||
+    labels.some(
+      (label) =>
+        label.length > 63 ||
+        !/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(label),
+    )
+  ) {
+    throw new Error(`context key ${key} must be a lowercase DNS name`);
+  }
+  return value;
+}
+
+function requireHostedZoneId(scope: Construct, key: string): string {
+  const value = requireString(scope, key);
+  if (!/^Z[A-Z0-9]{10,31}$/.test(value)) {
+    throw new Error(`context key ${key} must be a Route 53 hosted-zone ID`);
+  }
+  return value;
+}
+
+function requireCertificateArn(scope: Construct, key: string, account: string): string {
+  const value = requireString(scope, key);
+  const certificateId =
+    '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
+  if (!new RegExp(`^arn:aws:acm:us-east-1:${account}:certificate/${certificateId}$`).test(value)) {
+    throw new Error(
+      `context key ${key} must be a us-east-1 ACM certificate ARN in the configured account`,
+    );
   }
   return value;
 }

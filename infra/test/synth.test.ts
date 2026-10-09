@@ -50,7 +50,8 @@ describe('synthesis', () => {
     // The environment is fixed rather than resolved from ambient credentials, so a
     // synth cannot silently target whichever account happens to be logged in. From a
     // clean clone that account is the committed placeholder; the production workflow
-    // overrides the one key with `-c` for the synth it deploys.
+    // overrides it alongside the zone and certificate identifiers for the synth it
+    // deploys.
     expect(stack.account).toBe(placeholderAccount);
     expect(stack.region).toBe('ap-southeast-2');
     expect(Object.keys(template.toJSON().Resources ?? {}).length).toBeGreaterThan(0);
@@ -86,9 +87,11 @@ describe('synthesis', () => {
     template.resourceCountIs('AWS::S3::Bucket', 1);
     template.resourceCountIs('AWS::CloudFront::Distribution', 1);
     template.resourceCountIs('AWS::CloudFront::OriginAccessControl', 1);
+    template.resourceCountIs('AWS::Route53::RecordSet', 2);
 
-    // Deployment identity, custom domains, certificates, and a second scheduler
-    // remain deliberately out of this stack.
+    // Deployment identity, certificate and hosted-zone creation, and a second
+    // scheduler remain deliberately out of this stack. The existing certificate
+    // and zone are imported by identifier, so neither becomes a stack resource.
     for (const type of [
       'AWS::ApiGateway::RestApi',
       'AWS::Lambda::Url',

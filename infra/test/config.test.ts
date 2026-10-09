@@ -3,7 +3,13 @@ import * as path from 'path';
 
 import * as cdk from 'aws-cdk-lib';
 
-import { contextKeys, placeholderAccount, resolveConfig } from '../lib/config';
+import {
+  contextKeys,
+  placeholderAccount,
+  placeholderCertificateArn,
+  placeholderHostedZoneId,
+  resolveConfig,
+} from '../lib/config';
 import { goSource, goStringConstants, requireConstant } from './helpers';
 
 /** The context committed in cdk.json, which is what an unqualified `cdk` command uses. */
@@ -31,6 +37,15 @@ describe('the committed context', () => {
     const config = resolveConfig(scopeWith());
     expect(config.account).toBe(placeholderAccount);
     expect(config.region).toBe('ap-southeast-2');
+  });
+
+  test('commits the public names and safe stand-ins for deployment-specific identifiers', () => {
+    const config = resolveConfig(scopeWith());
+    expect(config.siteDomainName).toBe('ens.steve.gg');
+    expect(config.siteHostedZoneName).toBe('steve.gg');
+    expect(config.siteHostedZoneId).toBe(placeholderHostedZoneId);
+    expect(config.siteCertificateArn).toBe(placeholderCertificateArn);
+    expect(config.siteCertificateArn).toContain(`:${placeholderAccount}:`);
   });
 
   test('declares a key for every value the stack reads', () => {
@@ -105,9 +120,53 @@ describe('resolveConfig', () => {
         contextKeys.account,
       );
     }
+    const account = '123456789012';
     expect(() =>
-      resolveConfig(scopeWith({ [contextKeys.account]: '123456789012' })),
+      resolveConfig(
+        scopeWith({
+          [contextKeys.account]: account,
+          [contextKeys.siteCertificateArn]: certificateArn(account),
+        }),
+      ),
     ).not.toThrow();
+  });
+
+  test('requires a lowercase hostname inside the configured hosted zone', () => {
+    for (const name of ['ENS.steve.gg', 'ens_staging.steve.gg', 'steve.gg']) {
+      expect(() =>
+        resolveConfig(scopeWith({ [contextKeys.siteDomainName]: name })),
+      ).toThrow(contextKeys.siteDomainName);
+    }
+    expect(() =>
+      resolveConfig(
+        scopeWith({
+          [contextKeys.siteDomainName]: 'ens.example.com',
+          [contextKeys.siteHostedZoneName]: 'steve.gg',
+        }),
+      ),
+    ).toThrow(contextKeys.siteDomainName);
+  });
+
+  test('requires a Route 53 hosted-zone ID', () => {
+    for (const id of ['hostedzone/Z1234567890', 'Zshort', 'z1234567890', '']) {
+      expect(() =>
+        resolveConfig(scopeWith({ [contextKeys.siteHostedZoneId]: id })),
+      ).toThrow(contextKeys.siteHostedZoneId);
+    }
+  });
+
+  test('requires a us-east-1 certificate ARN in the configured account', () => {
+    const account = placeholderAccount;
+    for (const arn of [
+      certificateArn(account).replace(':us-east-1:', ':ap-southeast-2:'),
+      certificateArn('123456789012'),
+      `arn:aws:acm:us-east-1:${account}:certificate/not-a-certificate-id`,
+      '',
+    ]) {
+      expect(() =>
+        resolveConfig(scopeWith({ [contextKeys.siteCertificateArn]: arn })),
+      ).toThrow(contextKeys.siteCertificateArn);
+    }
   });
 
   test('requires a positive integer retention', () => {
@@ -123,3 +182,7 @@ describe('resolveConfig', () => {
     expect(config.dlqRetentionDays).toBe(7);
   });
 });
+
+function certificateArn(account: string): string {
+  return `arn:aws:acm:us-east-1:${account}:certificate/12345678-1234-1234-1234-123456789abc`;
+}

@@ -43,6 +43,8 @@ const placeholderRules = {
   ACCOUNT_ID: /^[0-9]{12}$/,
   // The character set IAM allows in a role name, and its length limit.
   CLOUDFORMATION_EXECUTION_ROLE_NAME: /^[\w+=,.@-]{1,64}$/,
+  // The identifier shape Route 53 returns for a hosted zone.
+  ROUTE53_HOSTED_ZONE_ID: /^Z[A-Z0-9]{10,31}$/,
   // The exact prefix shape GitHub reports when immutable repository subjects are
   // enabled. Both identities are canonical positive decimal integers: accepting a
   // sign, zero, a leading zero, or another numeric notation would render a subject
@@ -141,7 +143,8 @@ function usage() {
     '  node scripts/render-iam.js --example [--out-dir <dir>]',
     '  node scripts/render-iam.js --account-id <twelve digits>',
     '      --repository-identity <owner@owner-id/repository@repository-id>',
-    '      --execution-role-name <name> [--out-dir <dir>]',
+    '      --execution-role-name <name> --route53-hosted-zone-id <id>',
+    '      [--out-dir <dir>]',
   ].join('\n');
 }
 
@@ -151,6 +154,7 @@ function parseArgv(argv) {
     ['--account-id', 'ACCOUNT_ID'],
     ['--execution-role-name', 'CLOUDFORMATION_EXECUTION_ROLE_NAME'],
     ['--repository-identity', 'GITHUB_REPOSITORY_IDENTITY'],
+    ['--route53-hosted-zone-id', 'ROUTE53_HOSTED_ZONE_ID'],
   ]);
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index];

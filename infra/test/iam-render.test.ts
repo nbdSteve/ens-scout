@@ -2,7 +2,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 
-import { placeholderAccount } from '../lib/config';
+import { placeholderAccount, placeholderHostedZoneId } from '../lib/config';
 
 // Plain CommonJS, required rather than imported, like scripts/bundle-scanner.js.
 const render = require('../scripts/render-iam');
@@ -36,6 +36,10 @@ describe('the example values', () => {
     // The two positive decimals exercise the live immutable-subject shape without
     // putting either live identifier in the repository.
     expect(values.GITHUB_REPOSITORY_IDENTITY).toBe(exampleRepositoryIdentity);
+  });
+
+  test('name the same synthetic hosted zone as the committed CDK context', () => {
+    expect(values.ROUTE53_HOSTED_ZONE_ID).toBe(placeholderHostedZoneId);
   });
 });
 
@@ -86,6 +90,15 @@ describe('rendering one document', () => {
         CLOUDFORMATION_EXECUTION_ROLE_NAME: 'not a role name',
       }),
     ).toThrow(/CLOUDFORMATION_EXECUTION_ROLE_NAME/);
+    expect(() =>
+      render.renderIamDocument(
+        render.readTemplate('cloudformation-execution-role-policy'),
+        {
+          ...values,
+          ROUTE53_HOSTED_ZONE_ID: 'not-a-hosted-zone',
+        },
+      ),
+    ).toThrow(/ROUTE53_HOSTED_ZONE_ID/);
   });
 
   test('names only the placeholder in a refusal, never the value', () => {
@@ -203,11 +216,14 @@ describe('the command line', () => {
       exampleRepositoryIdentity,
       '--execution-role-name',
       'SomeRole',
+      '--route53-hosted-zone-id',
+      placeholderHostedZoneId,
     ]);
     expect(options.values).toEqual({
       ACCOUNT_ID: placeholderAccount,
       CLOUDFORMATION_EXECUTION_ROLE_NAME: 'SomeRole',
       GITHUB_REPOSITORY_IDENTITY: exampleRepositoryIdentity,
+      ROUTE53_HOSTED_ZONE_ID: placeholderHostedZoneId,
     });
     expect(options.example).toBe(false);
   });

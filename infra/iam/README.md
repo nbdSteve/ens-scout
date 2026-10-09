@@ -8,7 +8,8 @@ honest.
 
 The `*.template.json` files are committed source. They are templates rather than the
 applied documents because the applied documents name the account, the execution role,
-and GitHub's immutable repository identity, and none belongs in a public repository.
+the hosted-zone ID, and GitHub's immutable repository identity, and none belongs in a
+public repository.
 Every such position is an explicit `${PLACEHOLDER}`:
 
 | Placeholder | What it is | Where the real value lives |
@@ -16,6 +17,7 @@ Every such position is an explicit `${PLACEHOLDER}`:
 | `${ACCOUNT_ID}` | The twelve-digit target account | Protected `production` environment variable `AWS_ACCOUNT_ID` |
 | `${CLOUDFORMATION_EXECUTION_ROLE_NAME}` | The role CloudFormation acts as | The role-name part of protected `production` environment variable `AWS_CLOUDFORMATION_EXECUTION_ROLE_ARN`; the full ARN is not rendered |
 | `${GITHUB_REPOSITORY_IDENTITY}` | GitHub's immutable `owner@owner-id/repository@repository-id` identity segment | The live repository OIDC customization; supplied out of band when rendering and never stored in a workflow variable |
+| `${ROUTE53_HOSTED_ZONE_ID}` | The public hosted zone whose ENS Scout records CloudFormation may manage | Protected `production` environment variable `AWS_ROUTE53_HOSTED_ZONE_ID` |
 
 Everything else stays a literal, because it is committed elsewhere in this repository
 already and the test ties the documents to that copy: the region and the secret name
@@ -27,7 +29,7 @@ A placeholder for one of those would make the tie tautological.
 
 ```powershell
 node scripts/render-iam.js --example
-node scripts/render-iam.js --account-id <twelve digits> --repository-identity <owner@owner-id/repository@repository-id> --execution-role-name <name>
+node scripts/render-iam.js --account-id <twelve digits> --repository-identity <owner@owner-id/repository@repository-id> --execution-role-name <name> --route53-hosted-zone-id <id>
 ```
 
 Both write to `iam/rendered/`, which is ignored by git; rendered documents are never

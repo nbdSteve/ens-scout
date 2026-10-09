@@ -763,7 +763,8 @@ section holds only the rules that a change here could quietly break.
   CloudFront distribution. CloudFront uses OAC for the bucket and one generated
   origin token for the HTTP API; a direct execute-api request must fail before it
   reaches `internal/api`. The API role reads only `META`/`SNAPSHOT#` keys and writes
-  only `CHECKRATE#`/`CHECKRESULT#` keys.
+  only `CHECKRATE#`/`CHECKRESULT#` keys. The generated CloudFront hostname and the
+  Route 53 alias reach those same behaviors; neither adds another origin.
 - SPA fallback belongs only on the default static behavior and rewrites only `/`,
   trailing-slash routes, and extensionless routes. `assets/*` has no rewrite
   association and the distribution has no custom error fallback, so a missing
@@ -773,10 +774,12 @@ section holds only the rules that a change here could quietly break.
 - Keep the production snapshot body ceiling below the buffered Lambda invocation
   limit; `infra/lib/public-site.ts` owns the 4 MiB value that leaves room for the
   proxy response envelope.
-- The stack still refuses an `AWS::IAM::OIDCProvider`, custom domain, certificate,
-  hosted zone, or second scheduler. The provider and deployment roles are what
-  deploy this stack, so defining them here would need something else to deploy them
-  first; domains and release-safety extras are outside the approved launch scope.
+- The stack still refuses an `AWS::IAM::OIDCProvider`, certificate creation, hosted
+  zone creation, or second scheduler. It imports one existing `us-east-1` certificate
+  and one existing public hosted zone by deployment-supplied identifiers, owns the
+  custom hostname's A and AAAA records, and preserves the generated CloudFront URL.
+  The provider and deployment roles remain outside the stack because they are what
+  deploy it.
 - `lib/deployment.ts` owns the bootstrap qualifier, the asset bucket name, and the
   synthesizer, because all three have to agree with an IAM policy that lives outside
   CDK. Nothing else may name the qualifier or build that bucket name, and
@@ -828,7 +831,7 @@ there could quietly break.
   fork run, a failed run, or a non-main run reaches no environment and requests no
   token. `workflow_dispatch` is a main-only recovery trigger and does not gate the
   automatic path.
-- The `production` environment keeps the four deployment variables and the custom
+- The `production` environment keeps the six deployment variables and the custom
   `main`-only branch policy, but no required-reviewer rule. Recurring production
   approval is the successful `main` checks run rather than a second human gate.
 - The production workflow builds the web bundle with `VITE_API_BASE_URL=/` before
@@ -848,25 +851,26 @@ there could quietly break.
   `environment: production`. The pull-request checks request no OIDC token at all, so
   nothing on that path can reach the account.
 - No AWS access key or other long-lived cloud credential goes in the repository or in
-  its GitHub settings. The account, the region, and the two role ARNs are non-secret
-  variables on the `production` environment: `AWS_ACCOUNT_ID`, `AWS_REGION`,
-  `AWS_DEPLOY_ROLE_ARN`, and `AWS_CLOUDFORMATION_EXECUTION_ROLE_ARN`.
-- No tracked file holds the real account number or either real role name, and none may
-  gain one. Both roles are supplied as whole ARNs rather than composed from the account
-  and a role name, because composing one puts a role name back in tracked YAML and lets
-  a variable disagree with the ARN built out of it. `AWS_ACCOUNT_ID` exists separately
-  only because the CDK stack environment and the `allowed-account-ids` guard need the
-  account on its own. The workflow validates all four before it builds, prints names and
-  never values, and `test/deployment.test.ts` fails on an embedded account number, role
-  name, or role ARN.
-- The account is therefore not committed either. `infra/cdk.json` carries
-  `lib/config.ts`'s `placeholderAccount` and the deploy job passes the real one as
-  `-c ens-scout:account=$AWS_ACCOUNT_ID` on the `npm run check` that produces the
-  artifact it deploys, which works only because `check` ends with the synth - a test
-  asserts that order, since a `check` ending with the tests would send the context to
-  jest and deploy an artifact built against the placeholder.
+  its GitHub settings. The account, region, two role ARNs, hosted-zone ID, and
+  certificate ARN are non-secret variables on the `production` environment:
+  `AWS_ACCOUNT_ID`, `AWS_REGION`, `AWS_DEPLOY_ROLE_ARN`,
+  `AWS_CLOUDFORMATION_EXECUTION_ROLE_ARN`, `AWS_ROUTE53_HOSTED_ZONE_ID`, and
+  `AWS_ACM_CERTIFICATE_ARN`.
+- No tracked file holds the real account number, hosted-zone ID, certificate ARN, or
+  either real role name, and none may gain one. Both roles are supplied as whole ARNs
+  rather than composed from the account and a role name, because composing one puts a
+  role name back in tracked YAML and lets a variable disagree with the ARN built out
+  of it. The workflow validates all six before it builds, prints names and never
+  values, and `test/deployment.test.ts` fails on an embedded deployment identifier.
+- `infra/cdk.json` carries `lib/config.ts`'s safe account, hosted-zone, and certificate
+  placeholders. The deploy job passes the real three values as context on the
+  `npm run check` that produces the artifact it deploys, which works only because
+  `check` ends with the synth - a test asserts that order, since a `check` ending with
+  the tests would send the context to jest and deploy an artifact built against the
+  placeholders.
 - `infra/iam/` holds templates of the documents that are applied, with an explicit
-  `${PLACEHOLDER}` at every position naming the account or the execution role, and
+  `${PLACEHOLDER}` at every position naming the account, execution role, or hosted
+  zone, and
   `infra/scripts/render-iam.js` is the one path from a template to a document. Rendering
   is deterministic, refuses a value of the wrong shape, never names a supplied value in
   a diagnostic, and writes to the gitignored `infra/iam/rendered/`. Nothing synthesizes

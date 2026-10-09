@@ -1,6 +1,6 @@
 import { Match, Template } from 'aws-cdk-lib/assertions';
 
-import { synth } from './helpers';
+import { synth, testConfig } from './helpers';
 
 describe('the public website', () => {
   let template: Template;
@@ -50,12 +50,16 @@ describe('the public website', () => {
     });
   });
 
-  test('uses one generated hostname for static files and every API route', () => {
+  test('serves the custom hostname and keeps the generated hostname as the fallback URL', () => {
     template.resourceCountIs('AWS::CloudFront::Distribution', 1);
     template.hasResourceProperties('AWS::CloudFront::Distribution', {
       DistributionConfig: {
-        Aliases: Match.absent(),
-        ViewerCertificate: Match.absent(),
+        Aliases: [testConfig.siteDomainName],
+        ViewerCertificate: {
+          AcmCertificateArn: testConfig.siteCertificateArn,
+          MinimumProtocolVersion: 'TLSv1.2_2021',
+          SslSupportMethod: 'sni-only',
+        },
         DefaultRootObject: 'index.html',
         Origins: Match.arrayWith([
           Match.objectLike({ S3OriginConfig: { OriginAccessIdentity: '' } }),
@@ -85,6 +89,25 @@ describe('the public website', () => {
         ],
       },
     });
+  });
+
+  test('aliases both IPv4 and IPv6 through the existing hosted zone', () => {
+    template.resourceCountIs('AWS::Route53::RecordSet', 2);
+    for (const type of ['A', 'AAAA']) {
+      template.hasResourceProperties('AWS::Route53::RecordSet', {
+        HostedZoneId: testConfig.siteHostedZoneId,
+        Name: `${testConfig.siteDomainName}.`,
+        Type: type,
+        AliasTarget: {
+          DNSName: {
+            'Fn::GetAtt': [Match.stringLikeRegexp('^PublicSiteDistribution'), 'DomainName'],
+          },
+          HostedZoneId: Match.anyValue(),
+        },
+      });
+    }
+    template.resourceCountIs('AWS::Route53::HostedZone', 0);
+    template.resourceCountIs('AWS::CertificateManager::Certificate', 0);
   });
 
   test('assigns separate bounded cache policies to shell, assets, snapshots, and mutations', () => {

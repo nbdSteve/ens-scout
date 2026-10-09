@@ -37,6 +37,11 @@ export const testConfig: Config = {
   subgraphId: 'test-subgraph-id',
   graphApiKeySecretName: testSecretName,
   graphApiKeySecretField: 'apiKey',
+  siteDomainName: 'ens.test.example',
+  siteHostedZoneName: 'test.example',
+  siteHostedZoneId: 'Z11111111111111111111',
+  siteCertificateArn:
+    'arn:aws:acm:us-east-1:111111111111:certificate/11111111-1111-1111-1111-111111111111',
   snapshotTtlAttribute: 'expires_at',
   logRetentionDays: 30,
   dlqRetentionDays: 14,

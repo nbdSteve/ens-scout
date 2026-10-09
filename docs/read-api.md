@@ -570,7 +570,8 @@ A rejected setting names the variable, so an operator does not have to guess whi
 An empty origin list means no cross-origin browser origin is accepted, which is the
 safe default.
 A same-origin browser needs no CORS grant, so the CloudFront deployment leaves this
-empty and serves the page and `/api/*` from one generated hostname.
+empty and serves the page and `/api/*` through the same distribution on both its
+custom and generated hostnames.
 A non-browser client is unaffected, because CORS only ever grants access it would otherwise deny.
 
 The production entrypoint sets `ENS_API_MAX_BODY_BYTES` to 4 MiB. That leaves room

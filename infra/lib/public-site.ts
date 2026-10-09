@@ -7,12 +7,15 @@ import {
 } from 'aws-cdk-lib';
 import * as apigwv2 from 'aws-cdk-lib/aws-apigatewayv2';
 import * as integrations from 'aws-cdk-lib/aws-apigatewayv2-integrations';
+import * as acm from 'aws-cdk-lib/aws-certificatemanager';
 import * as cloudfront from 'aws-cdk-lib/aws-cloudfront';
 import * as origins from 'aws-cdk-lib/aws-cloudfront-origins';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as logs from 'aws-cdk-lib/aws-logs';
+import * as route53 from 'aws-cdk-lib/aws-route53';
+import * as route53Targets from 'aws-cdk-lib/aws-route53-targets';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as s3deploy from 'aws-cdk-lib/aws-s3-deployment';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
@@ -44,8 +47,8 @@ export interface PublicSiteProps {
 
 /**
  * PublicSite is the one-origin website: a private S3 origin for the Vite build
- * and one HTTP API origin for internal/api, both behind one generated CloudFront
- * hostname.
+ * and one HTTP API origin for internal/api, both behind one CloudFront distribution.
+ * Its generated hostname remains valid beside the production Route 53 alias.
  */
 export class PublicSite extends Construct {
   readonly apiFunction: lambda.Function;
@@ -224,8 +227,16 @@ export class PublicSite extends Construct {
       compress: true,
     };
 
+    const viewerCertificate = acm.Certificate.fromCertificateArn(
+      this,
+      'ViewerCertificate',
+      props.config.siteCertificateArn,
+    );
     this.distribution = new cloudfront.Distribution(this, 'Distribution', {
       comment: `ENS Scout ${props.config.environmentName}`,
+      domainNames: [props.config.siteDomainName],
+      certificate: viewerCertificate,
+      minimumProtocolVersion: cloudfront.SecurityPolicyProtocol.TLS_V1_2_2021,
       defaultRootObject: 'index.html',
       defaultBehavior: staticBehavior,
       additionalBehaviors: {
@@ -247,6 +258,29 @@ export class PublicSite extends Construct {
       },
       httpVersion: cloudfront.HttpVersion.HTTP2_AND_3,
       priceClass: cloudfront.PriceClass.PRICE_CLASS_100,
+    });
+
+    const hostedZone = route53.HostedZone.fromHostedZoneAttributes(this, 'HostedZone', {
+      hostedZoneId: props.config.siteHostedZoneId,
+      zoneName: props.config.siteHostedZoneName,
+    });
+    const recordName = props.config.siteDomainName.slice(
+      0,
+      -(props.config.siteHostedZoneName.length + 1),
+    );
+    new route53.ARecord(this, 'AliasA', {
+      zone: hostedZone,
+      recordName,
+      target: route53.RecordTarget.fromAlias(
+        new route53Targets.CloudFrontTarget(this.distribution),
+      ),
+    });
+    new route53.AaaaRecord(this, 'AliasAAAA', {
+      zone: hostedZone,
+      recordName,
+      target: route53.RecordTarget.fromAlias(
+        new route53Targets.CloudFrontTarget(this.distribution),
+      ),
     });
 
     const deploymentLogGroup = new logs.LogGroup(this, 'WebsiteDeploymentLogGroup', {

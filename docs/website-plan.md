@@ -330,11 +330,12 @@ and local-copy handling in place for when an endpoint exists.
 table, the large `.eth` composer, the compact control bar, and the mono ledger.
 The optical background is mounted already, so until then the page renders the
 previous list markup underneath it.
-- Deploy static assets and the read API behind one generated CloudFront HTTPS
-  origin. Done. The frontend bucket is private behind OAC, `/api/*` is a bounded
-  HTTP API integration, and the browser build uses `/` as its API base so ordinary
-  browsing and fresh checks are same-origin. `internal/api` keeps exact-origin CORS
-  behavior and this deployment grants no separate cross-origin browser origin.
+- Deploy static assets and the read API behind one CloudFront HTTPS origin. Done.
+  The frontend bucket is private behind OAC, `/api/*` is a bounded HTTP API
+  integration, the custom and generated hostnames reach the same distribution, and
+  the browser build uses `/` as its API base so ordinary browsing and fresh checks
+  are same-origin. `internal/api` keeps exact-origin CORS behavior and this
+  deployment grants no separate cross-origin browser origin.
 
 ### Phase 3: live verification and operations
 

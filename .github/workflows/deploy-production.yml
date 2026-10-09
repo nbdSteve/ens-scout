@@ -18,7 +18,7 @@
 #
 # Everything this workflow needs to know about the account is a variable on the
 # protected `production` environment, and the deploy job's first step refuses to
-# build anything until all four are present and well formed. Nothing here composes
+# build anything until all six are present and well formed. Nothing here composes
 # an ARN out of parts, and no step prints a value: the account number and the role
 # names are public facts about a private deployment, and a workflow file and its
 # logs are the two most public places in the repository.
@@ -108,7 +108,7 @@ jobs:
       # this job alone.
       id-token: write
     steps:
-      # The four values this job needs from the account, checked before it builds or
+      # The six values this job needs from the account, checked before it builds or
       # deploys anything. It is first for two reasons: a value that is absent or
       # mistyped then costs no checkout, no toolchain, and no synth, and it fails
       # where the reason is legible rather than part-way through a CDK command or,
@@ -120,7 +120,7 @@ jobs:
       # The two ARNs are supplied whole rather than assembled from an account and a
       # role name. Composing one here would put a role name back in this file, and it
       # would also mean a variable could disagree with the ARN this workflow built
-      # from it; a full ARN is checked against the account instead, so the four
+      # from it; a full ARN is checked against the account instead, so all six
       # variables have to agree with each other before anything runs.
       - name: require the deployment configuration
         env:
@@ -128,13 +128,15 @@ jobs:
           AWS_REGION: ${{ vars.AWS_REGION }}
           AWS_DEPLOY_ROLE_ARN: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
           AWS_CLOUDFORMATION_EXECUTION_ROLE_ARN: ${{ vars.AWS_CLOUDFORMATION_EXECUTION_ROLE_ARN }}
+          AWS_ROUTE53_HOSTED_ZONE_ID: ${{ vars.AWS_ROUTE53_HOSTED_ZONE_ID }}
+          AWS_ACM_CERTIFICATE_ARN: ${{ vars.AWS_ACM_CERTIFICATE_ARN }}
           # infra/lib/config.ts `placeholderAccount`, which infra/cdk.json commits so
           # a clean clone can synthesize. Deploying with it would be a deployment
           # aimed at nothing.
           PLACEHOLDER_ACCOUNT: '000000000000'
         run: |
           missing=0
-          for name in AWS_ACCOUNT_ID AWS_REGION AWS_DEPLOY_ROLE_ARN AWS_CLOUDFORMATION_EXECUTION_ROLE_ARN; do
+          for name in AWS_ACCOUNT_ID AWS_REGION AWS_DEPLOY_ROLE_ARN AWS_CLOUDFORMATION_EXECUTION_ROLE_ARN AWS_ROUTE53_HOSTED_ZONE_ID AWS_ACM_CERTIFICATE_ARN; do
             if [ -z "${!name}" ]; then
               echo "::error::variable $name is not set on the production environment"
               missing=1
@@ -155,6 +157,14 @@ jobs:
             echo "::error::AWS_REGION is not shaped like an AWS region"
             exit 1
           fi
+          if [[ ! $AWS_ROUTE53_HOSTED_ZONE_ID =~ ^Z[A-Z0-9]{10,31}$ ]]; then
+            echo "::error::AWS_ROUTE53_HOSTED_ZONE_ID is not shaped like a Route 53 hosted-zone ID"
+            exit 1
+          fi
+          if [[ ! $AWS_ACM_CERTIFICATE_ARN =~ ^arn:aws:acm:us-east-1:${AWS_ACCOUNT_ID}:certificate/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]]; then
+            echo "::error::AWS_ACM_CERTIFICATE_ARN is not a us-east-1 ACM certificate ARN in the account AWS_ACCOUNT_ID names"
+            exit 1
+          fi
           for name in AWS_DEPLOY_ROLE_ARN AWS_CLOUDFORMATION_EXECUTION_ROLE_ARN; do
             if [[ ! ${!name} =~ ^arn:aws:iam::${AWS_ACCOUNT_ID}:role/[A-Za-z0-9+=,.@_/-]+$ ]]; then
               echo "::error::$name is not an IAM role ARN in the account AWS_ACCOUNT_ID names"
@@ -168,7 +178,7 @@ jobs:
             echo "::error::AWS_DEPLOY_ROLE_ARN and AWS_CLOUDFORMATION_EXECUTION_ROLE_ARN name one role"
             exit 1
           fi
-          echo "the four production deployment variables are present and consistent"
+          echo "the six production deployment variables are present and consistent"
 
       # Checkout the one full SHA the selector admitted. In the automatic path this
       # is github.event.workflow_run.head_sha, not the deploy workflow's own SHA and
@@ -213,8 +223,9 @@ jobs:
         working-directory: infra
 
       # This is the bundle the CDK synth below packages. A same-origin base of `/`
-      # keeps the browser on the generated CloudFront hostname for both static files
-      # and /api/*, and keeps every Graph and AWS value out of the Vite environment.
+      # keeps the browser on whichever hostname reached the CloudFront distribution
+      # for both static files and /api/*, and keeps every Graph and AWS value out of
+      # the Vite environment.
       - name: build the production website
         working-directory: web
         env:
@@ -239,7 +250,9 @@ jobs:
         working-directory: infra
         env:
           AWS_ACCOUNT_ID: ${{ vars.AWS_ACCOUNT_ID }}
-        run: npm run check -- --context "ens-scout:account=$AWS_ACCOUNT_ID"
+          AWS_ROUTE53_HOSTED_ZONE_ID: ${{ vars.AWS_ROUTE53_HOSTED_ZONE_ID }}
+          AWS_ACM_CERTIFICATE_ARN: ${{ vars.AWS_ACM_CERTIFICATE_ARN }}
+        run: npm run check -- --context "ens-scout:account=$AWS_ACCOUNT_ID" --context "ens-scout:siteHostedZoneId=$AWS_ROUTE53_HOSTED_ZONE_ID" --context "ens-scout:siteCertificateArn=$AWS_ACM_CERTIFICATE_ARN"
 
       - name: record what is about to be deployed
         working-directory: infra

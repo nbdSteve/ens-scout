@@ -434,6 +434,28 @@ describe('the CloudFormation execution role', () => {
     ]);
   });
 
+  test('manages DNS records only in the configured hosted zone', () => {
+    const records = statementNamed(policy, 'PublicSiteDnsRecords');
+    expect(actions([records])).toEqual([
+      'route53:ChangeResourceRecordSets',
+      'route53:GetHostedZone',
+      'route53:ListResourceRecordSets',
+    ]);
+    expect(records.Resource).toBe(
+      `arn:aws:route53:::hostedzone/${config.siteHostedZoneId}`,
+    );
+
+    const changes = statementNamed(policy, 'ReadPublicSiteDnsChanges');
+    expect(actions([changes])).toEqual(['route53:GetChange']);
+    expect(changes.Resource).toBe('arn:aws:route53:::change/*');
+
+    const zones = statementNamed(policy, 'ListHostedZonesForPublicSiteDnsRecords');
+    expect(actions([zones])).toEqual(['route53:ListHostedZones']);
+    expect(zones.Resource).toBe('*');
+
+    expect(actions(policy).filter((action) => action.startsWith('acm:'))).toEqual([]);
+  });
+
   test('names this stack own resources everywhere but the listed exceptions', () => {
     // CloudFormation names an auto-named resource `<stackName>-<logicalId>-<random>`,
     // so the stack name is a real prefix and every resource this role touches carries
@@ -480,6 +502,12 @@ describe('the CloudFormation execution role', () => {
         ],
       ],
       ['CloudFrontPublicSite', ['*']],
+      [
+        'PublicSiteDnsRecords',
+        [`arn:aws:route53:::hostedzone/${config.siteHostedZoneId}`],
+      ],
+      ['ReadPublicSiteDnsChanges', ['arn:aws:route53:::change/*']],
+      ['ListHostedZonesForPublicSiteDnsRecords', ['*']],
       ['GenerateServingSecretValues', ['*']],
       ['ReadTheStackAssets', [`arn:aws:s3:::${assetBucket}/*`]],
       [
@@ -800,7 +828,7 @@ describe('the production deployment workflow', () => {
     expect(website['working-directory']).toBe('web');
     expect(website.env).toEqual({ VITE_API_BASE_URL: '/' });
     expect(workflowRun(artifact)).toBe(
-      'npm run check -- --context "ens-scout:account=$AWS_ACCOUNT_ID"',
+      'npm run check -- --context "ens-scout:account=$AWS_ACCOUNT_ID" --context "ens-scout:siteHostedZoneId=$AWS_ROUTE53_HOSTED_ZONE_ID" --context "ens-scout:siteCertificateArn=$AWS_ACM_CERTIFICATE_ARN"',
     );
     expect(workflowRun(deployment)).toContain(`npx cdk deploy ${stackName}`);
     expect(workflowRun(deployment)).toContain('--app cdk.out');
@@ -825,7 +853,7 @@ describe('the production deployment workflow', () => {
     expect(workflowRun(siteSummary)).toContain("outputs['EnsScout-prod']?.PublicSiteUrl");
     expect(workflowRun(siteSummary)).toContain('GITHUB_STEP_SUMMARY');
     for (const summary of [workflowRun(artifactSummary), workflowRun(siteSummary)]) {
-      expect(summary).not.toMatch(/AWS_(ACCOUNT|REGION|DEPLOY|CLOUDFORMATION)/);
+      expect(summary).not.toMatch(/AWS_[A-Z0-9_]+/);
       expect(summary).not.toContain('role/');
     }
   });
@@ -854,6 +882,9 @@ describe('the deployment configuration the workflow requires', () => {
     AWS_REGION: 'ap-southeast-2',
     AWS_DEPLOY_ROLE_ARN: `arn:aws:iam::${validAccount}:role/DeployFixture`,
     AWS_CLOUDFORMATION_EXECUTION_ROLE_ARN: `arn:aws:iam::${validAccount}:role/ExecutionFixture`,
+    AWS_ROUTE53_HOSTED_ZONE_ID: 'Z1234567890ABCDEFGHIJ',
+    AWS_ACM_CERTIFICATE_ARN:
+      `arn:aws:acm:us-east-1:${validAccount}:certificate/12345678-1234-1234-1234-123456789abc`,
     PLACEHOLDER_ACCOUNT: placeholderAccount,
   };
 
@@ -887,9 +918,11 @@ describe('the deployment configuration the workflow requires', () => {
     expect([...referenced].sort()).toEqual([...required].sort());
     expect([...required].sort()).toEqual([
       'AWS_ACCOUNT_ID',
+      'AWS_ACM_CERTIFICATE_ARN',
       'AWS_CLOUDFORMATION_EXECUTION_ROLE_ARN',
       'AWS_DEPLOY_ROLE_ARN',
       'AWS_REGION',
+      'AWS_ROUTE53_HOSTED_ZONE_ID',
     ]);
   });
 
@@ -901,7 +934,7 @@ describe('the deployment configuration the workflow requires', () => {
     expect(deploy.steps.indexOf(validation)).toBeLessThan(deploy.steps.indexOf(deployment));
   });
 
-  test('accepts four consistent production values and prints none of them', () => {
+  test('accepts six consistent production values and prints none of them', () => {
     const result = validate();
     expect(result.status).toBe(0);
     for (const value of Object.values(valid)) {
@@ -923,6 +956,19 @@ describe('the deployment configuration the workflow requires', () => {
   test('refuses malformed values, role/account disagreement, and one role used twice', () => {
     expect(validate({ AWS_ACCOUNT_ID: 'short' }).status).not.toBe(0);
     expect(validate({ AWS_REGION: 'not-a-region' }).status).not.toBe(0);
+    expect(validate({ AWS_ROUTE53_HOSTED_ZONE_ID: 'not-a-zone' }).status).not.toBe(0);
+    expect(
+      validate({
+        AWS_ACM_CERTIFICATE_ARN:
+          `arn:aws:acm:ap-southeast-2:${validAccount}:certificate/12345678-1234-1234-1234-123456789abc`,
+      }).status,
+    ).not.toBe(0);
+    expect(
+      validate({
+        AWS_ACM_CERTIFICATE_ARN:
+          `arn:aws:acm:us-east-1:${'2'.repeat(12)}:certificate/12345678-1234-1234-1234-123456789abc`,
+      }).status,
+    ).not.toBe(0);
     expect(
       validate({
         AWS_DEPLOY_ROLE_ARN: `arn:aws:iam::${'2'.repeat(12)}:role/DeployFixture`,
@@ -941,13 +987,17 @@ describe('the deployment configuration the workflow requires', () => {
     expect(credential.with?.['allowed-account-ids']).toBe('${{ vars.AWS_ACCOUNT_ID }}');
   });
 
-  test('synthesizes the deployed artifact against the account variable', () => {
+  test('synthesizes the deployed artifact against the account, zone, and certificate variables', () => {
     // `--app cdk.out` deploys the assembly, and the stack environment is baked into
     // it, so the real account has to reach the synth that produced it. This is the
     // whole reason cdk.json can carry a placeholder at all.
-    expect(artifact.env?.AWS_ACCOUNT_ID).toBe('${{ vars.AWS_ACCOUNT_ID }}');
+    expect(artifact.env).toEqual({
+      AWS_ACCOUNT_ID: '${{ vars.AWS_ACCOUNT_ID }}',
+      AWS_ROUTE53_HOSTED_ZONE_ID: '${{ vars.AWS_ROUTE53_HOSTED_ZONE_ID }}',
+      AWS_ACM_CERTIFICATE_ARN: '${{ vars.AWS_ACM_CERTIFICATE_ARN }}',
+    });
     expect(workflowRun(artifact)).toBe(
-      'npm run check -- --context "ens-scout:account=$AWS_ACCOUNT_ID"',
+      'npm run check -- --context "ens-scout:account=$AWS_ACCOUNT_ID" --context "ens-scout:siteHostedZoneId=$AWS_ROUTE53_HOSTED_ZONE_ID" --context "ens-scout:siteCertificateArn=$AWS_ACM_CERTIFICATE_ARN"',
     );
   });
 
@@ -995,6 +1045,13 @@ describe('the committed IAM templates', () => {
     // once and look like a policy change instead of a mismatched example.
     expect(exampleValues.ACCOUNT_ID).toBe(config.account);
     expect(config.account).toBe(placeholderAccount);
+  });
+
+  test('render against the hosted zone the committed context names', () => {
+    expect(exampleValues.ROUTE53_HOSTED_ZONE_ID).toBe(config.siteHostedZoneId);
+    const source = render.readTemplate('cloudformation-execution-role-policy');
+    expect(source).toContain('hostedzone/${ROUTE53_HOSTED_ZONE_ID}');
+    expect(source).not.toContain(config.siteHostedZoneId);
   });
 
   test('render against a synthetic immutable repository identity', () => {

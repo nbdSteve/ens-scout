@@ -7,7 +7,9 @@ Lambdas, the two offset EventBridge schedules, the private frontend bucket, one
 HTTP API, one CloudFront distribution, the generated serving secrets, the
 undelivered-event queue, and the existing publisher alarms.
 CloudFront is the public origin: OAC keeps the bucket private, `/api/*` goes to the
-HTTP API, and the stack outputs the complete generated HTTPS URL.
+HTTP API, `ens.steve.gg` and the generated CloudFront hostname reach the same
+behaviors, and the stack keeps outputting the complete generated HTTPS URL as the
+fallback.
 The two deployment roles are absent from the stack too, and for a different reason:
 they are what deploys it, so a stack that defined them would have to be deployed by
 something else first.
@@ -39,9 +41,9 @@ npm run render:iam -- --example   # render iam/*.template.json with the example 
 ```
 
 `npm run check` ends with the synth deliberately, so trailing arguments reach `cdk
-synth` and nothing else: `npm run check -- --context ens-scout:account=<account>` is
-how the production workflow builds the artifact it deploys, and a `check` reordered to
-end with the tests would send that context to jest instead.
+synth` and nothing else. The production workflow passes the account, hosted-zone ID,
+and certificate ARN as context when it builds the artifact it deploys; a `check`
+reordered to end with the tests would send those values to jest instead.
 A test asserts the order.
 
 Build the website before an infrastructure check:
@@ -79,25 +81,26 @@ Deployment follows every successful `checks` run for a same-repository push to `
 through a GitHub OIDC role and the `production` environment in `ap-southeast-2`.
 A main-only `workflow_dispatch` remains as an optional recovery trigger and does not
 gate the automatic path.
-[docs/deployment.md](../docs/deployment.md) is the whole description: the four
+[docs/deployment.md](../docs/deployment.md) is the whole description: the six
 `production` environment variables, the two roles, what they may and may not do, the
 GitHub configuration, and the residual risks.
 `.github/workflows/deploy-production.yml` is the only workflow that deploys, and no
 command run during development here touches AWS.
 
-The target account, role names, role ARNs, and live numeric GitHub repository identity
-are deployment values this repository does not commit.
-`cdk.json` carries `lib/config.ts`'s `placeholderAccount`, which is what lets a clean
-clone, every pull-request check, and every test synthesize the stack, and the workflow
-supplies the real account from the `AWS_ACCOUNT_ID` variable as
-`-c ens-scout:account=` on the synth that produces the artifact it deploys.
+The target account, hosted-zone ID, certificate ARN, role names, role ARNs, and live
+numeric GitHub repository identity are deployment values this repository does not
+commit.
+`cdk.json` carries the safe stand-ins exported by `lib/config.ts`, which let a clean
+clone, every pull-request check, and every test synthesize the stack. The workflow
+supplies the real account, hosted-zone ID, and certificate ARN as context on the synth
+that produces the artifact it deploys.
 The workflow selects `github.event.workflow_run.head_sha`, checks out and verifies that
 full commit, builds `web/dist` with the same-origin API base before the synth, deploys
 `infra/cdk.out` without another synth, and writes only the selected SHA, the template
 checksum, and the `PublicSiteUrl` output to the deployment summary.
 
 `npm run diff` and an interactive `cdk deploy` still work for someone holding
-credentials directly, and three things must exist before either.
+credentials directly, and four things must exist before either.
 
 1. The CDK bootstrap stack in that account and region, `cdk bootstrap`.
    The four bootstrap roles go unused, for the reason `lib/deployment.ts` records, but
@@ -106,9 +109,13 @@ credentials directly, and three things must exist before either.
    JSON document with the field named by `ens-scout:graphApiKeySecretField`.
    Create it out of band.
    This stack references the secret and never creates, rotates, or overwrites it.
-3. The two roles the templates in `iam/` describe, if the deployment goes through the
+3. The public Route 53 hosted zone named by `ens-scout:siteHostedZoneName` and an issued
+   ACM certificate in `us-east-1` covering `ens-scout:siteDomainName`.
+   The stack imports both by identifier; it creates neither one.
+4. The two roles the templates in `iam/` describe, if the deployment goes through the
    workflow, the immutable repository identity supplied when their trust is rendered,
-   and the four `production` environment variables that name the account and roles.
+   and the six `production` environment variables that name the account, roles, hosted
+   zone, and certificate.
 
 The stack creates the alarm topic and deliberately adds no subscription to it, so
 subscribing is a deployment step rather than something the template does.
@@ -137,6 +144,10 @@ deployed is recorded in the repository and any of it can be overridden with
 | `ens-scout:subgraphId` | ENS subgraph on the Graph gateway |
 | `ens-scout:graphApiKeySecretName` | Secrets Manager secret holding the Graph API key |
 | `ens-scout:graphApiKeySecretField` | JSON field inside that secret |
+| `ens-scout:siteDomainName` | Public CloudFront alternate name |
+| `ens-scout:siteHostedZoneName` | Existing public Route 53 zone containing that name |
+| `ens-scout:siteHostedZoneId` | Existing zone ID; committed as a safe placeholder |
+| `ens-scout:siteCertificateArn` | Existing `us-east-1` ACM certificate; committed as a safe placeholder |
 | `ens-scout:snapshotTtlAttribute` | DynamoDB TTL attribute, must match `internal/dynamo` |
 | `ens-scout:logRetentionDays` | Scanner log retention, a finite CloudWatch Logs value |
 | `ens-scout:dlqRetentionDays` | Undelivered-event queue retention |
@@ -146,15 +157,11 @@ No key holds a credential.
 because every key changes what a scheduled scan queries or where it publishes, and
 a silent default would point a real scan at the wrong subgraph or table.
 
-`ens-scout:account` is the one key whose committed value is deliberately not the
-deployed one.
-It is `lib/config.ts`'s `placeholderAccount`, an account nobody owns, and the real
-account arrives as `-c ens-scout:account=` at the synth the production workflow
-deploys.
-The key is present rather than absent so `resolveConfig` still resolves from a clean
-clone and every assertion about the stack's environment stays a real assertion; a
-test pins the committed value, so a commit that put the real account back fails
-rather than only being noticed by a reader.
+The account, hosted-zone ID, and certificate ARN have deliberately synthetic committed
+values. Their real values arrive as context at the synth the production workflow
+deploys. The keys are present rather than absent so `resolveConfig` still resolves from
+a clean clone and every assertion remains real; tests pin all three stand-ins, so a
+commit that put a live identifier back fails rather than relying on review.
 
 `ens-scout:logRetentionDays` has to be one of the finite day counts CloudWatch Logs
 accepts.
@@ -258,11 +265,12 @@ the one selected output.
 
 The same suite asserts what the deploy workflow may not contain and what it must carry.
 It requires that the workflow embeds no account number of its own and no role name or
-role ARN at all, that the four `production` variables it reads are exactly the four its
+role ARN at all, that the six `production` variables it reads are exactly the six its
 deploy job refuses to run without, that the check comes before both the build and the
 deploy, and that each variable reaches the command that needs it - `AWS_DEPLOY_ROLE_ARN`
 the credential step's `role-to-assume`, `AWS_ACCOUNT_ID` the `allowed-account-ids` guard
-and the synth's `-c ens-scout:account=`, and
+and the synth's account context, `AWS_ROUTE53_HOSTED_ZONE_ID` and
+`AWS_ACM_CERTIFICATE_ARN` their synth contexts, and
 `AWS_CLOUDFORMATION_EXECUTION_ROLE_ARN` the deploy's `--role-arn`.
 A workflow that composed an ARN out of the account and a literal role name would satisfy
 the deployment either way, so the assertion is what keeps the identifiers out of the
@@ -358,7 +366,8 @@ cannot run many scans at once and multiply the Graph spend.
 **One public origin.** The Vite build is stored in a private S3 bucket and read
 through CloudFront OAC. The HTTP API is the second origin under the same
 distribution, so the production build uses `VITE_API_BASE_URL=/` and never needs a
-custom domain or a cross-origin browser grant. The execute-api endpoint still
+cross-origin browser grant. The generated CloudFront hostname remains valid beside
+the Route 53 alias, and both use the same origin behaviors. The execute-api endpoint still
 exists as CloudFront's origin, but the Lambda adapter accepts it only when the
 request carries the stack-generated origin token CloudFront overwrites and forwards.
 That authenticated adapter may then trust `CloudFront-Viewer-Address` for the
