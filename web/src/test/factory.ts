@@ -158,10 +158,9 @@ export function buildSnapshot(spec: SnapshotSpec = {}): Snapshot {
 /**
  * Rows from bare labels, for the parts of the page that read a name and nothing else.
  *
- * The recommender is the one that needs this: it scores labels, so a test of it wants
- * twenty of them written out on one line rather than twenty snapshot documents. Every
- * lifecycle field is left null and the status is the same for all of them deliberately,
- * because a ranking that changed when one of those changed would be classifying.
+ * Name-field tests use this to write compact fixtures without repeating complete snapshot
+ * documents. Every lifecycle field is left null and the status is the same for all rows
+ * unless the caller asks for another one.
  *
  * The order is whatever the caller passed. A published snapshot is name-sorted, but
  * nothing that takes these rows may depend on that, and a test proving so needs to be

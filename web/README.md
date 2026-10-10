@@ -68,123 +68,6 @@ register.
 `?now=` moves the expiry of a fresh answer too, so an expired check can be demonstrated
 the same way a stale snapshot can.
 
-## Name suggestions
-
-The page can put forward a handful of names from the list you are already looking at,
-for a built-in vibe or a short theme you type.
-Every suggestion is a name the published snapshot holds, narrowed by whatever filters
-are set: nothing here invents a name, and nothing here decides that a name can be
-registered.
-A suggestion earns a link out through exactly the same gate a table row does, so it is
-still one fresh check away from being actionable.
-
-There are two recommenders behind one control.
-
-The deterministic one ranks the shortlist by how closely each label matches what was
-asked for, and writes a fixed sentence per name saying which part of the score applied.
-It needs no model, it is the same order on every device, and it is what answers on a
-device without WebGPU, on a device that refused the download, and whenever the optional
-model does not produce something usable.
-It is a real answer rather than a placeholder.
-
-The optional one is a small language model that runs inside the browser.
-It is shown the same shortlist and asked only to reorder it.
-It is never asked whether a name is available, when it expires, or whether it can be
-registered - those are the snapshot's to state and a fresh check's to confirm.
-Every explanation remains a fixed sentence derived from the deterministic scoring
-evidence, and the page says plainly when the model supplied the order.
-
-An answer from the model is refused whole - not repaired, and not partly used - when it
-is not JSON, carries a field the page did not ask for, repeats a name, contains forbidden
-control text, or names anything that was not in the shortlist it was given.
-A pick may contain only its exact name, so generated lifecycle claims, prices, sale
-claims, and references to any other `.eth` name are refused structurally rather than
-redacted or repaired.
-A refusal costs the model's ordering and nothing else: the deterministic ranking stays
-on screen and a sentence says the answer was not used.
-
-Nothing about a suggestion leaves the device.
-The prompt, the shortlist, the theme, and the generated text stay in the browser.
-There is no hosted inference, no model service, and no telemetry.
-The only thing fetched is the model's own weights, from the pinned configuration in
-`src/suggest/engine/webllm.ts` and from nowhere else.
-
-### The pinned model
-
-|                         |                                                                     |
-| ----------------------- | ------------------------------------------------------------------- |
-| Model                   | `SmolLM2-360M-Instruct-q4f16_1-MLC`                                 |
-| First download          | 211,553,449 bytes (212 MB decimal, quoted to a visitor as `212 MB`) |
-| Graphics memory         | 376 MB, as the library declares it                                  |
-| Required WebGPU feature | `shader-f16`                                                        |
-| Library                 | `@mlc-ai/web-llm` 0.2.84, pinned exactly                            |
-| Cache                   | the Cache API, so a second visit transfers nothing                  |
-
-It is the smallest instruction-tuned download in the library's own catalogue.
-The 135M model in that catalogue ships unquantized and is therefore larger on the wire
-than this one despite having fewer parameters, so "smallest that does the job" and
-"fewest parameters" point at different models here and the download is what was
-optimised.
-The task is bounded to ranking exact names from a supplied list of at most 24 under a JSON grammar whose name field is an enum over that exact list.
-The model returns no explanation field.
-Repository-owned code renders one bounded explanation from the shortlist evidence already computed for each candidate.
-The model is not being asked to be knowledgeable, and a larger one would cost a visitor more bandwidth for a job this one can do.
-There is deliberately no fallback to a larger model: when this one does not work, the deterministic recommender answers.
-
-The download figure is the whole first transfer and not the weights alone, because it is
-quoted to a visitor before anything is fetched.
-It is the seven weight shards (203,614,080 bytes), the compiled shader library
-(5,708,562), `tokenizer.json` (2,104,556), `ndarray-cache.json` (124,230), and
-`mlc-chat-config.json` (2,021).
-It is deliberately not the repository's total size: the library fetches `tokenizer.json`
-and stops, so `vocab.json`, `merges.txt`, and `tokenizer_config.json` are published
-beside the weights and never transferred, and counting them would overstate what a
-visitor is asked to agree to by about 1.2 MB.
-
-To reproduce the figure, read `ndarray-cache.json` from the model repository named by
-`PINNED_MODEL.model`, sum the `content-length` of every `dataPath` in it, and add the
-four files above.
-The `model_lib` URL carries the library's own version segment, so it moves with the npm
-pin rather than independently.
-
-What is not measured here is a latency or quality number, and the reason is that neither
-would mean anything as a committed figure: load time is a visitor's connection and the
-browser cache, and output quality under a grammar this tight is either an answer the
-parser accepts or one it refuses.
-The bounds are what the code enforces instead - one initialization attempt, a 10 minute
-load ceiling, a 60 second generation ceiling, 384 generated tokens, and a "this is taking
-a while" notice at 45 seconds - and every one of them ends with the deterministic
-recommender answering rather than with a retry.
-
-`src/suggest/contract.drift.test.ts` compares the pinned record against the installed
-library's own catalogue field by field, so an upgrade that moves the weights, bumps the
-shader library, or raises the memory requirement fails the gate rather than a visitor's
-device.
-It reads the installed dependency and downloads nothing.
-
-### What a visitor is asked, and when
-
-Nothing model-related begins until the page is interactive - the snapshot parsed, the
-rows rendered, the filters and the fresh-check action working - and then it still waits
-`START_GRACE_MS` before fetching anything.
-That window is not a performance tweak: it is when the download size is on screen with
-the pause and disable controls reachable and nothing yet in flight, so a download this
-large can be refused before it starts rather than discovered afterwards.
-
-Pausing and turning it off are two different promises and are labelled as two.
-Pausing stops what is happening now and is forgotten on the next load; turning it off is
-remembered on this device under a versioned local key.
-Cancelling releases what the library permits - the engine is unloaded and holds no
-graphics memory - but the library exposes no way to stop fetches it has already started,
-so an in-flight transfer may finish and be discarded.
-That is the honest bound on what cancellation can do here.
-
-Unsupported, disabled, offline, cancelled, slow, memory-constrained, and refused are
-seven separate sentences, because they are seven different things and one hedged sentence
-would be wrong for six of them.
-None of them is an application error, and in every one of them asking for names still
-produces names.
-
 ## The simulated clock
 
 The committed fixtures were scanned at a fixed instant, so against a real clock they
@@ -283,8 +166,7 @@ src/wire/          the primitive readers both fail-closed parsers are built from
 src/snapshot/      the browser's half of the snapshot contract, and its parser
 src/verify/        the browser's half of the check contract, its parser, and the gate
 src/data/          fixture loading, the read API client, and the local cache
-src/state/         URL state, filtering, sorting, paging, the clock, one check, one model
-src/suggest/       the shortlist, the two recommenders, the bounds, and the model seam
+src/state/         URL state, filtering, sorting, paging, the clock, and one fresh check
 src/format/        time and text formatting
 src/components/    presentation
 src/optics/        the ambient optical background, mounted behind the page
@@ -313,21 +195,10 @@ still handles a refusal from a deployment that set one lower.
 
 `src/verify/gate.ts` is the only place a name is judged fit for a link out, and it takes
 no parameter that could relax the rule.
-Anything that suggests a name and then offers a way to act on it has to come through it,
-which now includes the local recommender: `SuggestionItem` derives its row through the
-same `rowVerification` the table uses, so there is one answer to whether a name may be
-acted on rather than two that could drift.
-
-`src/suggest/engine/` is the model boundary, four functions wide.
-`load.ts` holds the only dynamic import of `@mlc-ai/web-llm` in the repository, which is what makes the library a separate chunk the first screen never requests, and `webllm.ts` is the only file that imports it.
-`src/suggest/contract.drift.test.ts` is the deliberate unit-test exception: it imports the installed WebLLM package and the real adapter module to compare the pinned record with the installed catalogue.
-It creates no engine and downloads nothing.
-The state-machine unit tests inject an `EngineModule`, and component tests render a `SuggestStore`, so neither crosses the dynamic import.
-`tests/browser/suggest.spec.ts` and `tests/browser/suggestVerify.spec.ts` replace the same-origin model chunk with the module in `tests/browser/suggestModel.ts`.
-They intercept the chunk in a real production build rather than using a test-only seam in `src/`, because such a hook would be a name in the shipped bundle.
-The remaining app-rendering browser suites use the unmodified production bundle and may fetch and evaluate the installed WebLLM chunk after the grace period when `navigator.gpu` is present.
-`tests/browser/support.ts` installs model-host abort routes on every browser context, so evaluating the real chunk cannot send a public model-asset request.
-`tests/browser/assets.spec.ts` inspects the built files without launching a browser or evaluating the runtime.
+Every current or future surface that offers a way to act on a name has to come through it,
+so there is one answer to whether a name may be acted on rather than two that could drift.
+`tests/browser/assets.spec.ts` inspects both built sites without launching a browser and
+fails if a removed model runtime, model asset reference, endpoint, or credential returns.
 
 ## What this app must not do
 
@@ -335,17 +206,12 @@ The remaining app-rendering browser suites use the unmodified production bundle 
   Reuse the boundaries the snapshot published; never derive a grace end from an
   expiry, and never let a countdown reaching zero change a status.
   Only a later scan can do that.
-  The local model is held to the same rule and to a stricter one: it may reorder a
-  supplied shortlist and nothing else, and it is never asked about a lifecycle.
 - No requests to The Graph or DynamoDB from the browser.
   A fresh check is a request to the read API, which owns the credential, the endpoint,
   and every bound on what one check may cost.
-- No hosted inference, no model service, and no telemetry carrying prompts, themes, or
-  preferences.
-  Model assets download only through the pinned configuration in
-  `src/suggest/engine/webllm.ts`, which offers exactly one model, so nothing a visitor
-  types or chooses can name a URL.
-  No automated test may download a real model or contact a model host.
+- No model runtime or model-asset download in the browser.
+  The production-asset tests fail if the removed package, model identifiers, model hosts,
+  or WebGPU probe return to either bundle.
 - No sentence about a failure taken from a response.
   Every one of them is a fixed literal in `src/verify/failure.ts`, chosen by kind,
   because text from a response is text an unexpected answer could put on screen.
@@ -369,9 +235,3 @@ Two pins sit below the current latest on purpose.
   worth having.
 
 Revisit both when the upstream ranges move.
-
-`@mlc-ai/web-llm` is pinned for a different reason: the version segment appears inside the
-pinned model's `model_lib` URL, so an upgrade changes which compiled shader library a
-visitor's device fetches.
-That is a change to read rather than to take, and `src/suggest/contract.drift.test.ts`
-fails the gate when a bump moves it.

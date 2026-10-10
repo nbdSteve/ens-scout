@@ -7,21 +7,6 @@ const ASSETS = /assets\.spec\.ts/
 /** The one suite that needs a verifier, and the one the other projects cannot run. */
 const VERIFY = /verify\.spec\.ts/
 
-/**
- * The two suites that fake the model boundary.
- *
- * One viewport each, not four. What they drive is a state machine and a parser - the phases
- * a load passes through, the answers the page refuses - and none of that is width-dependent;
- * the panel's own responsive rules are ordinary cards and are covered where every other
- * card is. Running them at four widths would repeat the same fake load sixteen times over.
- *
- * `suggestVerify.spec.ts` needs the verifier build for the same reason `verify.spec.ts`
- * does: whether a suggested name can become a link at all is decided by whether the bundle
- * has a read API, so the fresh-check requirement can only be driven against that one.
- */
-const SUGGEST = /suggest\.spec\.ts/
-const SUGGEST_VERIFY = /suggestVerify\.spec\.ts/
-
 /*
  * Two production builds, on two ports.
  *
@@ -64,17 +49,17 @@ export default defineConfig({
   projects: [
     {
       name: 'desktop',
-      testIgnore: [ASSETS, VERIFY, SUGGEST_VERIFY],
+      testIgnore: [ASSETS, VERIFY],
       use: { ...devices['Desktop Chrome'], viewport: { width: 1440, height: 900 } },
     },
     {
       name: 'tablet',
-      testIgnore: [ASSETS, VERIFY, SUGGEST, SUGGEST_VERIFY],
+      testIgnore: [ASSETS, VERIFY],
       use: { ...devices['Desktop Chrome'], viewport: { width: 834, height: 1112 } },
     },
     {
       name: 'mobile',
-      testIgnore: [ASSETS, VERIFY, SUGGEST, SUGGEST_VERIFY],
+      testIgnore: [ASSETS, VERIFY],
       use: { ...devices['Pixel 7'], viewport: { width: 390, height: 844 } },
     },
     {
@@ -91,7 +76,7 @@ export default defineConfig({
        * overflow went unnoticed here. A plain window at 320px cannot hide it.
        */
       name: 'narrow',
-      testIgnore: [ASSETS, VERIFY, SUGGEST, SUGGEST_VERIFY],
+      testIgnore: [ASSETS, VERIFY],
       use: { ...devices['Desktop Chrome'], viewport: { width: 320, height: 568 } },
     },
     {
@@ -107,7 +92,7 @@ export default defineConfig({
        * of it still works with animation turned off. It is the stricter of the two.
        */
       name: 'verify',
-      testMatch: [VERIFY, SUGGEST_VERIFY],
+      testMatch: VERIFY,
       use: {
         ...devices['Desktop Chrome'],
         baseURL: VERIFY_SITE.baseURL,

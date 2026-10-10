@@ -31,8 +31,6 @@ five-letter list is scanned daily.
 - Snapshot staleness is always visible in the interface rather than hidden.
 - Snapshot history is kept only for the TTL recovery window; there is no
 long-term history store in the first release.
-- Name suggestions run locally in the browser with WebLLM, and the model
-preloads in the background without blocking the first render.
 
 ```text
 EventBridge rules
@@ -234,16 +232,6 @@ publication carries unchanged for the group it did not scan, so one stopped sche
 goes stale on its own threshold while the other group keeps publishing.
 [read-api.md](read-api.md) is the wire contract for both readings.
 
-## Local name suggestions
-
-Suggestions run entirely in the visitor's browser with WebLLM, so no prompt or
-candidate list is sent to a server and there is no inference cost.
-
-The model preloads in the background and must never block the first render.
-The browse, filter, and sort experience is fully usable while the model loads,
-the suggestion control reports its own loading state, and a browser that cannot
-run WebLLM loses only suggestions.
-
 ## Scheduling and query budget
 
 The current three- and four-letter word lists contain 6,573 unique candidates
@@ -344,8 +332,8 @@ previous list markup underneath it.
   The throttle, the upstream budget, and the result cache live in the publisher's
   own DynamoDB table, so they bound the deployment rather than one instance.
   A snapshot row offers no outbound ENS link until a fresh check covers that exact
-  name and has not expired, and the same gate will govern any future suggestion
-  the page produces.
+  name and has not expired, and the same gate governs every surface that offers a
+  way to act on a name.
   The frontend keeps the snapshot answer and the fresh answer visibly separate and
   states the instant the fresh one was obtained, because they are two different
   claims about two different moments and only one of them is recent.
@@ -357,7 +345,6 @@ previous list markup underneath it.
 ### Phase 4: expansion
 
 - Add curated acronym and memorable-word lists.
-- Add local WebLLM suggestions with background preloading.
 - Decide whether to include five-letter names more frequently.
 - Evaluate historical status tracking, notifications, and exhaustive scans.
 
@@ -366,7 +353,6 @@ previous list markup underneath it.
 - A failed scheduled scan cannot replace the last good snapshot.
 - Snapshot contents are deterministic, checksummed, and timestamped.
 - The snapshot scan time and its staleness are visible in the interface.
-- Suggestions never block the first render, and the site works without them.
 - The frontend can run against committed fixtures with no AWS credentials.
 - The frontend makes no direct request to The Graph or DynamoDB.
 - The Graph API key is absent from frontend bundles, logs, and repository data.
@@ -383,4 +369,3 @@ previous list markup underneath it.
 - Choose the public domain.
   The deployment account and region are settled and recorded as CDK context in
   `infra/cdk.json`.
-- Choose the WebLLM model and its download budget.

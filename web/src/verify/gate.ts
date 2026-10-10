@@ -11,12 +11,10 @@ import type { VerifiedName, VerifiedNames } from './types'
  * expired. Nothing else opens the gate - not an `available` status, not a recent
  * scan, not a countdown that has run down.
  *
- * This is deliberately the only place that decision is made. Anything that suggests
- * a name and then offers a way to act on it has to come through here, including the
- * generation seam `docs/website-plan.md` describes and this PR does not implement: a
- * suggested name is even less verified than a scanned one, so a second gate for it
- * would be a second answer to a question with one right answer. There is no
- * parameter for the caller and no way to pass one, which is the enforcement.
+ * This is deliberately the only place that decision is made. Every surface that offers
+ * a way to act on a name has to come through here, or the browser would have two answers
+ * to a question with one right answer. There is no parameter for the caller and no way
+ * to pass one, which is the enforcement.
  *
  * Expiry is judged against the instant the caller is rendering at, which on this
  * page is `useNow` - so a `?now=` clock moves this too, and a demonstration of an

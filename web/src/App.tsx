@@ -20,7 +20,6 @@ import { SnapshotBadge } from './components/SnapshotBadge'
 import { SnapshotDetails } from './components/SnapshotDetails'
 import { StaleWarning } from './components/StaleWarning'
 import { StoredCopyNotice } from './components/StoredCopyNotice'
-import { SuggestPanel } from './components/SuggestPanel'
 import { VerifyBar } from './components/VerifyBar'
 import type { VerifyBinding } from './components/verification'
 import { appConfig, type AppConfig } from './config/env'
@@ -28,14 +27,12 @@ import { formatAbsolute, toIsoSecond } from './format/time'
 import type { Status } from './snapshot/contract'
 import { deriveAttribution } from './snapshot/attribution'
 import { resolveSourceGroups } from './snapshot/staleness'
-import type { SnapshotResult } from './snapshot/types'
 import { applyQuery, countByStatus, filterResults } from './state/filter'
 import { CLEAR_FILTERS, isFiltered } from './state/query'
 import { useFreshCheck, type FreshCheckDeps } from './state/useFreshCheck'
 import { useLengthDrafts } from './state/useLengthDrafts'
 import { useNow } from './state/useNow'
 import { useSnapshot, type SnapshotDeps } from './state/useSnapshot'
-import { useSuggest, type SuggestDeps } from './state/useSuggest'
 import { useUrlState } from './state/useUrlState'
 import { VIEWS, viewOrDefault } from './state/views'
 
@@ -43,10 +40,7 @@ export interface AppProps {
   readonly config?: AppConfig
   readonly deps?: SnapshotDeps
   readonly verifyDeps?: FreshCheckDeps
-  readonly suggestDeps?: SuggestDeps
 }
-
-const NO_RESULTS: readonly SnapshotResult[] = []
 
 const VIEW_HEADING: Readonly<Record<string, string>> = {
   available: 'Available',
@@ -56,7 +50,7 @@ const VIEW_HEADING: Readonly<Record<string, string>> = {
   all: 'All scanned',
 }
 
-export function App({ config = appConfig, deps, verifyDeps, suggestDeps }: AppProps): ReactNode {
+export function App({ config = appConfig, deps, verifyDeps }: AppProps): ReactNode {
   const { query, warnings, setQuery, hrefFor } = useUrlState()
   const now = useNow(query.now)
   const store = useSnapshot(config, deps)
@@ -118,13 +112,6 @@ export function App({ config = appConfig, deps, verifyDeps, suggestDeps }: AppPr
           }
         : null,
     [check.available, check.selected, check.full, check.pending, check.verified, check.toggle],
-  )
-
-  const interactive =
-    snapshot !== null && store.origin !== null && attribution !== null && page !== null
-  const suggest = useSuggest(
-    { interactive, results: page?.matched ?? NO_RESULTS },
-    suggestDeps ?? {},
   )
 
   const listProblem = useMemo<'unattributable' | 'unknown' | null>(() => {
@@ -265,16 +252,6 @@ export function App({ config = appConfig, deps, verifyDeps, suggestDeps }: AppPr
                 {listProblem === 'unknown' && (
                   <span>The requested source list is not in this snapshot.</span>
                 )}
-              </div>
-
-              <div className="page recommendations">
-                <SuggestPanel
-                  checking={check.checking}
-                  now={now}
-                  onCheck={check.check}
-                  store={suggest}
-                  verify={verify}
-                />
               </div>
             </>
           )}

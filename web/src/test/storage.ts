@@ -1,11 +1,8 @@
 /**
  * `Storage` implementations for tests.
  *
- * Two things on this origin are durable and both are keyed by wire version: the snapshot
- * cache and the recommender's opt-out marker. Each sweeps the keys a previous version
- * wrote, so the tests of both are about which keys survive a call, and both need to see a
- * store that refuses. Keeping one implementation here is what stops the two from drifting
- * into disagreeing about what a full or unavailable store does.
+ * The snapshot cache sweeps keys written by previous wire versions, so its tests need to
+ * inspect surviving keys and exercise a store that refuses writes.
  */
 
 /**
