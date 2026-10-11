@@ -16,3 +16,6 @@ coverage.out
 
 # Local scan output
 /results/
+
+# Manual offline model generation scratch files
+/data/ranking/work/

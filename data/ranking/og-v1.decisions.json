@@ -1,0 +1,1430 @@
+{
+  "format_version": 1,
+  "policy_version": "featured-safe-v1",
+  "reviewer": "ENS Scout repository review",
+  "reviewed_at": "2026-10-11",
+  "reviewed_head_count": 128,
+  "decisions": [
+    {
+      "label": "adman",
+      "eligibility": "review_required",
+      "reason_code": "deterministic_false_positive_cleared",
+      "note": "The official-looking substring rule collided with a neutral word or name; no feature-safe approval is granted.",
+      "score_override": null
+    },
+    {
+      "label": "admen",
+      "eligibility": "review_required",
+      "reason_code": "deterministic_false_positive_cleared",
+      "note": "The official-looking substring rule collided with a neutral word or name; no feature-safe approval is granted.",
+      "score_override": null
+    },
+    {
+      "label": "admin",
+      "eligibility": "misleading_or_impersonation",
+      "reason_code": "exact_misleading_or_impersonation",
+      "note": "Review confirmed the deterministic policy finding; the label is excluded from featured placement.",
+      "score_override": null
+    },
+    {
+      "label": "admit",
+      "eligibility": "review_required",
+      "reason_code": "deterministic_false_positive_cleared",
+      "note": "The official-looking substring rule collided with a neutral word or name; no feature-safe approval is granted.",
+      "score_override": null
+    },
+    {
+      "label": "admix",
+      "eligibility": "review_required",
+      "reason_code": "deterministic_false_positive_cleared",
+      "note": "The official-looking substring rule collided with a neutral word or name; no feature-safe approval is granted.",
+      "score_override": null
+    },
+    {
+      "label": "adobe",
+      "eligibility": "trademark_or_brand",
+      "reason_code": "exact_trademark_or_brand",
+      "note": "Review confirmed the deterministic policy finding; the label is excluded from featured placement.",
+      "score_override": null
+    },
+    {
+      "label": "alike",
+      "eligibility": "review_required",
+      "reason_code": "conservative_exclusion",
+      "note": "This label is outside the bounded model-reviewed candidate set and remains ineligible for featured placement.",
+      "score_override": null
+    },
+    {
+      "label": "alive",
+      "eligibility": "featureable",
+      "reason_code": "reviewed_feature_safe",
+      "note": "Reviewed in the scored head as a standalone, legible, broadly useful identity with no listed featured-placement concern.",
+      "score_override": null
+    },
+    {
+      "label": "anal",
+      "eligibility": "adult",
+      "reason_code": "exact_adult",
+      "note": "Review confirmed the deterministic policy finding; the label is excluded from featured placement.",
+      "score_override": null
+    },
+    {
+      "label": "apple",
+      "eligibility": "trademark_or_brand",
+      "reason_code": "exact_trademark_or_brand",
+      "note": "Review confirmed the deterministic policy finding; the label is excluded from featured placement.",
+      "score_override": null
+    },
+    {
+      "label": "apron",
+      "eligibility": "review_required",
+      "reason_code": "deterministic_false_positive_cleared",
+      "note": "The adult substring rule collided with a neutral word; no feature-safe approval is granted.",
+      "score_override": null
+    },
+    {
+      "label": "atoke",
+      "eligibility": "review_required",
+      "reason_code": "conservative_exclusion",
+      "note": "This label is outside the bounded model-reviewed candidate set and remains ineligible for featured placement.",
+      "score_override": null
+    },
+    {
+      "label": "axe",
+      "eligibility": "review_required",
+      "reason_code": "conservative_exclusion",
+      "note": "A prominent consumer-brand reading makes featured placement too ambiguous. The label remains outside the feature-safe allowlist.",
+      "score_override": null
+    },
+    {
+      "label": "axiom",
+      "eligibility": "featureable",
+      "reason_code": "reviewed_feature_safe",
+      "note": "Reviewed in the scored head as a standalone, legible, broadly useful identity with no listed featured-placement concern.",
+      "score_override": null
+    },
+    {
+      "label": "axon",
+      "eligibility": "featureable",
+      "reason_code": "reviewed_feature_safe",
+      "note": "Reviewed in the scored head as a standalone, legible, broadly useful identity with no listed featured-placement concern.",
+      "score_override": null
+    },
+    {
+      "label": "azure",
+      "eligibility": "trademark_or_brand",
+      "reason_code": "model_advisory",
+      "note": "Review confirmed a prominent brand, product, project, organization, or mark association; excluded from featured placement.",
+      "score_override": null
+    },
+    {
+      "label": "batik",
+      "eligibility": "review_required",
+      "reason_code": "conservative_exclusion",
+      "note": "This label is outside the bounded model-reviewed candidate set and remains ineligible for featured placement.",
+      "score_override": null
+    },
+    {
+      "label": "bomb",
+      "eligibility": "illegal_or_harmful",
+      "reason_code": "exact_illegal_or_harmful",
+      "note": "Review confirmed the deterministic policy finding; the label is excluded from featured placement.",
+      "score_override": null
+    },
+    {
+      "label": "boob",
+      "eligibility": "adult",
+      "reason_code": "exact_adult",
+      "note": "Review confirmed the deterministic policy finding; the label is excluded from featured placement.",
+      "score_override": null
+    },
+    {
+      "label": "borak",
+      "eligibility": "review_required",
+      "reason_code": "conservative_exclusion",
+      "note": "This label is outside the bounded model-reviewed candidate set and remains ineligible for featured placement.",
+      "score_override": null
+    },
+    {
+      "label": "box",
+      "eligibility": "review_required",
+      "reason_code": "conservative_exclusion",
+      "note": "A prominent cloud-product and company reading makes featured placement too ambiguous. The label remains outside the feature-safe allowlist.",
+      "score_override": null
+    },
+    {
+      "label": "cave",
+      "eligibility": "featureable",
+      "reason_code": "reviewed_feature_safe",
+      "note": "Reviewed in the scored head as a standalone, legible, broadly useful identity with no listed featured-placement concern.",
+      "score_override": null
+    },
+    {
+      "label": "cock",
+      "eligibility": "adult",
+      "reason_code": "exact_adult",
+      "note": "Review confirmed the deterministic policy finding; the label is excluded from featured placement.",
+      "score_override": null
+    },
+    {
+      "label": "codex",
+      "eligibility": "trademark_or_brand",
+      "reason_code": "model_advisory",
+      "note": "Review confirmed a prominent brand, product, project, organization, or mark association; excluded from featured placement.",
+      "score_override": null
+    },
+    {
+      "label": "coke",
+      "eligibility": "trademark_or_brand",
+      "reason_code": "exact_trademark_or_brand",
+      "note": "Review confirmed the deterministic policy finding; the label is excluded from featured placement.",
+      "score_override": null
+    },
+    {
+      "label": "coven",
+      "eligibility": "featureable",
+      "reason_code": "reviewed_feature_safe",
+      "note": "Reviewed in the scored head as a standalone, legible, broadly useful identity with no listed featured-placement concern.",
+      "score_override": null
+    },
+    {
+      "label": "covet",
+      "eligibility": "featureable",
+      "reason_code": "reviewed_feature_safe",
+      "note": "Reviewed in the scored head as a standalone, legible, broadly useful identity with no listed featured-placement concern.",
+      "score_override": null
+    },
+    {
+      "label": "cox",
+      "eligibility": "review_required",
+      "reason_code": "model_advisory",
+      "note": "The meaning, identity, or policy association remains ambiguous after review; excluded conservatively.",
+      "score_override": null
+    },
+    {
+      "label": "cunt",
+      "eligibility": "adult",
+      "reason_code": "exact_adult",
+      "note": "Review confirmed the deterministic policy finding; the label is excluded from featured placement.",
+      "score_override": null
+    },
+    {
+      "label": "desex",
+      "eligibility": "review_required",
+      "reason_code": "conservative_exclusion",
+      "note": "This label is outside the bounded model-reviewed candidate set and remains ineligible for featured placement.",
+      "score_override": null
+    },
+    {
+      "label": "detox",
+      "eligibility": "featureable",
+      "reason_code": "reviewed_feature_safe",
+      "note": "Reviewed in the scored head as a standalone, legible, broadly useful identity with no listed featured-placement concern.",
+      "score_override": null
+    },
+    {
+      "label": "devon",
+      "eligibility": "review_required",
+      "reason_code": "model_advisory",
+      "note": "The meaning, identity, or policy association remains ambiguous after review; excluded conservatively.",
+      "score_override": null
+    },
+    {
+      "label": "dex",
+      "eligibility": "featureable",
+      "reason_code": "reviewed_feature_safe",
+      "note": "Reviewed in the scored head as a standalone, legible, broadly useful identity with no listed featured-placement concern.",
+      "score_override": null
+    },
+    {
+      "label": "dick",
+      "eligibility": "adult",
+      "reason_code": "exact_adult",
+      "note": "Review confirmed the deterministic policy finding; the label is excluded from featured placement.",
+      "score_override": null
+    },
+    {
+      "label": "dove",
+      "eligibility": "trademark_or_brand",
+      "reason_code": "model_advisory",
+      "note": "Review confirmed a prominent brand, product, project, organization, or mark association; excluded from featured placement.",
+      "score_override": null
+    },
+    {
+      "label": "dub",
+      "eligibility": "featureable",
+      "reason_code": "reviewed_feature_safe",
+      "note": "Reviewed in the scored head as a standalone, legible, broadly useful identity with no listed featured-placement concern.",
+      "score_override": null
+    },
+    {
+      "label": "elegy",
+      "eligibility": "featureable",
+      "reason_code": "reviewed_feature_safe",
+      "note": "Reviewed in the scored head as a standalone, legible, broadly useful identity with no listed featured-placement concern.",
+      "score_override": null
+    },
+    {
+      "label": "eon",
+      "eligibility": "featureable",
+      "reason_code": "reviewed_feature_safe",
+      "note": "Reviewed in the scored head as a standalone, legible, broadly useful identity with no listed featured-placement concern.",
+      "score_override": null
+    },
+    {
+      "label": "erick",
+      "eligibility": "review_required",
+      "reason_code": "conservative_exclusion",
+      "note": "This label is outside the bounded model-reviewed candidate set and remains ineligible for featured placement.",
+      "score_override": null
+    },
+    {
+      "label": "eve",
+      "eligibility": "review_required",
+      "reason_code": "model_advisory",
+      "note": "The meaning, identity, or policy association remains ambiguous after review; excluded conservatively.",
+      "score_override": null
+    },
+    {
+      "label": "evo",
+      "eligibility": "review_required",
+      "reason_code": "model_advisory",
+      "note": "The meaning, identity, or policy association remains ambiguous after review; excluded conservatively.",
+      "score_override": null
+    },
+    {
+      "label": "exit",
+      "eligibility": "featureable",
+      "reason_code": "reviewed_feature_safe",
+      "note": "Reviewed in the scored head as a standalone, legible, broadly useful identity with no listed featured-placement concern.",
+      "score_override": null
+    },
+    {
+      "label": "exon",
+      "eligibility": "featureable",
+      "reason_code": "reviewed_feature_safe",
+      "note": "Reviewed in the scored head as a standalone, legible, broadly useful identity with no listed featured-placement concern.",
+      "score_override": null
+    },
+    {
+      "label": "fax",
+      "eligibility": "featureable",
+      "reason_code": "reviewed_feature_safe",
+      "note": "Reviewed in the scored head as a standalone, legible, broadly useful identity with no listed featured-placement concern.",
+      "score_override": null
+    },
+    {
+      "label": "fez",
+      "eligibility": "featureable",
+      "reason_code": "reviewed_feature_safe",
+      "note": "Reviewed in the scored head as a standalone, legible, broadly useful identity with no listed featured-placement concern.",
+      "score_override": null
+    },
+    {
+      "label": "five",
+      "eligibility": "featureable",
+      "reason_code": "reviewed_feature_safe",
+      "note": "Reviewed in the scored head as a standalone, legible, broadly useful identity with no listed featured-placement concern.",
+      "score_override": null
+    },
+    {
+      "label": "fix",
+      "eligibility": "featureable",
+      "reason_code": "reviewed_feature_safe",
+      "note": "Reviewed in the scored head as a standalone, legible, broadly useful identity with no listed featured-placement concern.",
+      "score_override": null
+    },
+    {
+      "label": "flux",
+      "eligibility": "featureable",
+      "reason_code": "reviewed_feature_safe",
+      "note": "Reviewed in the scored head as a standalone, legible, broadly useful identity with no listed featured-placement concern.",
+      "score_override": null
+    },
+    {
+      "label": "fox",
+      "eligibility": "review_required",
+      "reason_code": "conservative_exclusion",
+      "note": "A prominent media-brand reading makes featured placement too ambiguous. The label remains outside the feature-safe allowlist.",
+      "score_override": null
+    },
+    {
+      "label": "fuck",
+      "eligibility": "adult",
+      "reason_code": "exact_adult",
+      "note": "Review confirmed the deterministic policy finding; the label is excluded from featured placement.",
+      "score_override": null
+    },
+    {
+      "label": "fuzz",
+      "eligibility": "featureable",
+      "reason_code": "reviewed_feature_safe",
+      "note": "Reviewed in the scored head as a standalone, legible, broadly useful identity with no listed featured-placement concern.",
+      "score_override": null
+    },
+    {
+      "label": "gov",
+      "eligibility": "misleading_or_impersonation",
+      "reason_code": "exact_misleading_or_impersonation",
+      "note": "Review confirmed the deterministic policy finding; the label is excluded from featured placement.",
+      "score_override": null
+    },
+    {
+      "label": "haick",
+      "eligibility": "review_required",
+      "reason_code": "conservative_exclusion",
+      "note": "This label is outside the bounded model-reviewed candidate set and remains ineligible for featured placement.",
+      "score_override": null
+    },
+    {
+      "label": "haiku",
+      "eligibility": "review_required",
+      "reason_code": "conservative_exclusion",
+      "note": "This label is outside the bounded model-reviewed candidate set and remains ineligible for featured placement.",
+      "score_override": null
+    },
+    {
+      "label": "haven",
+      "eligibility": "featureable",
+      "reason_code": "reviewed_feature_safe",
+      "note": "Reviewed in the scored head as a standalone, legible, broadly useful identity with no listed featured-placement concern.",
+      "score_override": null
+    },
+    {
+      "label": "haze",
+      "eligibility": "featureable",
+      "reason_code": "reviewed_feature_safe",
+      "note": "Reviewed in the scored head as a standalone, legible, broadly useful identity with no listed featured-placement concern.",
+      "score_override": null
+    },
+    {
+      "label": "helix",
+      "eligibility": "featureable",
+      "reason_code": "reviewed_feature_safe",
+      "note": "Reviewed in the scored head as a standalone, legible, broadly useful identity with no listed featured-placement concern.",
+      "score_override": null
+    },
+    {
+      "label": "hex",
+      "eligibility": "featureable",
+      "reason_code": "reviewed_feature_safe",
+      "note": "Reviewed in the scored head as a standalone, legible, broadly useful identity with no listed featured-placement concern.",
+      "score_override": null
+    },
+    {
+      "label": "hive",
+      "eligibility": "featureable",
+      "reason_code": "reviewed_feature_safe",
+      "note": "Reviewed in the scored head as a standalone, legible, broadly useful identity with no listed featured-placement concern.",
+      "score_override": null
+    },
+    {
+      "label": "hue",
+      "eligibility": "featureable",
+      "reason_code": "reviewed_feature_safe",
+      "note": "Reviewed in the scored head as a standalone, legible, broadly useful identity with no listed featured-placement concern.",
+      "score_override": null
+    },
+    {
+      "label": "index",
+      "eligibility": "featureable",
+      "reason_code": "reviewed_feature_safe",
+      "note": "Reviewed in the scored head as a standalone, legible, broadly useful identity with no listed featured-placement concern.",
+      "score_override": null
+    },
+    {
+      "label": "intel",
+      "eligibility": "trademark_or_brand",
+      "reason_code": "exact_trademark_or_brand",
+      "note": "Review confirmed the deterministic policy finding; the label is excluded from featured placement.",
+      "score_override": null
+    },
+    {
+      "label": "jakey",
+      "eligibility": "review_required",
+      "reason_code": "conservative_exclusion",
+      "note": "This label is outside the bounded model-reviewed candidate set and remains ineligible for featured placement.",
+      "score_override": null
+    },
+    {
+      "label": "jar",
+      "eligibility": "featureable",
+      "reason_code": "reviewed_feature_safe",
+      "note": "Reviewed in the scored head as a standalone, legible, broadly useful identity with no listed featured-placement concern.",
+      "score_override": null
+    },
+    {
+      "label": "jasey",
+      "eligibility": "review_required",
+      "reason_code": "conservative_exclusion",
+      "note": "This label is outside the bounded model-reviewed candidate set and remains ineligible for featured placement.",
+      "score_override": null
+    },
+    {
+      "label": "jerid",
+      "eligibility": "review_required",
+      "reason_code": "conservative_exclusion",
+      "note": "This label is outside the bounded model-reviewed candidate set and remains ineligible for featured placement.",
+      "score_override": null
+    },
+    {
+      "label": "jeton",
+      "eligibility": "review_required",
+      "reason_code": "conservative_exclusion",
+      "note": "This label is outside the bounded model-reviewed candidate set and remains ineligible for featured placement.",
+      "score_override": null
+    },
+    {
+      "label": "jin",
+      "eligibility": "review_required",
+      "reason_code": "model_advisory",
+      "note": "The meaning, identity, or policy association remains ambiguous after review; excluded conservatively.",
+      "score_override": null
+    },
+    {
+      "label": "jinx",
+      "eligibility": "featureable",
+      "reason_code": "reviewed_feature_safe",
+      "note": "Reviewed in the scored head as a standalone, legible, broadly useful identity with no listed featured-placement concern.",
+      "score_override": null
+    },
+    {
+      "label": "jive",
+      "eligibility": "featureable",
+      "reason_code": "reviewed_feature_safe",
+      "note": "Reviewed in the scored head as a standalone, legible, broadly useful identity with no listed featured-placement concern.",
+      "score_override": null
+    },
+    {
+      "label": "jiver",
+      "eligibility": "review_required",
+      "reason_code": "conservative_exclusion",
+      "note": "This label is outside the bounded model-reviewed candidate set and remains ineligible for featured placement.",
+      "score_override": null
+    },
+    {
+      "label": "jiz",
+      "eligibility": "adult",
+      "reason_code": "model_advisory",
+      "note": "Review confirmed an adult or sexual reading; excluded from featured placement.",
+      "score_override": null
+    },
+    {
+      "label": "joke",
+      "eligibility": "featureable",
+      "reason_code": "reviewed_feature_safe",
+      "note": "Reviewed in the scored head as a standalone, legible, broadly useful identity with no listed featured-placement concern.",
+      "score_override": null
+    },
+    {
+      "label": "jokey",
+      "eligibility": "review_required",
+      "reason_code": "conservative_exclusion",
+      "note": "This label is outside the bounded model-reviewed candidate set and remains ineligible for featured placement.",
+      "score_override": null
+    },
+    {
+      "label": "jolt",
+      "eligibility": "featureable",
+      "reason_code": "reviewed_feature_safe",
+      "note": "Reviewed in the scored head as a standalone, legible, broadly useful identity with no listed featured-placement concern.",
+      "score_override": null
+    },
+    {
+      "label": "joram",
+      "eligibility": "review_required",
+      "reason_code": "conservative_exclusion",
+      "note": "This label is outside the bounded model-reviewed candidate set and remains ineligible for featured placement.",
+      "score_override": null
+    },
+    {
+      "label": "jumar",
+      "eligibility": "review_required",
+      "reason_code": "conservative_exclusion",
+      "note": "This label is outside the bounded model-reviewed candidate set and remains ineligible for featured placement.",
+      "score_override": null
+    },
+    {
+      "label": "jura",
+      "eligibility": "review_required",
+      "reason_code": "model_advisory",
+      "note": "The meaning, identity, or policy association remains ambiguous after review; excluded conservatively.",
+      "score_override": null
+    },
+    {
+      "label": "jurel",
+      "eligibility": "review_required",
+      "reason_code": "conservative_exclusion",
+      "note": "This label is outside the bounded model-reviewed candidate set and remains ineligible for featured placement.",
+      "score_override": null
+    },
+    {
+      "label": "juve",
+      "eligibility": "trademark_or_brand",
+      "reason_code": "model_advisory",
+      "note": "Review confirmed a prominent brand, product, project, organization, or mark association; excluded from featured placement.",
+      "score_override": null
+    },
+    {
+      "label": "kai",
+      "eligibility": "review_required",
+      "reason_code": "model_advisory",
+      "note": "The meaning, identity, or policy association remains ambiguous after review; excluded conservatively.",
+      "score_override": null
+    },
+    {
+      "label": "kain",
+      "eligibility": "review_required",
+      "reason_code": "model_advisory",
+      "note": "The meaning, identity, or policy association remains ambiguous after review; excluded conservatively.",
+      "score_override": null
+    },
+    {
+      "label": "kali",
+      "eligibility": "review_required",
+      "reason_code": "model_advisory",
+      "note": "The meaning, identity, or policy association remains ambiguous after review; excluded conservatively.",
+      "score_override": null
+    },
+    {
+      "label": "kalif",
+      "eligibility": "review_required",
+      "reason_code": "conservative_exclusion",
+      "note": "This label is outside the bounded model-reviewed candidate set and remains ineligible for featured placement.",
+      "score_override": null
+    },
+    {
+      "label": "kane",
+      "eligibility": "review_required",
+      "reason_code": "model_advisory",
+      "note": "The meaning, identity, or policy association remains ambiguous after review; excluded conservatively.",
+      "score_override": null
+    },
+    {
+      "label": "kaneh",
+      "eligibility": "review_required",
+      "reason_code": "conservative_exclusion",
+      "note": "This label is outside the bounded model-reviewed candidate set and remains ineligible for featured placement.",
+      "score_override": null
+    },
+    {
+      "label": "kanji",
+      "eligibility": "review_required",
+      "reason_code": "conservative_exclusion",
+      "note": "This label is outside the bounded model-reviewed candidate set and remains ineligible for featured placement.",
+      "score_override": null
+    },
+    {
+      "label": "karo",
+      "eligibility": "review_required",
+      "reason_code": "model_advisory",
+      "note": "The meaning, identity, or policy association remains ambiguous after review; excluded conservatively.",
+      "score_override": null
+    },
+    {
+      "label": "kazi",
+      "eligibility": "review_required",
+      "reason_code": "model_advisory",
+      "note": "The meaning, identity, or policy association remains ambiguous after review; excluded conservatively.",
+      "score_override": null
+    },
+    {
+      "label": "kesar",
+      "eligibility": "review_required",
+      "reason_code": "conservative_exclusion",
+      "note": "This label is outside the bounded model-reviewed candidate set and remains ineligible for featured placement.",
+      "score_override": null
+    },
+    {
+      "label": "khazi",
+      "eligibility": "adult",
+      "reason_code": "model_advisory",
+      "note": "Review confirmed an adult or sexual reading; excluded from featured placement.",
+      "score_override": null
+    },
+    {
+      "label": "kin",
+      "eligibility": "featureable",
+      "reason_code": "reviewed_feature_safe",
+      "note": "Reviewed in the scored head as a standalone, legible, broadly useful identity with no listed featured-placement concern.",
+      "score_override": null
+    },
+    {
+      "label": "kisan",
+      "eligibility": "review_required",
+      "reason_code": "conservative_exclusion",
+      "note": "This label is outside the bounded model-reviewed candidate set and remains ineligible for featured placement.",
+      "score_override": null
+    },
+    {
+      "label": "kit",
+      "eligibility": "featureable",
+      "reason_code": "reviewed_feature_safe",
+      "note": "Reviewed in the scored head as a standalone, legible, broadly useful identity with no listed featured-placement concern.",
+      "score_override": null
+    },
+    {
+      "label": "kite",
+      "eligibility": "featureable",
+      "reason_code": "reviewed_feature_safe",
+      "note": "Reviewed in the scored head as a standalone, legible, broadly useful identity with no listed featured-placement concern.",
+      "score_override": null
+    },
+    {
+      "label": "kithe",
+      "eligibility": "review_required",
+      "reason_code": "conservative_exclusion",
+      "note": "This label is outside the bounded model-reviewed candidate set and remains ineligible for featured placement.",
+      "score_override": null
+    },
+    {
+      "label": "kiva",
+      "eligibility": "trademark_or_brand",
+      "reason_code": "model_advisory",
+      "note": "Review confirmed a prominent brand, product, project, organization, or mark association; excluded from featured placement.",
+      "score_override": null
+    },
+    {
+      "label": "kkk",
+      "eligibility": "hate_or_harassment",
+      "reason_code": "exact_hate_or_harassment",
+      "note": "Review confirmed the deterministic policy finding; the label is excluded from featured placement.",
+      "score_override": null
+    },
+    {
+      "label": "koji",
+      "eligibility": "review_required",
+      "reason_code": "model_advisory",
+      "note": "The meaning, identity, or policy association remains ambiguous after review; excluded conservatively.",
+      "score_override": null
+    },
+    {
+      "label": "kore",
+      "eligibility": "review_required",
+      "reason_code": "model_advisory",
+      "note": "The meaning, identity, or policy association remains ambiguous after review; excluded conservatively.",
+      "score_override": null
+    },
+    {
+      "label": "koura",
+      "eligibility": "review_required",
+      "reason_code": "conservative_exclusion",
+      "note": "This label is outside the bounded model-reviewed candidate set and remains ineligible for featured placement.",
+      "score_override": null
+    },
+    {
+      "label": "krait",
+      "eligibility": "review_required",
+      "reason_code": "conservative_exclusion",
+      "note": "This label is outside the bounded model-reviewed candidate set and remains ineligible for featured placement.",
+      "score_override": null
+    },
+    {
+      "label": "krone",
+      "eligibility": "review_required",
+      "reason_code": "conservative_exclusion",
+      "note": "This label is outside the bounded model-reviewed candidate set and remains ineligible for featured placement.",
+      "score_override": null
+    },
+    {
+      "label": "latex",
+      "eligibility": "review_required",
+      "reason_code": "conservative_exclusion",
+      "note": "The exact typesetting-project reading and adult-adjacent material contexts need further review. The label remains outside the feature-safe allowlist.",
+      "score_override": null
+    },
+    {
+      "label": "levin",
+      "eligibility": "review_required",
+      "reason_code": "model_advisory",
+      "note": "The meaning, identity, or policy association remains ambiguous after review; excluded conservatively.",
+      "score_override": null
+    },
+    {
+      "label": "lex",
+      "eligibility": "review_required",
+      "reason_code": "conservative_exclusion",
+      "note": "The personal-name and famous-character readings need further review. The label remains outside the feature-safe allowlist.",
+      "score_override": null
+    },
+    {
+      "label": "lez",
+      "eligibility": "review_required",
+      "reason_code": "model_advisory",
+      "note": "The meaning, identity, or policy association remains ambiguous after review; excluded conservatively.",
+      "score_override": null
+    },
+    {
+      "label": "liken",
+      "eligibility": "review_required",
+      "reason_code": "conservative_exclusion",
+      "note": "This label is outside the bounded model-reviewed candidate set and remains ineligible for featured placement.",
+      "score_override": null
+    },
+    {
+      "label": "linux",
+      "eligibility": "trademark_or_brand",
+      "reason_code": "model_advisory",
+      "note": "Review confirmed a prominent brand, product, project, organization, or mark association; excluded from featured placement.",
+      "score_override": null
+    },
+    {
+      "label": "live",
+      "eligibility": "featureable",
+      "reason_code": "reviewed_feature_safe",
+      "note": "Reviewed in the scored head as a standalone, legible, broadly useful identity with no listed featured-placement concern.",
+      "score_override": null
+    },
+    {
+      "label": "login",
+      "eligibility": "misleading_or_impersonation",
+      "reason_code": "exact_misleading_or_impersonation",
+      "note": "Review confirmed the deterministic policy finding; the label is excluded from featured placement.",
+      "score_override": null
+    },
+    {
+      "label": "love",
+      "eligibility": "featureable",
+      "reason_code": "reviewed_feature_safe",
+      "note": "Reviewed in the scored head as a standalone, legible, broadly useful identity with no listed featured-placement concern.",
+      "score_override": null
+    },
+    {
+      "label": "lurex",
+      "eligibility": "trademark_or_brand",
+      "reason_code": "model_advisory",
+      "note": "Review confirmed a prominent brand, product, project, organization, or mark association; excluded from featured placement.",
+      "score_override": null
+    },
+    {
+      "label": "lux",
+      "eligibility": "featureable",
+      "reason_code": "reviewed_feature_safe",
+      "note": "Reviewed in the scored head as a standalone, legible, broadly useful identity with no listed featured-placement concern.",
+      "score_override": null
+    },
+    {
+      "label": "maiko",
+      "eligibility": "review_required",
+      "reason_code": "conservative_exclusion",
+      "note": "This label is outside the bounded model-reviewed candidate set and remains ineligible for featured placement.",
+      "score_override": null
+    },
+    {
+      "label": "malik",
+      "eligibility": "review_required",
+      "reason_code": "model_advisory",
+      "note": "The meaning, identity, or policy association remains ambiguous after review; excluded conservatively.",
+      "score_override": null
+    },
+    {
+      "label": "maven",
+      "eligibility": "review_required",
+      "reason_code": "conservative_exclusion",
+      "note": "The exact software-project reading makes featured placement too brand-adjacent. The label remains outside the feature-safe allowlist.",
+      "score_override": null
+    },
+    {
+      "label": "max",
+      "eligibility": "review_required",
+      "reason_code": "conservative_exclusion",
+      "note": "The prominent streaming-brand and personal-name readings need further review. The label remains outside the feature-safe allowlist.",
+      "score_override": null
+    },
+    {
+      "label": "maze",
+      "eligibility": "featureable",
+      "reason_code": "reviewed_feature_safe",
+      "note": "Reviewed in the scored head as a standalone, legible, broadly useful identity with no listed featured-placement concern.",
+      "score_override": null
+    },
+    {
+      "label": "meta",
+      "eligibility": "trademark_or_brand",
+      "reason_code": "exact_trademark_or_brand",
+      "note": "Review confirmed the deterministic policy finding; the label is excluded from featured placement.",
+      "score_override": null
+    },
+    {
+      "label": "meth",
+      "eligibility": "illegal_or_harmful",
+      "reason_code": "exact_illegal_or_harmful",
+      "note": "Review confirmed the deterministic policy finding; the label is excluded from featured placement.",
+      "score_override": null
+    },
+    {
+      "label": "midi",
+      "eligibility": "featureable",
+      "reason_code": "reviewed_feature_safe",
+      "note": "Reviewed in the scored head as a standalone, legible, broadly useful identity with no listed featured-placement concern.",
+      "score_override": null
+    },
+    {
+      "label": "mix",
+      "eligibility": "featureable",
+      "reason_code": "reviewed_feature_safe",
+      "note": "Reviewed in the scored head as a standalone, legible, broadly useful identity with no listed featured-placement concern.",
+      "score_override": null
+    },
+    {
+      "label": "mod",
+      "eligibility": "misleading_or_impersonation",
+      "reason_code": "exact_misleading_or_impersonation",
+      "note": "Review confirmed the deterministic policy finding; the label is excluded from featured placement.",
+      "score_override": null
+    },
+    {
+      "label": "moth",
+      "eligibility": "featureable",
+      "reason_code": "reviewed_feature_safe",
+      "note": "Reviewed in the scored head as a standalone, legible, broadly useful identity with no listed featured-placement concern.",
+      "score_override": null
+    },
+    {
+      "label": "move",
+      "eligibility": "featureable",
+      "reason_code": "reviewed_feature_safe",
+      "note": "Reviewed in the scored head as a standalone, legible, broadly useful identity with no listed featured-placement concern.",
+      "score_override": null
+    },
+    {
+      "label": "moz",
+      "eligibility": "review_required",
+      "reason_code": "model_advisory",
+      "note": "The meaning, identity, or policy association remains ambiguous after review; excluded conservatively.",
+      "score_override": null
+    },
+    {
+      "label": "musk",
+      "eligibility": "person_or_political",
+      "reason_code": "exact_person_or_political",
+      "note": "Review confirmed the deterministic policy finding; the label is excluded from featured placement.",
+      "score_override": null
+    },
+    {
+      "label": "naze",
+      "eligibility": "review_required",
+      "reason_code": "deterministic_false_positive_cleared",
+      "note": "The hate-term substring rule collided with a distinct word or name; no feature-safe approval is granted.",
+      "score_override": null
+    },
+    {
+      "label": "nazes",
+      "eligibility": "review_required",
+      "reason_code": "deterministic_false_positive_cleared",
+      "note": "The hate-term substring rule collided with a distinct word or name; no feature-safe approval is granted.",
+      "score_override": null
+    },
+    {
+      "label": "nazi",
+      "eligibility": "hate_or_harassment",
+      "reason_code": "exact_hate_or_harassment",
+      "note": "Review confirmed the deterministic policy finding; the label is excluded from featured placement.",
+      "score_override": null
+    },
+    {
+      "label": "nazir",
+      "eligibility": "review_required",
+      "reason_code": "deterministic_false_positive_cleared",
+      "note": "The hate-term substring rule collided with a distinct word or name; no feature-safe approval is granted.",
+      "score_override": null
+    },
+    {
+      "label": "nazis",
+      "eligibility": "hate_or_harassment",
+      "reason_code": "pattern_hate_or_harassment",
+      "note": "Review confirmed the deterministic policy finding; the label is excluded from featured placement.",
+      "score_override": null
+    },
+    {
+      "label": "nova",
+      "eligibility": "featureable",
+      "reason_code": "reviewed_feature_safe",
+      "note": "Reviewed in the scored head as a standalone, legible, broadly useful identity with no listed featured-placement concern.",
+      "score_override": null
+    },
+    {
+      "label": "nude",
+      "eligibility": "adult",
+      "reason_code": "exact_adult",
+      "note": "Review confirmed the deterministic policy finding; the label is excluded from featured placement.",
+      "score_override": null
+    },
+    {
+      "label": "ode",
+      "eligibility": "featureable",
+      "reason_code": "reviewed_feature_safe",
+      "note": "Reviewed in the scored head as a standalone, legible, broadly useful identity with no listed featured-placement concern.",
+      "score_override": null
+    },
+    {
+      "label": "olive",
+      "eligibility": "featureable",
+      "reason_code": "reviewed_feature_safe",
+      "note": "Reviewed in the scored head as a standalone, legible, broadly useful identity with no listed featured-placement concern.",
+      "score_override": null
+    },
+    {
+      "label": "ozeki",
+      "eligibility": "review_required",
+      "reason_code": "model_advisory",
+      "note": "The meaning, identity, or policy association remains ambiguous after review; excluded conservatively.",
+      "score_override": null
+    },
+    {
+      "label": "padma",
+      "eligibility": "review_required",
+      "reason_code": "deterministic_false_positive_cleared",
+      "note": "The official-looking substring rule collided with a neutral word or name; no feature-safe approval is granted.",
+      "score_override": null
+    },
+    {
+      "label": "pax",
+      "eligibility": "featureable",
+      "reason_code": "reviewed_feature_safe",
+      "note": "Reviewed in the scored head as a standalone, legible, broadly useful identity with no listed featured-placement concern.",
+      "score_override": null
+    },
+    {
+      "label": "porn",
+      "eligibility": "adult",
+      "reason_code": "exact_adult",
+      "note": "Review confirmed the deterministic policy finding; the label is excluded from featured placement.",
+      "score_override": null
+    },
+    {
+      "label": "prone",
+      "eligibility": "review_required",
+      "reason_code": "deterministic_false_positive_cleared",
+      "note": "The adult substring rule collided with a neutral word; no feature-safe approval is granted.",
+      "score_override": null
+    },
+    {
+      "label": "prong",
+      "eligibility": "review_required",
+      "reason_code": "deterministic_false_positive_cleared",
+      "note": "The adult substring rule collided with a neutral word; no feature-safe approval is granted.",
+      "score_override": null
+    },
+    {
+      "label": "pronk",
+      "eligibility": "review_required",
+      "reason_code": "deterministic_false_positive_cleared",
+      "note": "The adult substring rule collided with a neutral word; no feature-safe approval is granted.",
+      "score_override": null
+    },
+    {
+      "label": "pyre",
+      "eligibility": "featureable",
+      "reason_code": "reviewed_feature_safe",
+      "note": "Reviewed in the scored head as a standalone, legible, broadly useful identity with no listed featured-placement concern.",
+      "score_override": null
+    },
+    {
+      "label": "quad",
+      "eligibility": "featureable",
+      "reason_code": "reviewed_feature_safe",
+      "note": "Reviewed in the scored head as a standalone, legible, broadly useful identity with no listed featured-placement concern.",
+      "score_override": null
+    },
+    {
+      "label": "quip",
+      "eligibility": "featureable",
+      "reason_code": "reviewed_feature_safe",
+      "note": "Reviewed in the scored head as a standalone, legible, broadly useful identity with no listed featured-placement concern.",
+      "score_override": null
+    },
+    {
+      "label": "quiz",
+      "eligibility": "featureable",
+      "reason_code": "reviewed_feature_safe",
+      "note": "Reviewed in the scored head as a standalone, legible, broadly useful identity with no listed featured-placement concern.",
+      "score_override": null
+    },
+    {
+      "label": "rape",
+      "eligibility": "adult",
+      "reason_code": "exact_adult",
+      "note": "Review confirmed the deterministic policy finding; the label is excluded from featured placement.",
+      "score_override": null
+    },
+    {
+      "label": "rave",
+      "eligibility": "featureable",
+      "reason_code": "reviewed_feature_safe",
+      "note": "Reviewed in the scored head as a standalone, legible, broadly useful identity with no listed featured-placement concern.",
+      "score_override": null
+    },
+    {
+      "label": "raven",
+      "eligibility": "featureable",
+      "reason_code": "reviewed_feature_safe",
+      "note": "Reviewed in the scored head as a standalone, legible, broadly useful identity with no listed featured-placement concern.",
+      "score_override": null
+    },
+    {
+      "label": "redux",
+      "eligibility": "review_required",
+      "reason_code": "conservative_exclusion",
+      "note": "The exact software-project reading makes featured placement too brand-adjacent. The label remains outside the feature-safe allowlist.",
+      "score_override": null
+    },
+    {
+      "label": "rex",
+      "eligibility": "review_required",
+      "reason_code": "conservative_exclusion",
+      "note": "The personal-name, title, and famous-character readings need further review. The label remains outside the feature-safe allowlist.",
+      "score_override": null
+    },
+    {
+      "label": "ritz",
+      "eligibility": "trademark_or_brand",
+      "reason_code": "model_advisory",
+      "note": "Review confirmed a prominent brand, product, project, organization, or mark association; excluded from featured placement.",
+      "score_override": null
+    },
+    {
+      "label": "riva",
+      "eligibility": "review_required",
+      "reason_code": "model_advisory",
+      "note": "The meaning, identity, or policy association remains ambiguous after review; excluded conservatively.",
+      "score_override": null
+    },
+    {
+      "label": "riza",
+      "eligibility": "review_required",
+      "reason_code": "model_advisory",
+      "note": "The meaning, identity, or policy association remains ambiguous after review; excluded conservatively.",
+      "score_override": null
+    },
+    {
+      "label": "rune",
+      "eligibility": "featureable",
+      "reason_code": "reviewed_feature_safe",
+      "note": "Reviewed in the scored head as a standalone, legible, broadly useful identity with no listed featured-placement concern.",
+      "score_override": null
+    },
+    {
+      "label": "saga",
+      "eligibility": "featureable",
+      "reason_code": "reviewed_feature_safe",
+      "note": "Reviewed in the scored head as a standalone, legible, broadly useful identity with no listed featured-placement concern.",
+      "score_override": null
+    },
+    {
+      "label": "save",
+      "eligibility": "featureable",
+      "reason_code": "reviewed_feature_safe",
+      "note": "Reviewed in the scored head as a standalone, legible, broadly useful identity with no listed featured-placement concern.",
+      "score_override": null
+    },
+    {
+      "label": "sax",
+      "eligibility": "featureable",
+      "reason_code": "reviewed_feature_safe",
+      "note": "Reviewed in the scored head as a standalone, legible, broadly useful identity with no listed featured-placement concern.",
+      "score_override": null
+    },
+    {
+      "label": "sex",
+      "eligibility": "adult",
+      "reason_code": "exact_adult",
+      "note": "Review confirmed the deterministic policy finding; the label is excluded from featured placement.",
+      "score_override": null
+    },
+    {
+      "label": "six",
+      "eligibility": "featureable",
+      "reason_code": "reviewed_feature_safe",
+      "note": "Reviewed in the scored head as a standalone, legible, broadly useful identity with no listed featured-placement concern.",
+      "score_override": null
+    },
+    {
+      "label": "slave",
+      "eligibility": "hate_or_harassment",
+      "reason_code": "exact_hate_or_harassment",
+      "note": "Review confirmed the deterministic policy finding; the label is excluded from featured placement.",
+      "score_override": null
+    },
+    {
+      "label": "slut",
+      "eligibility": "adult",
+      "reason_code": "exact_adult",
+      "note": "Review confirmed the deterministic policy finding; the label is excluded from featured placement.",
+      "score_override": null
+    },
+    {
+      "label": "sox",
+      "eligibility": "trademark_or_brand",
+      "reason_code": "model_advisory",
+      "note": "Review confirmed a prominent brand, product, project, organization, or mark association; excluded from featured placement.",
+      "score_override": null
+    },
+    {
+      "label": "staff",
+      "eligibility": "misleading_or_impersonation",
+      "reason_code": "exact_misleading_or_impersonation",
+      "note": "Review confirmed the deterministic policy finding; the label is excluded from featured placement.",
+      "score_override": null
+    },
+    {
+      "label": "tesla",
+      "eligibility": "trademark_or_brand",
+      "reason_code": "exact_trademark_or_brand",
+      "note": "Review confirmed the deterministic policy finding; the label is excluded from featured placement.",
+      "score_override": null
+    },
+    {
+      "label": "tex",
+      "eligibility": "review_required",
+      "reason_code": "model_advisory",
+      "note": "The meaning, identity, or policy association remains ambiguous after review; excluded conservatively.",
+      "score_override": null
+    },
+    {
+      "label": "toxin",
+      "eligibility": "review_required",
+      "reason_code": "conservative_exclusion",
+      "note": "The harmful-substance reading is too direct for conservative featured placement. The label remains outside the feature-safe allowlist.",
+      "score_override": null
+    },
+    {
+      "label": "trump",
+      "eligibility": "person_or_political",
+      "reason_code": "exact_person_or_political",
+      "note": "Review confirmed the deterministic policy finding; the label is excluded from featured placement.",
+      "score_override": null
+    },
+    {
+      "label": "tux",
+      "eligibility": "trademark_or_brand",
+      "reason_code": "model_advisory",
+      "note": "Review confirmed a prominent brand, product, project, organization, or mark association; excluded from featured placement.",
+      "score_override": null
+    },
+    {
+      "label": "vag",
+      "eligibility": "adult",
+      "reason_code": "model_advisory",
+      "note": "Review confirmed an adult or sexual reading; excluded from featured placement.",
+      "score_override": null
+    },
+    {
+      "label": "vali",
+      "eligibility": "review_required",
+      "reason_code": "model_advisory",
+      "note": "The meaning, identity, or policy association remains ambiguous after review; excluded conservatively.",
+      "score_override": null
+    },
+    {
+      "label": "valor",
+      "eligibility": "featureable",
+      "reason_code": "reviewed_feature_safe",
+      "note": "Reviewed in the scored head as a standalone, legible, broadly useful identity with no listed featured-placement concern.",
+      "score_override": null
+    },
+    {
+      "label": "valve",
+      "eligibility": "trademark_or_brand",
+      "reason_code": "model_advisory",
+      "note": "Review confirmed a prominent brand, product, project, organization, or mark association; excluded from featured placement.",
+      "score_override": null
+    },
+    {
+      "label": "vegan",
+      "eligibility": "featureable",
+      "reason_code": "reviewed_feature_safe",
+      "note": "Reviewed in the scored head as a standalone, legible, broadly useful identity with no listed featured-placement concern.",
+      "score_override": null
+    },
+    {
+      "label": "venom",
+      "eligibility": "review_required",
+      "reason_code": "conservative_exclusion",
+      "note": "The famous entertainment-character and franchise reading dominates featured placement. The label remains outside the feature-safe allowlist.",
+      "score_override": null
+    },
+    {
+      "label": "vent",
+      "eligibility": "featureable",
+      "reason_code": "reviewed_feature_safe",
+      "note": "Reviewed in the scored head as a standalone, legible, broadly useful identity with no listed featured-placement concern.",
+      "score_override": null
+    },
+    {
+      "label": "veto",
+      "eligibility": "featureable",
+      "reason_code": "reviewed_feature_safe",
+      "note": "Reviewed in the scored head as a standalone, legible, broadly useful identity with no listed featured-placement concern.",
+      "score_override": null
+    },
+    {
+      "label": "vex",
+      "eligibility": "featureable",
+      "reason_code": "reviewed_feature_safe",
+      "note": "Reviewed in the scored head as a standalone, legible, broadly useful identity with no listed featured-placement concern.",
+      "score_override": null
+    },
+    {
+      "label": "vim",
+      "eligibility": "review_required",
+      "reason_code": "conservative_exclusion",
+      "note": "The exact software-project reading makes featured placement too brand-adjacent. The label remains outside the feature-safe allowlist.",
+      "score_override": null
+    },
+    {
+      "label": "vine",
+      "eligibility": "review_required",
+      "reason_code": "conservative_exclusion",
+      "note": "The prominent social-product reading makes featured placement too ambiguous. The label remains outside the feature-safe allowlist.",
+      "score_override": null
+    },
+    {
+      "label": "visa",
+      "eligibility": "trademark_or_brand",
+      "reason_code": "exact_trademark_or_brand",
+      "note": "Review confirmed the deterministic policy finding; the label is excluded from featured placement.",
+      "score_override": null
+    },
+    {
+      "label": "vixen",
+      "eligibility": "featureable",
+      "reason_code": "reviewed_feature_safe",
+      "note": "Reviewed in the scored head as a standalone, legible, broadly useful identity with no listed featured-placement concern.",
+      "score_override": null
+    },
+    {
+      "label": "vow",
+      "eligibility": "featureable",
+      "reason_code": "reviewed_feature_safe",
+      "note": "Reviewed in the scored head as a standalone, legible, broadly useful identity with no listed featured-placement concern.",
+      "score_override": null
+    },
+    {
+      "label": "vox",
+      "eligibility": "review_required",
+      "reason_code": "conservative_exclusion",
+      "note": "A prominent media-brand reading makes featured placement too ambiguous. The label remains outside the feature-safe allowlist.",
+      "score_override": null
+    },
+    {
+      "label": "voxel",
+      "eligibility": "featureable",
+      "reason_code": "reviewed_feature_safe",
+      "note": "Reviewed in the scored head as a standalone, legible, broadly useful identity with no listed featured-placement concern.",
+      "score_override": null
+    },
+    {
+      "label": "warez",
+      "eligibility": "illegal_or_harmful",
+      "reason_code": "model_advisory",
+      "note": "Review confirmed an illegal or harmful-use reading; excluded from featured placement.",
+      "score_override": null
+    },
+    {
+      "label": "wax",
+      "eligibility": "featureable",
+      "reason_code": "reviewed_feature_safe",
+      "note": "Reviewed in the scored head as a standalone, legible, broadly useful identity with no listed featured-placement concern.",
+      "score_override": null
+    },
+    {
+      "label": "whore",
+      "eligibility": "adult",
+      "reason_code": "exact_adult",
+      "note": "Review confirmed the deterministic policy finding; the label is excluded from featured placement.",
+      "score_override": null
+    },
+    {
+      "label": "xerox",
+      "eligibility": "trademark_or_brand",
+      "reason_code": "model_advisory",
+      "note": "Review confirmed a prominent brand, product, project, organization, or mark association; excluded from featured placement.",
+      "score_override": null
+    },
+    {
+      "label": "yule",
+      "eligibility": "featureable",
+      "reason_code": "reviewed_feature_safe",
+      "note": "Reviewed in the scored head as a standalone, legible, broadly useful identity with no listed featured-placement concern.",
+      "score_override": null
+    },
+    {
+      "label": "zap",
+      "eligibility": "featureable",
+      "reason_code": "reviewed_feature_safe",
+      "note": "Reviewed in the scored head as a standalone, legible, broadly useful identity with no listed featured-placement concern.",
+      "score_override": null
+    },
+    {
+      "label": "zed",
+      "eligibility": "featureable",
+      "reason_code": "reviewed_feature_safe",
+      "note": "Reviewed in the scored head as a standalone, legible, broadly useful identity with no listed featured-placement concern.",
+      "score_override": null
+    },
+    {
+      "label": "zep",
+      "eligibility": "review_required",
+      "reason_code": "model_advisory",
+      "note": "The meaning, identity, or policy association remains ambiguous after review; excluded conservatively.",
+      "score_override": null
+    },
+    {
+      "label": "zero",
+      "eligibility": "featureable",
+      "reason_code": "reviewed_feature_safe",
+      "note": "Reviewed in the scored head as a standalone, legible, broadly useful identity with no listed featured-placement concern.",
+      "score_override": null
+    },
+    {
+      "label": "zig",
+      "eligibility": "review_required",
+      "reason_code": "conservative_exclusion",
+      "note": "The exact programming-language reading makes featured placement too project-specific. The label remains outside the feature-safe allowlist.",
+      "score_override": null
+    },
+    {
+      "label": "zine",
+      "eligibility": "featureable",
+      "reason_code": "reviewed_feature_safe",
+      "note": "Reviewed in the scored head as a standalone, legible, broadly useful identity with no listed featured-placement concern.",
+      "score_override": null
+    },
+    {
+      "label": "zineb",
+      "eligibility": "review_required",
+      "reason_code": "conservative_exclusion",
+      "note": "This label is outside the bounded model-reviewed candidate set and remains ineligible for featured placement.",
+      "score_override": null
+    },
+    {
+      "label": "zinke",
+      "eligibility": "review_required",
+      "reason_code": "conservative_exclusion",
+      "note": "This label is outside the bounded model-reviewed candidate set and remains ineligible for featured placement.",
+      "score_override": null
+    },
+    {
+      "label": "zip",
+      "eligibility": "featureable",
+      "reason_code": "reviewed_feature_safe",
+      "note": "Reviewed in the scored head as a standalone, legible, broadly useful identity with no listed featured-placement concern.",
+      "score_override": null
+    },
+    {
+      "label": "zone",
+      "eligibility": "featureable",
+      "reason_code": "reviewed_feature_safe",
+      "note": "Reviewed in the scored head as a standalone, legible, broadly useful identity with no listed featured-placement concern.",
+      "score_override": null
+    },
+    {
+      "label": "zoril",
+      "eligibility": "review_required",
+      "reason_code": "conservative_exclusion",
+      "note": "This label is outside the bounded model-reviewed candidate set and remains ineligible for featured placement.",
+      "score_override": null
+    }
+  ]
+}

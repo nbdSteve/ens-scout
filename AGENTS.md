@@ -1086,6 +1086,33 @@ never the ENS availability authority.
   reads the answer, but it holds no Graph endpoint, credential, lifecycle arithmetic, or
   model runtime of its own.
 
+## Offline editorial ranking invariants
+
+`internal/ogranking`, `cmd/og-ranking`, and `data/ranking/` own a manual,
+repository-reviewed editorial ranking pipeline. `data/ranking/README.md` is the
+workflow and artifact contract.
+
+- Ranking is editorial quality only. It carries no availability, registration,
+  expiry, premium, price, or legal claim; the snapshot and fresh-check contracts
+  remain the only runtime authorities for those questions.
+- The capable model boundary is generation-time only. Keep model credentials,
+  provider SDKs, raw provider envelopes, account identifiers, and request IDs out
+  of committed files, Lambda paths, and the frontend.
+- Missing or unreviewed safety classifications are ineligible. Only explicit
+  repository decisions enter `featured-safe-v1.json`; the raw scanner list stays
+  neutral and unchanged.
+- A corpus, rubric, prompt, policy, calibration, or model revision change requires
+  deliberate regeneration and review. Validate committed bytes with:
+
+  ```powershell
+  go run ./cmd/og-ranking check
+  go test ./internal/ogranking ./cmd/og-ranking
+  ```
+
+- This repository slice ships data only. Do not import the ranking or allowlist
+  into browser behavior until the separate parser/selector work adds its
+  fail-closed runtime contract.
+
 ## ENS lifecycle rules
 
 This tool currently targets ENSv1 `.eth` registrations:

@@ -1,0 +1,1565 @@
+{
+  "format_version": 1,
+  "corpus_count": 19051,
+  "corpus_sha256": "647b9aa913803510f5ab875136771c5cc3e663445524cc77e0dfd7a7cd6251e8",
+  "rubric_version": "og-v1",
+  "count": 384,
+  "items": [
+    {
+      "label": "ain",
+      "baseline_score": 820
+    },
+    {
+      "label": "ait",
+      "baseline_score": 820
+    },
+    {
+      "label": "ake",
+      "baseline_score": 820
+    },
+    {
+      "label": "ale",
+      "baseline_score": 820
+    },
+    {
+      "label": "alive",
+      "baseline_score": 870
+    },
+    {
+      "label": "amove",
+      "baseline_score": 860
+    },
+    {
+      "label": "ane",
+      "baseline_score": 820
+    },
+    {
+      "label": "are",
+      "baseline_score": 820
+    },
+    {
+      "label": "ave",
+      "baseline_score": 850
+    },
+    {
+      "label": "avine",
+      "baseline_score": 860
+    },
+    {
+      "label": "avion",
+      "baseline_score": 860
+    },
+    {
+      "label": "avise",
+      "baseline_score": 860
+    },
+    {
+      "label": "avize",
+      "baseline_score": 860
+    },
+    {
+      "label": "avo",
+      "baseline_score": 830
+    },
+    {
+      "label": "axe",
+      "baseline_score": 830
+    },
+    {
+      "label": "axiom",
+      "baseline_score": 860
+    },
+    {
+      "label": "axion",
+      "baseline_score": 860
+    },
+    {
+      "label": "axite",
+      "baseline_score": 860
+    },
+    {
+      "label": "axon",
+      "baseline_score": 850,
+      "calibration_anchor": true
+    },
+    {
+      "label": "axone",
+      "baseline_score": 860
+    },
+    {
+      "label": "azine",
+      "baseline_score": 860
+    },
+    {
+      "label": "azo",
+      "baseline_score": 830
+    },
+    {
+      "label": "azuki",
+      "baseline_score": 860
+    },
+    {
+      "label": "azure",
+      "baseline_score": 860
+    },
+    {
+      "label": "bevor",
+      "baseline_score": 860
+    },
+    {
+      "label": "bez",
+      "baseline_score": 850
+    },
+    {
+      "label": "biz",
+      "baseline_score": 830
+    },
+    {
+      "label": "borax",
+      "baseline_score": 860
+    },
+    {
+      "label": "box",
+      "baseline_score": 830
+    },
+    {
+      "label": "calix",
+      "baseline_score": 860
+    },
+    {
+      "label": "carex",
+      "baseline_score": 860
+    },
+    {
+      "label": "cave",
+      "baseline_score": 850
+    },
+    {
+      "label": "caz",
+      "baseline_score": 830
+    },
+    {
+      "label": "chave",
+      "baseline_score": 860
+    },
+    {
+      "label": "chez",
+      "baseline_score": 850
+    },
+    {
+      "label": "chive",
+      "baseline_score": 860
+    },
+    {
+      "label": "chiz",
+      "baseline_score": 850
+    },
+    {
+      "label": "cive",
+      "baseline_score": 850
+    },
+    {
+      "label": "codex",
+      "baseline_score": 860
+    },
+    {
+      "label": "comix",
+      "baseline_score": 860
+    },
+    {
+      "label": "cove",
+      "baseline_score": 870
+    },
+    {
+      "label": "coven",
+      "baseline_score": 870
+    },
+    {
+      "label": "covet",
+      "baseline_score": 860
+    },
+    {
+      "label": "covey",
+      "baseline_score": 860
+    },
+    {
+      "label": "covin",
+      "baseline_score": 860
+    },
+    {
+      "label": "cox",
+      "baseline_score": 850
+    },
+    {
+      "label": "coxa",
+      "baseline_score": 850
+    },
+    {
+      "label": "coz",
+      "baseline_score": 850
+    },
+    {
+      "label": "coze",
+      "baseline_score": 850
+    },
+    {
+      "label": "cozen",
+      "baseline_score": 860
+    },
+    {
+      "label": "cuz",
+      "baseline_score": 830
+    },
+    {
+      "label": "daven",
+      "baseline_score": 860
+    },
+    {
+      "label": "detox",
+      "baseline_score": 860
+    },
+    {
+      "label": "deva",
+      "baseline_score": 850
+    },
+    {
+      "label": "devon",
+      "baseline_score": 860
+    },
+    {
+      "label": "dex",
+      "baseline_score": 850
+    },
+    {
+      "label": "dive",
+      "baseline_score": 850
+    },
+    {
+      "label": "dove",
+      "baseline_score": 850
+    },
+    {
+      "label": "doven",
+      "baseline_score": 860
+    },
+    {
+      "label": "dub",
+      "baseline_score": 780,
+      "calibration_anchor": true
+    },
+    {
+      "label": "dux",
+      "baseline_score": 830
+    },
+    {
+      "label": "elegy",
+      "baseline_score": 750,
+      "calibration_anchor": true
+    },
+    {
+      "label": "eon",
+      "baseline_score": 780,
+      "calibration_anchor": true
+    },
+    {
+      "label": "eve",
+      "baseline_score": 830
+    },
+    {
+      "label": "evo",
+      "baseline_score": 830
+    },
+    {
+      "label": "exit",
+      "baseline_score": 850
+    },
+    {
+      "label": "exo",
+      "baseline_score": 830
+    },
+    {
+      "label": "exon",
+      "baseline_score": 850
+    },
+    {
+      "label": "faix",
+      "baseline_score": 850
+    },
+    {
+      "label": "fave",
+      "baseline_score": 850
+    },
+    {
+      "label": "fax",
+      "baseline_score": 830
+    },
+    {
+      "label": "fez",
+      "baseline_score": 830
+    },
+    {
+      "label": "five",
+      "baseline_score": 850
+    },
+    {
+      "label": "fix",
+      "baseline_score": 830
+    },
+    {
+      "label": "fiz",
+      "baseline_score": 830
+    },
+    {
+      "label": "flux",
+      "baseline_score": 810,
+      "calibration_anchor": true
+    },
+    {
+      "label": "forex",
+      "baseline_score": 860
+    },
+    {
+      "label": "fox",
+      "baseline_score": 830
+    },
+    {
+      "label": "fuzz",
+      "baseline_score": 710,
+      "calibration_anchor": true
+    },
+    {
+      "label": "gave",
+      "baseline_score": 850
+    },
+    {
+      "label": "give",
+      "baseline_score": 850
+    },
+    {
+      "label": "given",
+      "baseline_score": 860
+    },
+    {
+      "label": "gox",
+      "baseline_score": 830
+    },
+    {
+      "label": "haik",
+      "baseline_score": 860
+    },
+    {
+      "label": "halve",
+      "baseline_score": 860
+    },
+    {
+      "label": "have",
+      "baseline_score": 870
+    },
+    {
+      "label": "haven",
+      "baseline_score": 870
+    },
+    {
+      "label": "haze",
+      "baseline_score": 850
+    },
+    {
+      "label": "helix",
+      "baseline_score": 860
+    },
+    {
+      "label": "hex",
+      "baseline_score": 850
+    },
+    {
+      "label": "hive",
+      "baseline_score": 870
+    },
+    {
+      "label": "hizen",
+      "baseline_score": 860
+    },
+    {
+      "label": "hove",
+      "baseline_score": 850
+    },
+    {
+      "label": "hoven",
+      "baseline_score": 860
+    },
+    {
+      "label": "hox",
+      "baseline_score": 830
+    },
+    {
+      "label": "hue",
+      "baseline_score": 760,
+      "calibration_anchor": true
+    },
+    {
+      "label": "ibex",
+      "baseline_score": 850
+    },
+    {
+      "label": "ilex",
+      "baseline_score": 850
+    },
+    {
+      "label": "index",
+      "baseline_score": 860
+    },
+    {
+      "label": "ixora",
+      "baseline_score": 860
+    },
+    {
+      "label": "izar",
+      "baseline_score": 850
+    },
+    {
+      "label": "jai",
+      "baseline_score": 840
+    },
+    {
+      "label": "jak",
+      "baseline_score": 860
+    },
+    {
+      "label": "jake",
+      "baseline_score": 860
+    },
+    {
+      "label": "jane",
+      "baseline_score": 860
+    },
+    {
+      "label": "jar",
+      "baseline_score": 840
+    },
+    {
+      "label": "jark",
+      "baseline_score": 860
+    },
+    {
+      "label": "jato",
+      "baseline_score": 860
+    },
+    {
+      "label": "javel",
+      "baseline_score": 880
+    },
+    {
+      "label": "jaxy",
+      "baseline_score": 850
+    },
+    {
+      "label": "jazy",
+      "baseline_score": 850
+    },
+    {
+      "label": "jerk",
+      "baseline_score": 860
+    },
+    {
+      "label": "jin",
+      "baseline_score": 840
+    },
+    {
+      "label": "jink",
+      "baseline_score": 860
+    },
+    {
+      "label": "jinx",
+      "baseline_score": 870
+    },
+    {
+      "label": "jive",
+      "baseline_score": 890
+    },
+    {
+      "label": "jivey",
+      "baseline_score": 880
+    },
+    {
+      "label": "jivy",
+      "baseline_score": 850
+    },
+    {
+      "label": "jiz",
+      "baseline_score": 870
+    },
+    {
+      "label": "joke",
+      "baseline_score": 860
+    },
+    {
+      "label": "jolt",
+      "baseline_score": 800,
+      "calibration_anchor": true
+    },
+    {
+      "label": "jor",
+      "baseline_score": 840
+    },
+    {
+      "label": "jouk",
+      "baseline_score": 860
+    },
+    {
+      "label": "juke",
+      "baseline_score": 860
+    },
+    {
+      "label": "jura",
+      "baseline_score": 860
+    },
+    {
+      "label": "jurat",
+      "baseline_score": 860
+    },
+    {
+      "label": "jure",
+      "baseline_score": 860
+    },
+    {
+      "label": "juve",
+      "baseline_score": 890
+    },
+    {
+      "label": "kai",
+      "baseline_score": 840
+    },
+    {
+      "label": "kaik",
+      "baseline_score": 850
+    },
+    {
+      "label": "kain",
+      "baseline_score": 860
+    },
+    {
+      "label": "kak",
+      "baseline_score": 840
+    },
+    {
+      "label": "kale",
+      "baseline_score": 860
+    },
+    {
+      "label": "kali",
+      "baseline_score": 860
+    },
+    {
+      "label": "kane",
+      "baseline_score": 860
+    },
+    {
+      "label": "kanzu",
+      "baseline_score": 860
+    },
+    {
+      "label": "karo",
+      "baseline_score": 860
+    },
+    {
+      "label": "kat",
+      "baseline_score": 840
+    },
+    {
+      "label": "kati",
+      "baseline_score": 860
+    },
+    {
+      "label": "kazi",
+      "baseline_score": 870
+    },
+    {
+      "label": "ked",
+      "baseline_score": 840
+    },
+    {
+      "label": "ken",
+      "baseline_score": 840
+    },
+    {
+      "label": "kero",
+      "baseline_score": 860
+    },
+    {
+      "label": "kerve",
+      "baseline_score": 860
+    },
+    {
+      "label": "kevel",
+      "baseline_score": 860
+    },
+    {
+      "label": "kevil",
+      "baseline_score": 860
+    },
+    {
+      "label": "kex",
+      "baseline_score": 870
+    },
+    {
+      "label": "khazi",
+      "baseline_score": 860
+    },
+    {
+      "label": "kin",
+      "baseline_score": 840
+    },
+    {
+      "label": "kine",
+      "baseline_score": 860
+    },
+    {
+      "label": "kiore",
+      "baseline_score": 870
+    },
+    {
+      "label": "kit",
+      "baseline_score": 840
+    },
+    {
+      "label": "kite",
+      "baseline_score": 860
+    },
+    {
+      "label": "kiva",
+      "baseline_score": 870
+    },
+    {
+      "label": "knave",
+      "baseline_score": 860
+    },
+    {
+      "label": "knive",
+      "baseline_score": 860
+    },
+    {
+      "label": "koji",
+      "baseline_score": 860
+    },
+    {
+      "label": "kon",
+      "baseline_score": 840
+    },
+    {
+      "label": "kor",
+      "baseline_score": 840
+    },
+    {
+      "label": "kora",
+      "baseline_score": 860
+    },
+    {
+      "label": "korai",
+      "baseline_score": 870
+    },
+    {
+      "label": "korat",
+      "baseline_score": 860
+    },
+    {
+      "label": "kore",
+      "baseline_score": 860
+    },
+    {
+      "label": "kranz",
+      "baseline_score": 860
+    },
+    {
+      "label": "kuri",
+      "baseline_score": 860
+    },
+    {
+      "label": "latex",
+      "baseline_score": 860
+    },
+    {
+      "label": "lave",
+      "baseline_score": 850
+    },
+    {
+      "label": "lax",
+      "baseline_score": 830
+    },
+    {
+      "label": "lek",
+      "baseline_score": 840
+    },
+    {
+      "label": "leva",
+      "baseline_score": 850
+    },
+    {
+      "label": "levin",
+      "baseline_score": 860
+    },
+    {
+      "label": "levo",
+      "baseline_score": 850
+    },
+    {
+      "label": "lex",
+      "baseline_score": 850
+    },
+    {
+      "label": "lez",
+      "baseline_score": 850
+    },
+    {
+      "label": "limax",
+      "baseline_score": 860
+    },
+    {
+      "label": "linux",
+      "baseline_score": 860
+    },
+    {
+      "label": "live",
+      "baseline_score": 870
+    },
+    {
+      "label": "liven",
+      "baseline_score": 870
+    },
+    {
+      "label": "livor",
+      "baseline_score": 860
+    },
+    {
+      "label": "love",
+      "baseline_score": 850
+    },
+    {
+      "label": "lox",
+      "baseline_score": 830
+    },
+    {
+      "label": "lurex",
+      "baseline_score": 860
+    },
+    {
+      "label": "lux",
+      "baseline_score": 830
+    },
+    {
+      "label": "luz",
+      "baseline_score": 830
+    },
+    {
+      "label": "maik",
+      "baseline_score": 860
+    },
+    {
+      "label": "maize",
+      "baseline_score": 860
+    },
+    {
+      "label": "mak",
+      "baseline_score": 840
+    },
+    {
+      "label": "malik",
+      "baseline_score": 860
+    },
+    {
+      "label": "maven",
+      "baseline_score": 870
+    },
+    {
+      "label": "mavin",
+      "baseline_score": 860
+    },
+    {
+      "label": "max",
+      "baseline_score": 850
+    },
+    {
+      "label": "maxi",
+      "baseline_score": 850
+    },
+    {
+      "label": "maze",
+      "baseline_score": 850
+    },
+    {
+      "label": "midi",
+      "baseline_score": 750,
+      "calibration_anchor": true
+    },
+    {
+      "label": "mix",
+      "baseline_score": 830
+    },
+    {
+      "label": "miz",
+      "baseline_score": 830
+    },
+    {
+      "label": "moth",
+      "baseline_score": 800,
+      "calibration_anchor": true
+    },
+    {
+      "label": "move",
+      "baseline_score": 870
+    },
+    {
+      "label": "moxa",
+      "baseline_score": 850
+    },
+    {
+      "label": "moz",
+      "baseline_score": 850
+    },
+    {
+      "label": "moze",
+      "baseline_score": 850
+    },
+    {
+      "label": "murex",
+      "baseline_score": 860
+    },
+    {
+      "label": "mux",
+      "baseline_score": 830
+    },
+    {
+      "label": "naive",
+      "baseline_score": 860
+    },
+    {
+      "label": "nave",
+      "baseline_score": 850
+    },
+    {
+      "label": "nek",
+      "baseline_score": 840
+    },
+    {
+      "label": "nevi",
+      "baseline_score": 850
+    },
+    {
+      "label": "nix",
+      "baseline_score": 830
+    },
+    {
+      "label": "nova",
+      "baseline_score": 830,
+      "calibration_anchor": true
+    },
+    {
+      "label": "nox",
+      "baseline_score": 830
+    },
+    {
+      "label": "ode",
+      "baseline_score": 800,
+      "calibration_anchor": true
+    },
+    {
+      "label": "olive",
+      "baseline_score": 860
+    },
+    {
+      "label": "orixa",
+      "baseline_score": 860
+    },
+    {
+      "label": "ova",
+      "baseline_score": 830
+    },
+    {
+      "label": "ovate",
+      "baseline_score": 860
+    },
+    {
+      "label": "ovel",
+      "baseline_score": 850
+    },
+    {
+      "label": "oven",
+      "baseline_score": 870
+    },
+    {
+      "label": "ovine",
+      "baseline_score": 860
+    },
+    {
+      "label": "oxen",
+      "baseline_score": 850
+    },
+    {
+      "label": "ozeki",
+      "baseline_score": 860
+    },
+    {
+      "label": "pave",
+      "baseline_score": 850
+    },
+    {
+      "label": "paven",
+      "baseline_score": 860
+    },
+    {
+      "label": "pax",
+      "baseline_score": 830
+    },
+    {
+      "label": "pix",
+      "baseline_score": 830
+    },
+    {
+      "label": "pox",
+      "baseline_score": 830
+    },
+    {
+      "label": "poz",
+      "baseline_score": 830
+    },
+    {
+      "label": "pyre",
+      "baseline_score": 670,
+      "calibration_anchor": true
+    },
+    {
+      "label": "quad",
+      "baseline_score": 800,
+      "calibration_anchor": true
+    },
+    {
+      "label": "quip",
+      "baseline_score": 800,
+      "calibration_anchor": true
+    },
+    {
+      "label": "quiz",
+      "baseline_score": 850
+    },
+    {
+      "label": "raik",
+      "baseline_score": 860
+    },
+    {
+      "label": "rave",
+      "baseline_score": 870
+    },
+    {
+      "label": "ravel",
+      "baseline_score": 860
+    },
+    {
+      "label": "raven",
+      "baseline_score": 870
+    },
+    {
+      "label": "ravin",
+      "baseline_score": 860
+    },
+    {
+      "label": "rax",
+      "baseline_score": 850
+    },
+    {
+      "label": "raze",
+      "baseline_score": 850
+    },
+    {
+      "label": "redox",
+      "baseline_score": 860
+    },
+    {
+      "label": "redux",
+      "baseline_score": 860
+    },
+    {
+      "label": "rex",
+      "baseline_score": 850
+    },
+    {
+      "label": "rez",
+      "baseline_score": 850
+    },
+    {
+      "label": "ritz",
+      "baseline_score": 850
+    },
+    {
+      "label": "riva",
+      "baseline_score": 850
+    },
+    {
+      "label": "rive",
+      "baseline_score": 870
+    },
+    {
+      "label": "rivel",
+      "baseline_score": 860
+    },
+    {
+      "label": "riven",
+      "baseline_score": 870
+    },
+    {
+      "label": "rivet",
+      "baseline_score": 860
+    },
+    {
+      "label": "rivo",
+      "baseline_score": 850
+    },
+    {
+      "label": "riz",
+      "baseline_score": 850
+    },
+    {
+      "label": "riza",
+      "baseline_score": 850
+    },
+    {
+      "label": "rojak",
+      "baseline_score": 870
+    },
+    {
+      "label": "rok",
+      "baseline_score": 840
+    },
+    {
+      "label": "roux",
+      "baseline_score": 850
+    },
+    {
+      "label": "rove",
+      "baseline_score": 870
+    },
+    {
+      "label": "roven",
+      "baseline_score": 870
+    },
+    {
+      "label": "rozit",
+      "baseline_score": 860
+    },
+    {
+      "label": "rune",
+      "baseline_score": 800,
+      "calibration_anchor": true
+    },
+    {
+      "label": "saga",
+      "baseline_score": 750,
+      "calibration_anchor": true
+    },
+    {
+      "label": "salix",
+      "baseline_score": 860
+    },
+    {
+      "label": "save",
+      "baseline_score": 850
+    },
+    {
+      "label": "sax",
+      "baseline_score": 830
+    },
+    {
+      "label": "saz",
+      "baseline_score": 830
+    },
+    {
+      "label": "sex",
+      "baseline_score": 850
+    },
+    {
+      "label": "sez",
+      "baseline_score": 850
+    },
+    {
+      "label": "sik",
+      "baseline_score": 840
+    },
+    {
+      "label": "silex",
+      "baseline_score": 860
+    },
+    {
+      "label": "sitz",
+      "baseline_score": 850
+    },
+    {
+      "label": "six",
+      "baseline_score": 850
+    },
+    {
+      "label": "sizar",
+      "baseline_score": 860
+    },
+    {
+      "label": "size",
+      "baseline_score": 850
+    },
+    {
+      "label": "skive",
+      "baseline_score": 860
+    },
+    {
+      "label": "sorex",
+      "baseline_score": 860
+    },
+    {
+      "label": "sox",
+      "baseline_score": 830
+    },
+    {
+      "label": "stive",
+      "baseline_score": 860
+    },
+    {
+      "label": "stove",
+      "baseline_score": 860
+    },
+    {
+      "label": "tax",
+      "baseline_score": 830
+    },
+    {
+      "label": "tex",
+      "baseline_score": 850
+    },
+    {
+      "label": "tix",
+      "baseline_score": 850
+    },
+    {
+      "label": "toxin",
+      "baseline_score": 860
+    },
+    {
+      "label": "tux",
+      "baseline_score": 830
+    },
+    {
+      "label": "uva",
+      "baseline_score": 830
+    },
+    {
+      "label": "vac",
+      "baseline_score": 830
+    },
+    {
+      "label": "vag",
+      "baseline_score": 830
+    },
+    {
+      "label": "vain",
+      "baseline_score": 870
+    },
+    {
+      "label": "vaire",
+      "baseline_score": 860
+    },
+    {
+      "label": "vakil",
+      "baseline_score": 860
+    },
+    {
+      "label": "vale",
+      "baseline_score": 870
+    },
+    {
+      "label": "valet",
+      "baseline_score": 860
+    },
+    {
+      "label": "vali",
+      "baseline_score": 870
+    },
+    {
+      "label": "valid",
+      "baseline_score": 860
+    },
+    {
+      "label": "valor",
+      "baseline_score": 860
+    },
+    {
+      "label": "valve",
+      "baseline_score": 860
+    },
+    {
+      "label": "van",
+      "baseline_score": 850
+    },
+    {
+      "label": "vane",
+      "baseline_score": 870
+    },
+    {
+      "label": "var",
+      "baseline_score": 850
+    },
+    {
+      "label": "vare",
+      "baseline_score": 870
+    },
+    {
+      "label": "varec",
+      "baseline_score": 860
+    },
+    {
+      "label": "varix",
+      "baseline_score": 900
+    },
+    {
+      "label": "varve",
+      "baseline_score": 860
+    },
+    {
+      "label": "vase",
+      "baseline_score": 870
+    },
+    {
+      "label": "vat",
+      "baseline_score": 850
+    },
+    {
+      "label": "vaw",
+      "baseline_score": 830
+    },
+    {
+      "label": "veg",
+      "baseline_score": 850
+    },
+    {
+      "label": "vegan",
+      "baseline_score": 860
+    },
+    {
+      "label": "velar",
+      "baseline_score": 860
+    },
+    {
+      "label": "vena",
+      "baseline_score": 870
+    },
+    {
+      "label": "vend",
+      "baseline_score": 870
+    },
+    {
+      "label": "venom",
+      "baseline_score": 870
+    },
+    {
+      "label": "vent",
+      "baseline_score": 870
+    },
+    {
+      "label": "vera",
+      "baseline_score": 890
+    },
+    {
+      "label": "vest",
+      "baseline_score": 870
+    },
+    {
+      "label": "vesta",
+      "baseline_score": 860
+    },
+    {
+      "label": "vet",
+      "baseline_score": 850
+    },
+    {
+      "label": "veto",
+      "baseline_score": 870
+    },
+    {
+      "label": "vex",
+      "baseline_score": 890,
+      "calibration_anchor": true
+    },
+    {
+      "label": "vexil",
+      "baseline_score": 880
+    },
+    {
+      "label": "vext",
+      "baseline_score": 870
+    },
+    {
+      "label": "vezir",
+      "baseline_score": 880
+    },
+    {
+      "label": "vibex",
+      "baseline_score": 880
+    },
+    {
+      "label": "vicar",
+      "baseline_score": 860
+    },
+    {
+      "label": "vid",
+      "baseline_score": 830
+    },
+    {
+      "label": "vig",
+      "baseline_score": 830
+    },
+    {
+      "label": "vim",
+      "baseline_score": 830
+    },
+    {
+      "label": "vimen",
+      "baseline_score": 860
+    },
+    {
+      "label": "vin",
+      "baseline_score": 850
+    },
+    {
+      "label": "vine",
+      "baseline_score": 870
+    },
+    {
+      "label": "vinew",
+      "baseline_score": 860
+    },
+    {
+      "label": "vise",
+      "baseline_score": 870
+    },
+    {
+      "label": "vison",
+      "baseline_score": 860
+    },
+    {
+      "label": "visor",
+      "baseline_score": 860
+    },
+    {
+      "label": "visto",
+      "baseline_score": 860
+    },
+    {
+      "label": "vite",
+      "baseline_score": 870
+    },
+    {
+      "label": "vitex",
+      "baseline_score": 900
+    },
+    {
+      "label": "vivat",
+      "baseline_score": 860
+    },
+    {
+      "label": "vive",
+      "baseline_score": 860
+    },
+    {
+      "label": "vixen",
+      "baseline_score": 880
+    },
+    {
+      "label": "vizor",
+      "baseline_score": 880
+    },
+    {
+      "label": "vol",
+      "baseline_score": 830
+    },
+    {
+      "label": "vomit",
+      "baseline_score": 860
+    },
+    {
+      "label": "vor",
+      "baseline_score": 850
+    },
+    {
+      "label": "vow",
+      "baseline_score": 830
+    },
+    {
+      "label": "vox",
+      "baseline_score": 870
+    },
+    {
+      "label": "voxel",
+      "baseline_score": 860
+    },
+    {
+      "label": "vug",
+      "baseline_score": 830
+    },
+    {
+      "label": "vum",
+      "baseline_score": 830
+    },
+    {
+      "label": "waive",
+      "baseline_score": 860
+    },
+    {
+      "label": "warez",
+      "baseline_score": 860
+    },
+    {
+      "label": "wax",
+      "baseline_score": 830
+    },
+    {
+      "label": "wex",
+      "baseline_score": 830
+    },
+    {
+      "label": "wiz",
+      "baseline_score": 830
+    },
+    {
+      "label": "woven",
+      "baseline_score": 860
+    },
+    {
+      "label": "wox",
+      "baseline_score": 830
+    },
+    {
+      "label": "xerox",
+      "baseline_score": 880
+    },
+    {
+      "label": "yex",
+      "baseline_score": 830
+    },
+    {
+      "label": "yule",
+      "baseline_score": 800,
+      "calibration_anchor": true
+    },
+    {
+      "label": "zag",
+      "baseline_score": 830
+    },
+    {
+      "label": "zaire",
+      "baseline_score": 860
+    },
+    {
+      "label": "zakat",
+      "baseline_score": 860
+    },
+    {
+      "label": "zante",
+      "baseline_score": 860
+    },
+    {
+      "label": "zap",
+      "baseline_score": 830
+    },
+    {
+      "label": "zati",
+      "baseline_score": 870
+    },
+    {
+      "label": "zax",
+      "baseline_score": 870
+    },
+    {
+      "label": "zazen",
+      "baseline_score": 860
+    },
+    {
+      "label": "zea",
+      "baseline_score": 830
+    },
+    {
+      "label": "zed",
+      "baseline_score": 850
+    },
+    {
+      "label": "zek",
+      "baseline_score": 870
+    },
+    {
+      "label": "zel",
+      "baseline_score": 830
+    },
+    {
+      "label": "zep",
+      "baseline_score": 830
+    },
+    {
+      "label": "zerk",
+      "baseline_score": 870
+    },
+    {
+      "label": "zero",
+      "baseline_score": 870
+    },
+    {
+      "label": "zex",
+      "baseline_score": 870
+    },
+    {
+      "label": "zig",
+      "baseline_score": 830
+    },
+    {
+      "label": "zin",
+      "baseline_score": 850
+    },
+    {
+      "label": "zine",
+      "baseline_score": 870,
+      "calibration_anchor": true
+    },
+    {
+      "label": "zip",
+      "baseline_score": 830
+    },
+    {
+      "label": "zit",
+      "baseline_score": 850
+    },
+    {
+      "label": "zite",
+      "baseline_score": 870
+    },
+    {
+      "label": "ziz",
+      "baseline_score": 850
+    },
+    {
+      "label": "zol",
+      "baseline_score": 830
+    },
+    {
+      "label": "zone",
+      "baseline_score": 870
+    },
+    {
+      "label": "zonk",
+      "baseline_score": 870
+    },
+    {
+      "label": "zori",
+      "baseline_score": 870
+    },
+    {
+      "label": "zouk",
+      "baseline_score": 870
+    },
+    {
+      "label": "zuz",
+      "baseline_score": 850
+    }
+  ]
+}

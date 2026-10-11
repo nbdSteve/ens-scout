@@ -1,0 +1,406 @@
+{
+  "format_version": 1,
+  "rubric_version": "og-v1",
+  "items": [
+    {
+      "label": "vex",
+      "tier": "strong",
+      "policy_signal": "none"
+    },
+    {
+      "label": "zine",
+      "tier": "strong",
+      "policy_signal": "none"
+    },
+    {
+      "label": "midi",
+      "tier": "strong",
+      "policy_signal": "none"
+    },
+    {
+      "label": "hue",
+      "tier": "strong",
+      "policy_signal": "none"
+    },
+    {
+      "label": "eon",
+      "tier": "strong",
+      "policy_signal": "none"
+    },
+    {
+      "label": "dub",
+      "tier": "strong",
+      "policy_signal": "none"
+    },
+    {
+      "label": "moth",
+      "tier": "strong",
+      "policy_signal": "none"
+    },
+    {
+      "label": "fuzz",
+      "tier": "strong",
+      "policy_signal": "none"
+    },
+    {
+      "label": "ode",
+      "tier": "strong",
+      "policy_signal": "none"
+    },
+    {
+      "label": "jolt",
+      "tier": "strong",
+      "policy_signal": "none"
+    },
+    {
+      "label": "quad",
+      "tier": "strong",
+      "policy_signal": "none"
+    },
+    {
+      "label": "axon",
+      "tier": "strong",
+      "policy_signal": "none"
+    },
+    {
+      "label": "yule",
+      "tier": "strong",
+      "policy_signal": "none"
+    },
+    {
+      "label": "elegy",
+      "tier": "strong",
+      "policy_signal": "none"
+    },
+    {
+      "label": "quip",
+      "tier": "strong",
+      "policy_signal": "none"
+    },
+    {
+      "label": "pyre",
+      "tier": "strong",
+      "policy_signal": "none"
+    },
+    {
+      "label": "nova",
+      "tier": "strong",
+      "policy_signal": "none"
+    },
+    {
+      "label": "rune",
+      "tier": "strong",
+      "policy_signal": "none"
+    },
+    {
+      "label": "flux",
+      "tier": "strong",
+      "policy_signal": "none"
+    },
+    {
+      "label": "saga",
+      "tier": "strong",
+      "policy_signal": "none"
+    },
+    {
+      "label": "acre",
+      "tier": "ordinary",
+      "policy_signal": "none"
+    },
+    {
+      "label": "aged",
+      "tier": "ordinary",
+      "policy_signal": "none"
+    },
+    {
+      "label": "also",
+      "tier": "ordinary",
+      "policy_signal": "none"
+    },
+    {
+      "label": "amber",
+      "tier": "ordinary",
+      "policy_signal": "none"
+    },
+    {
+      "label": "apron",
+      "tier": "ordinary",
+      "policy_signal": "none"
+    },
+    {
+      "label": "baker",
+      "tier": "ordinary",
+      "policy_signal": "none"
+    },
+    {
+      "label": "cabin",
+      "tier": "ordinary",
+      "policy_signal": "none"
+    },
+    {
+      "label": "daily",
+      "tier": "ordinary",
+      "policy_signal": "none"
+    },
+    {
+      "label": "entry",
+      "tier": "ordinary",
+      "policy_signal": "none"
+    },
+    {
+      "label": "field",
+      "tier": "ordinary",
+      "policy_signal": "none"
+    },
+    {
+      "label": "grain",
+      "tier": "ordinary",
+      "policy_signal": "none"
+    },
+    {
+      "label": "hotel",
+      "tier": "ordinary",
+      "policy_signal": "none"
+    },
+    {
+      "label": "ideal",
+      "tier": "ordinary",
+      "policy_signal": "none"
+    },
+    {
+      "label": "jelly",
+      "tier": "ordinary",
+      "policy_signal": "none"
+    },
+    {
+      "label": "known",
+      "tier": "ordinary",
+      "policy_signal": "none"
+    },
+    {
+      "label": "lemon",
+      "tier": "ordinary",
+      "policy_signal": "none"
+    },
+    {
+      "label": "maker",
+      "tier": "ordinary",
+      "policy_signal": "none"
+    },
+    {
+      "label": "nurse",
+      "tier": "ordinary",
+      "policy_signal": "none"
+    },
+    {
+      "label": "outer",
+      "tier": "ordinary",
+      "policy_signal": "none"
+    },
+    {
+      "label": "plant",
+      "tier": "ordinary",
+      "policy_signal": "none"
+    },
+    {
+      "label": "aah",
+      "tier": "awkward",
+      "policy_signal": "none"
+    },
+    {
+      "label": "aal",
+      "tier": "awkward",
+      "policy_signal": "none"
+    },
+    {
+      "label": "aahed",
+      "tier": "awkward",
+      "policy_signal": "none"
+    },
+    {
+      "label": "aalii",
+      "tier": "awkward",
+      "policy_signal": "none"
+    },
+    {
+      "label": "abaci",
+      "tier": "awkward",
+      "policy_signal": "none"
+    },
+    {
+      "label": "abask",
+      "tier": "awkward",
+      "policy_signal": "none"
+    },
+    {
+      "label": "abear",
+      "tier": "awkward",
+      "policy_signal": "none"
+    },
+    {
+      "label": "abcee",
+      "tier": "awkward",
+      "policy_signal": "none"
+    },
+    {
+      "label": "abyes",
+      "tier": "awkward",
+      "policy_signal": "none"
+    },
+    {
+      "label": "acmic",
+      "tier": "awkward",
+      "policy_signal": "none"
+    },
+    {
+      "label": "adunc",
+      "tier": "awkward",
+      "policy_signal": "none"
+    },
+    {
+      "label": "aggry",
+      "tier": "awkward",
+      "policy_signal": "none"
+    },
+    {
+      "label": "ahind",
+      "tier": "awkward",
+      "policy_signal": "none"
+    },
+    {
+      "label": "aiery",
+      "tier": "awkward",
+      "policy_signal": "none"
+    },
+    {
+      "label": "ajwan",
+      "tier": "awkward",
+      "policy_signal": "none"
+    },
+    {
+      "label": "albee",
+      "tier": "awkward",
+      "policy_signal": "none"
+    },
+    {
+      "label": "alefs",
+      "tier": "awkward",
+      "policy_signal": "none"
+    },
+    {
+      "label": "algum",
+      "tier": "awkward",
+      "policy_signal": "none"
+    },
+    {
+      "label": "amban",
+      "tier": "awkward",
+      "policy_signal": "none"
+    },
+    {
+      "label": "ammos",
+      "tier": "awkward",
+      "policy_signal": "none"
+    },
+    {
+      "label": "kkk",
+      "tier": "policy_ineligible",
+      "policy_signal": "hate_or_harassment"
+    },
+    {
+      "label": "sex",
+      "tier": "policy_ineligible",
+      "policy_signal": "adult"
+    },
+    {
+      "label": "cock",
+      "tier": "policy_ineligible",
+      "policy_signal": "adult"
+    },
+    {
+      "label": "cunt",
+      "tier": "policy_ineligible",
+      "policy_signal": "adult"
+    },
+    {
+      "label": "dick",
+      "tier": "policy_ineligible",
+      "policy_signal": "adult"
+    },
+    {
+      "label": "fuck",
+      "tier": "policy_ineligible",
+      "policy_signal": "adult"
+    },
+    {
+      "label": "nazi",
+      "tier": "policy_ineligible",
+      "policy_signal": "hate_or_harassment"
+    },
+    {
+      "label": "porn",
+      "tier": "policy_ineligible",
+      "policy_signal": "adult"
+    },
+    {
+      "label": "rape",
+      "tier": "policy_ineligible",
+      "policy_signal": "adult"
+    },
+    {
+      "label": "shit",
+      "tier": "policy_ineligible",
+      "policy_signal": "adult"
+    },
+    {
+      "label": "admin",
+      "tier": "policy_ineligible",
+      "policy_signal": "misleading_or_impersonation"
+    },
+    {
+      "label": "apple",
+      "tier": "policy_ineligible",
+      "policy_signal": "trademark_or_brand"
+    },
+    {
+      "label": "meta",
+      "tier": "policy_ineligible",
+      "policy_signal": "trademark_or_brand"
+    },
+    {
+      "label": "slave",
+      "tier": "policy_ineligible",
+      "policy_signal": "hate_or_harassment"
+    },
+    {
+      "label": "tesla",
+      "tier": "policy_ineligible",
+      "policy_signal": "trademark_or_brand"
+    },
+    {
+      "label": "trump",
+      "tier": "policy_ineligible",
+      "policy_signal": "person_or_political"
+    },
+    {
+      "label": "visa",
+      "tier": "policy_ineligible",
+      "policy_signal": "trademark_or_brand"
+    },
+    {
+      "label": "adobe",
+      "tier": "policy_ineligible",
+      "policy_signal": "trademark_or_brand"
+    },
+    {
+      "label": "coke",
+      "tier": "policy_ineligible",
+      "policy_signal": "trademark_or_brand"
+    },
+    {
+      "label": "intel",
+      "tier": "policy_ineligible",
+      "policy_signal": "trademark_or_brand"
+    }
+  ]
+}

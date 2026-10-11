@@ -1,6 +1,7 @@
 import { readdir, readFile } from 'node:fs/promises'
 import { join, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { brotliCompressSync, constants, gzipSync } from 'node:zlib'
 import { expect, test } from '@playwright/test'
 import { FIXTURE_SITE, VERIFY_SITE, type BuiltSite } from './servers'
 
@@ -140,6 +141,52 @@ for (const site of SITES) {
       }
     }
     expect(found).toEqual([])
+  })
+
+  test(`${site.outDir}/ ships the complete compact rank within its transfer budgets`, async () => {
+    const ranks = (await builtFiles(site)).filter(([path]) =>
+      path.endsWith('/data/og-rank-v1.json'),
+    )
+    expect(ranks.length, 'the versioned rank artifact is missing or duplicated').toBe(1)
+
+    const text = ranks[0]?.[1] ?? ''
+    const document = JSON.parse(text) as {
+      format_version?: unknown
+      corpus?: { count?: unknown; sha256?: unknown }
+      rubric_version?: unknown
+      policy_version?: unknown
+      generator_manifest_sha256?: unknown
+      items?: unknown[]
+    }
+    expect(Object.keys(document).sort()).toEqual([
+      'corpus',
+      'format_version',
+      'generator_manifest_sha256',
+      'items',
+      'policy_version',
+      'rubric_version',
+    ])
+    expect(Object.keys(document.corpus ?? {}).sort()).toEqual(['count', 'sha256'])
+    expect(document.format_version).toBe(1)
+    expect(document.corpus?.count).toBe(19_051)
+    expect(document.corpus?.sha256).toMatch(/^[0-9a-f]{64}$/)
+    expect(document.items).toHaveLength(19_051)
+    expect(document.rubric_version).toBe('og-v1')
+    expect(document.policy_version).toBe('featured-safe-v1')
+    expect(document.generator_manifest_sha256).toMatch(/^[0-9a-f]{64}$/)
+    expect(document.items?.every((tuple) => Array.isArray(tuple) && tuple.length === 4)).toBe(true)
+
+    const bytes = Buffer.from(text, 'utf8')
+    const brotliBytes = brotliCompressSync(bytes, {
+      params: { [constants.BROTLI_PARAM_QUALITY]: 11 },
+    }).byteLength
+    const gzipBytes = gzipSync(bytes, { level: 9 }).byteLength
+    expect(brotliBytes, 'rank artifact exceeds its 80 KiB Brotli budget').toBeLessThanOrEqual(
+      80 * 1024,
+    )
+    expect(gzipBytes, 'rank artifact exceeds its 130 KiB gzip budget').toBeLessThanOrEqual(
+      130 * 1024,
+    )
   })
 
   /*

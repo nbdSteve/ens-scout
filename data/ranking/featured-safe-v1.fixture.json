@@ -1,0 +1,18 @@
+{
+  "format_version": 1,
+  "generator_manifest_sha256": "63e1060cef44c8447639de25254f6cb6ad2da1ab70c145af8289555b5ede1c02",
+  "labels": [
+    "flux",
+    "nova",
+    "zine",
+    "hex",
+    "midi",
+    "rune",
+    "saga",
+    "vex",
+    "zap",
+    "dub",
+    "eon",
+    "fuzz"
+  ]
+}

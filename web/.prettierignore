@@ -4,3 +4,4 @@ node_modules
 playwright-report
 test-results
 package-lock.json
+public/data/og-rank-v1.json

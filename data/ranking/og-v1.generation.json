@@ -1,0 +1,187 @@
+{
+  "format_version": 1,
+  "generated_at": "2026-10-11T00:40:00Z",
+  "generator_commit": "6322c963b0eb59ac34c6bea40ad1ac9aae7f5742",
+  "corpus_count": 19051,
+  "corpus_sha256": "647b9aa913803510f5ab875136771c5cc3e663445524cc77e0dfd7a7cd6251e8",
+  "rubric_version": "og-v1",
+  "rubric_sha256": "011a322d1024bf9f97ba217c5511e5430763f59020f4aae9f775246381b346ce",
+  "prompt_version": "og-v1",
+  "prompt_sha256": "ca60722c18fa26ec547e9e58c649a6da2749f6fc920aaa2f3fdc0b732628a5cd",
+  "calibration_sha256": "b158f2c34a9fe4039c89d136ace404942172dd6e9b496284ca9cab7339dbd9ab",
+  "candidates_path": "data/ranking/og-v1.candidates.json",
+  "candidates_sha256": "5540cf31ad729e2a157019baca714bcb2e64794dcf8bafe498e6996146b01080",
+  "model": {
+    "provider": "amazon-bedrock",
+    "model_id": "openai.gpt-5.6-sol",
+    "model_revision": "openai.gpt-5.6-sol",
+    "catalog_composition": "3000",
+    "interface": "codex-cli",
+    "interface_version": "0.162.0.631 (stable)"
+  },
+  "settings": {
+    "temperature": 0,
+    "reasoning_effort": "low",
+    "runs_per_label": 3,
+    "candidate_count": 384,
+    "batch_size": 128,
+    "max_attempts": 12,
+    "max_input_tokens": 600000,
+    "max_output_tokens": 180000,
+    "max_request_bytes": 131072,
+    "max_response_bytes": 1048576,
+    "max_event_bytes": 2097152,
+    "call_timeout_seconds": 480
+  },
+  "passes": [
+    {
+      "index": 1,
+      "ordering_seed": "og-v1-pass-1-7df45c73",
+      "batches": [
+        {
+          "index": 1,
+          "count": 128,
+          "labels_sha256": "c1b68ddc00dfe1cef0578144f1ab6788f5885dd693c15535d6a6e61680d5598b",
+          "attempts": 1,
+          "usage": {
+            "input_tokens": 31162,
+            "cached_input_tokens": 0,
+            "cache_write_input_tokens": 31120,
+            "output_tokens": 9732,
+            "reasoning_output_tokens": 187
+          }
+        },
+        {
+          "index": 2,
+          "count": 128,
+          "labels_sha256": "a1a62334c838531186bc83dd1cedcb622df235fc1a6d9924fc216e4919e53faf",
+          "attempts": 1,
+          "usage": {
+            "input_tokens": 30895,
+            "cached_input_tokens": 0,
+            "cache_write_input_tokens": 30853,
+            "output_tokens": 9616,
+            "reasoning_output_tokens": 96
+          }
+        },
+        {
+          "index": 3,
+          "count": 128,
+          "labels_sha256": "8ff083b0f67cfd4e1e65cc5928bcce61cf7f469686f29b78d7ec86c11bf6e2c6",
+          "attempts": 1,
+          "usage": {
+            "input_tokens": 30934,
+            "cached_input_tokens": 0,
+            "cache_write_input_tokens": 30892,
+            "output_tokens": 9746,
+            "reasoning_output_tokens": 162
+          }
+        }
+      ],
+      "output_path": "data/ranking/generation/og-v1.pass-1.jsonl",
+      "output_sha256": "5c873f53c5d953882ddf5a9da2046e64659e84bb46a0a1a4b6b8d66ea990a793"
+    },
+    {
+      "index": 2,
+      "ordering_seed": "og-v1-pass-2-a9136e2b",
+      "batches": [
+        {
+          "index": 1,
+          "count": 128,
+          "labels_sha256": "0a44025cd01d323a186289b00e6c0eadd4735459ed6b5c23c8706b821e4b4fc2",
+          "attempts": 1,
+          "usage": {
+            "input_tokens": 30930,
+            "cached_input_tokens": 0,
+            "cache_write_input_tokens": 30888,
+            "output_tokens": 9664,
+            "reasoning_output_tokens": 129
+          }
+        },
+        {
+          "index": 2,
+          "count": 128,
+          "labels_sha256": "4c3832411f198d7f8fb14b4c41c9972c687cf40665db596c4be73d3744fc3c8d",
+          "attempts": 1,
+          "usage": {
+            "input_tokens": 30929,
+            "cached_input_tokens": 0,
+            "cache_write_input_tokens": 30887,
+            "output_tokens": 9675,
+            "reasoning_output_tokens": 190
+          }
+        },
+        {
+          "index": 3,
+          "count": 128,
+          "labels_sha256": "f8a94501715e96d2b0ae016b8989c0472536599c99244729f7192545ff15577b",
+          "attempts": 1,
+          "usage": {
+            "input_tokens": 31059,
+            "cached_input_tokens": 0,
+            "cache_write_input_tokens": 31017,
+            "output_tokens": 9899,
+            "reasoning_output_tokens": 253
+          }
+        }
+      ],
+      "output_path": "data/ranking/generation/og-v1.pass-2.jsonl",
+      "output_sha256": "e5932884d4ee2aa23109ef4f7f7df12f35283f0f31a8126e541ea57b9212578d"
+    },
+    {
+      "index": 3,
+      "ordering_seed": "og-v1-pass-3-c2861f04",
+      "batches": [
+        {
+          "index": 1,
+          "count": 128,
+          "labels_sha256": "4b35eaa56448e5609ac97e6c08e9d48a8e9708de793c81294ce1ee614c3f173b",
+          "attempts": 1,
+          "usage": {
+            "input_tokens": 30919,
+            "cached_input_tokens": 0,
+            "cache_write_input_tokens": 30877,
+            "output_tokens": 9731,
+            "reasoning_output_tokens": 89
+          }
+        },
+        {
+          "index": 2,
+          "count": 128,
+          "labels_sha256": "579d36ac058f359eae24229ca98a2ea5274646fb80adb10a8f0871c44bc1c997",
+          "attempts": 1,
+          "usage": {
+            "input_tokens": 30923,
+            "cached_input_tokens": 0,
+            "cache_write_input_tokens": 30881,
+            "output_tokens": 9706,
+            "reasoning_output_tokens": 185
+          }
+        },
+        {
+          "index": 3,
+          "count": 128,
+          "labels_sha256": "24c5d36fd3e80154d826760d4334c0abd3ed5e2623b0835acf2388aed5d0d4a6",
+          "attempts": 1,
+          "usage": {
+            "input_tokens": 30915,
+            "cached_input_tokens": 0,
+            "cache_write_input_tokens": 30873,
+            "output_tokens": 9827,
+            "reasoning_output_tokens": 242
+          }
+        }
+      ],
+      "output_path": "data/ranking/generation/og-v1.pass-3.jsonl",
+      "output_sha256": "afd4ebd3b249be14c82851b067f60da6084b926e89b2b118c9b7315e01b25921"
+    }
+  ],
+  "total_attempts": 9,
+  "total_usage": {
+    "input_tokens": 278666,
+    "cached_input_tokens": 0,
+    "cache_write_input_tokens": 278288,
+    "output_tokens": 87596,
+    "reasoning_output_tokens": 1533
+  }
+}

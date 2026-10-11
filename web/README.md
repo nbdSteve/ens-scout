@@ -200,6 +200,12 @@ so there is one answer to whether a name may be acted on rather than two that co
 `tests/browser/assets.spec.ts` inspects both built sites without launching a browser and
 fails if a removed model runtime, model asset reference, endpoint, or credential returns.
 
+`public/data/og-rank-v1.json` and `src/data/featured-safe-v1.json` are reviewed
+offline data reserved for the later fail-closed ranking parser and selector. This
+data-only slice does not import or fetch either file, so it changes no current UI
+behavior. The browser still performs no inference and receives no model credential
+or provider dependency.
+
 ## What this app must not do
 
 - No lifecycle arithmetic.

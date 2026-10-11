@@ -108,10 +108,12 @@ the ENS app before attempting to register it.
 
 ```text
 cmd/ens-scrape/       CLI entry point
+cmd/og-ranking/       manual offline editorial ranking generator and validator
 cmd/scan-lambda/      scheduled publisher entry point
 internal/ens/         typed GraphQL client and lifecycle classification
 internal/checker/     batching and bounded worker pool
 internal/names/       input loading, normalization, and deduplication
+internal/ogranking/   offline ranking, aggregation, policy, and artifact contracts
 internal/report/      text, JSON Lines, and CSV output
 internal/snapshot/    deterministic snapshot contract, storage fakes, fixtures
 internal/scanner/     one scheduled scan, from event to published pointer
@@ -121,10 +123,15 @@ internal/api/         cached HTTP read API, and the bounded fresh-check endpoint
 infra/                TypeScript AWS CDK definition of the publisher stack
 web/                  React website that browses a published snapshot
 data/words/           current candidate lists
+data/ranking/         reviewed editorial ranking sources and generated artifacts
 data/fixtures/        committed fixture snapshots for local development
 data/results/         historical scan output from the original utility
 data/archive/         superseded candidate lists
 ```
+
+The ranking pipeline is entirely offline and makes no ENS lifecycle claim.
+See [data/ranking/README.md](data/ranking/README.md) for its bounded manual
+generation, safety review, and deterministic rebuild workflow.
 
 ## Snapshot contract
 
