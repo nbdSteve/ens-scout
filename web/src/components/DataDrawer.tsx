@@ -32,7 +32,7 @@ export function DataDrawer({
     wasOpen.current = true
     const previousOverflow = document.body.style.overflow
     document.body.style.overflow = 'hidden'
-    closeButton.current?.focus()
+    closeButton.current?.focus({ preventScroll: true })
 
     const onKeyDown = (event: KeyboardEvent): void => {
       if (event.key === 'Escape') {

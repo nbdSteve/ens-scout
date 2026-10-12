@@ -35,10 +35,13 @@ its Bedrock adapter is outside every Lambda and frontend import path.
 - `featured-safe-v1.fixture.json` contains the first twelve ranked allowlisted
   labels for future selector tests.
 - `../../web/public/data/og-rank-v1.json` is the compact browser tuple artifact.
-- `../../web/src/data/featured-safe-v1.json` is the exact allowlist copy consumed
-  by the browser's strict parser and deterministic fallback. The pure runtime
-  seam is not yet wired into `App`, so these artifacts still change no UI
-  behavior.
+- `../../web/src/data/featured-safe-v1.json` is the exact allowlist copy consumed by the browser's strict parser and deterministic fallback.
+- `../../web/src/data/featured-ranking-provenance-v1.json` is the closed, sanitized manifest subset shown under `Featured ranking` in the Data drawer.
+
+The canonical default route loads the rank independently of the snapshot and feeds it through the same selector as the deterministic allowlist-only fallback.
+The selector admits only reviewed labels whose joined snapshot status is exactly `available`; a refused allowlist omits the featured hero.
+The generated provenance carries only the approved method, version, corpus, immutable or dated model identity, hashes, review scope, and safety policy.
+It never carries a credential, account identifier, provider request identifier, raw prompt, raw response, reviewer identity, or local path.
 
 The full review source uses compact tuples because repeating field names across
 19,051 records would dominate the pull-request diff without adding audit value.

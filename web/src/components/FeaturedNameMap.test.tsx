@@ -62,21 +62,23 @@ describe('FeaturedNameMap', () => {
     const user = userEvent.setup()
     render(<FeaturedNameMap names={NAMES} now={NOW} verify={binding()} />)
 
-    const list = screen.getByRole('list', { name: 'Featured available names, best first' })
+    const list = screen.getByRole('list', { name: 'Featured available names' })
     expect(
       within(list)
         .getAllByRole('checkbox')
         .map((box) => box.getAttribute('aria-label')),
     ).toEqual([
-      expect.stringContaining('flux.eth, rank 1'),
-      expect.stringContaining('nova.eth, rank 2'),
-      expect.stringContaining('zine.eth, rank 3'),
-      expect.stringContaining('hex.eth, rank 4'),
-      expect.stringContaining('midi.eth, rank 5'),
-      expect.stringContaining('vex.eth, rank 6'),
-      expect.stringContaining('dub.eth, rank 7'),
-      expect.stringContaining('rune.eth, rank 8'),
+      'Select flux.eth, snapshot available',
+      'Select nova.eth, snapshot available',
+      'Select zine.eth, snapshot available',
+      'Select hex.eth, snapshot available',
+      'Select midi.eth, snapshot available',
+      'Select vex.eth, snapshot available',
+      'Select dub.eth, snapshot available',
+      'Select rune.eth, snapshot available',
     ])
+    expect(document.querySelector('.featured-name__rank, .featured-name__facet')).toBeNull()
+    expect(list).not.toHaveTextContent('abstract + conceptual')
 
     await user.tab()
     expect(within(list).getAllByRole('checkbox')[0]).toHaveFocus()
@@ -89,7 +91,9 @@ describe('FeaturedNameMap', () => {
     const { rerender } = render(
       <FeaturedNameMap names={NAMES} now={NOW} verify={binding({ onToggle })} />,
     )
-    const box = screen.getByRole('checkbox', { name: /Select flux\.eth, rank 1/ })
+    const box = screen.getByRole('checkbox', {
+      name: 'Select flux.eth, snapshot available',
+    })
 
     await userEvent.setup().click(box)
     expect(onToggle).toHaveBeenCalledWith('flux.eth')

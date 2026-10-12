@@ -59,8 +59,13 @@ const FORBIDDEN: readonly (readonly [string, RegExp])[] = [
   ['a Graph subgraph endpoint', /api\.thegraph\.com/i],
   ['a Graph subgraph path', /\/subgraphs\/(id|name)\//i],
   ['a Graph API key variable', /THEGRAPH_API_KEY/],
+  ['an OpenAI credential variable', /OPENAI_API_KEY/],
+  ['an Anthropic credential variable', /ANTHROPIC_API_KEY/],
+  ['a Bedrock bearer credential variable', /AWS_BEARER_TOKEN_BEDROCK/],
+  ['a Google model credential variable', /GOOGLE_API_KEY/],
   ['a DynamoDB endpoint', /dynamodb[.-][a-z0-9-]*\.amazonaws\.com/i],
   ['an AWS access key id', /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/],
+  ['an AWS access key variable', /AWS_ACCESS_KEY_ID/],
   ['an AWS secret access key variable', /AWS_SECRET_ACCESS_KEY/],
   ['a GraphQL query for ENS registrations', /name_in\s*:/],
 ]
@@ -83,8 +88,33 @@ const REMOVED_MODEL_RUNTIME: readonly (readonly [string, RegExp])[] = [
   ['the removed shader feature requirement', /shader-f16/i],
   ['the removed engine constructor', /CreateMLCEngine/],
   ['the removed model cache probe', /hasModelInCache/],
+  ['a model cache symbol', /\bmodel(?:Cache|_cache)\b/],
   ['the removed WebGPU adapter probe', /requestAdapter/i],
+  ['a WebGPU browser probe', /\bnavigator\.gpu\b/],
+  ['a WebGPU runtime type', /\bGPU(?:Adapter|Device|ShaderModule)\b/],
+  ['a runtime chat generation call', /\bchat\.completions\.create\b/],
+  ['a runtime text generation call', /\b(?:generateText|streamText)\b/],
 ]
+
+const RUNTIME_LAYOUT_SOLVER: readonly (readonly [string, RegExp])[] = [
+  ['the d3-force package', /\bd3-force\b/i],
+  ['a force-simulation constructor', /\bforceSimulation\b/],
+  ['a collision-force constructor', /\bforceCollide\b/],
+  ['an imperative simulation tick', /\bsimulation\.tick\b/],
+]
+
+test('the dependency graph contains no browser model runtime', async () => {
+  const manifests = await Promise.all(
+    ['../../package.json', '../../package-lock.json'].map(async (path) =>
+      readFile(fileURLToPath(new URL(path, import.meta.url)), 'utf8'),
+    ),
+  )
+  for (const [index, text] of manifests.entries()) {
+    expect(text, `${index === 0 ? 'package.json' : 'package-lock.json'} names WebLLM`).not.toMatch(
+      /@mlc-ai\/web-llm/i,
+    )
+  }
+})
 
 for (const site of SITES) {
   test(`no file built into ${site.outDir}/ carries an endpoint, a key, or a credential`, async () => {
@@ -143,6 +173,19 @@ for (const site of SITES) {
     expect(found).toEqual([])
   })
 
+  test(`${site.outDir}/ carries no runtime force simulation or collision solver`, async () => {
+    const found: string[] = []
+    for (const [path, text] of await builtFiles(site)) {
+      const artefact = `${path}\n${text}`
+      for (const [what, pattern] of RUNTIME_LAYOUT_SOLVER) {
+        if (pattern.test(artefact)) {
+          found.push(`${path} contains ${what}`)
+        }
+      }
+    }
+    expect(found).toEqual([])
+  })
+
   test(`${site.outDir}/ ships the complete compact rank within its transfer budgets`, async () => {
     const ranks = (await builtFiles(site)).filter(([path]) =>
       path.endsWith('/data/og-rank-v1.json'),
@@ -181,12 +224,8 @@ for (const site of SITES) {
       params: { [constants.BROTLI_PARAM_QUALITY]: 11 },
     }).byteLength
     const gzipBytes = gzipSync(bytes, { level: 9 }).byteLength
-    expect(brotliBytes, 'rank artifact exceeds its 80 KiB Brotli budget').toBeLessThanOrEqual(
-      80 * 1024,
-    )
-    expect(gzipBytes, 'rank artifact exceeds its 130 KiB gzip budget').toBeLessThanOrEqual(
-      130 * 1024,
-    )
+    expect(brotliBytes, 'rank artifact exceeds its 80 kB Brotli budget').toBeLessThanOrEqual(80_000)
+    expect(gzipBytes, 'rank artifact exceeds its 130 kB gzip budget').toBeLessThanOrEqual(130_000)
   })
 
   /*
@@ -204,8 +243,8 @@ for (const site of SITES) {
     const text = entry[0]?.[1] ?? ''
     const bytes = Buffer.byteLength(text, 'utf8')
     const gzipBytes = gzipSync(Buffer.from(text, 'utf8'), { level: 9 }).byteLength
-    expect(bytes, 'entry JavaScript exceeds 350 KiB raw').toBeLessThanOrEqual(350 * 1024)
-    expect(gzipBytes, 'entry JavaScript exceeds 110 KiB gzip').toBeLessThanOrEqual(110 * 1024)
+    expect(bytes, 'entry JavaScript must remain below 350 kB raw').toBeLessThan(350_000)
+    expect(gzipBytes, 'entry JavaScript must remain below 110 kB gzip').toBeLessThan(110_000)
   })
 
   test(`${site.outDir}/ ships the fixture, so a clean clone has something to show`, async () => {

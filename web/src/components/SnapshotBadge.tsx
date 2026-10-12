@@ -1,11 +1,9 @@
-import type { MouseEvent, ReactNode } from 'react'
+import type { ReactNode } from 'react'
 import { resolveSnapshotAge, resolveSourceGroups } from '../snapshot/staleness'
 import type { Snapshot } from '../snapshot/types'
 
 export interface SnapshotBadgeProps {
-  readonly dataOpen: boolean
   readonly now: Date
-  readonly onOpenData: (event: MouseEvent<HTMLButtonElement>) => void
   readonly preview: boolean
   readonly snapshot: Snapshot
 }
@@ -30,13 +28,7 @@ function previewDay(now: Date): string {
   }).format(now)
 }
 
-export function SnapshotBadge({
-  dataOpen,
-  now,
-  onOpenData,
-  preview,
-  snapshot,
-}: SnapshotBadgeProps): ReactNode {
+export function SnapshotBadge({ now, preview, snapshot }: SnapshotBadgeProps): ReactNode {
   const age = resolveSnapshotAge(snapshot.metadata, now)
   const stale = resolveSourceGroups(snapshot.metadata, now).some((group) => group.scanAge.isStale)
 
@@ -69,16 +61,6 @@ export function SnapshotBadge({
         Verify on ENS <span aria-hidden="true">↗</span>
         <span className="visually-hidden">, opens in a new tab</span>
       </a>
-
-      <button
-        aria-controls="data-drawer"
-        aria-expanded={dataOpen}
-        className="snapshot-strip__button"
-        onClick={onOpenData}
-        type="button"
-      >
-        Data
-      </button>
     </div>
   )
 }

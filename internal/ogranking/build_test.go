@@ -20,8 +20,8 @@ func TestBuildArtifactsCoversCorpusAndIsDeterministic(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildArtifacts: %v", err)
 	}
-	if len(first) != 7 {
-		t.Fatalf("artifact count = %d, want 7", len(first))
+	if len(first) != 8 {
+		t.Fatalf("artifact count = %d, want 8", len(first))
 	}
 	if err := WriteArtifacts(root, first); err != nil {
 		t.Fatalf("WriteArtifacts: %v", err)
@@ -65,13 +65,14 @@ func TestBuildArtifactsCoversCorpusAndIsDeterministic(t *testing.T) {
 	if !bytes.Equal(byPath[allowlistPath], byPath[browserAllowlistPath]) {
 		t.Fatal("browser allowlist differs from reviewed source allowlist")
 	}
+	assertBrowserProvenance(t, byPath[browserProvenancePath], byPath[manifestPath])
 	assertReviewSource(t, byPath[reviewPath], corpus)
 	gzipBytes, err := GzipSize(byPath[browserRankPath])
 	if err != nil {
 		t.Fatal(err)
 	}
-	if gzipBytes > 130*1024 {
-		t.Fatalf("compact rank gzip size = %d, above 130 KiB", gzipBytes)
+	if gzipBytes > 130_000 {
+		t.Fatalf("compact rank gzip size = %d, above 130 kB", gzipBytes)
 	}
 }
 
@@ -115,12 +116,13 @@ func TestCommittedArtifactsAreCurrentAndWithinContract(t *testing.T) {
 	if !bytes.Equal(byPath[allowlistPath], byPath[browserAllowlistPath]) {
 		t.Fatal("browser allowlist differs from reviewed source allowlist")
 	}
+	assertBrowserProvenance(t, byPath[browserProvenancePath], byPath[manifestPath])
 	gzipBytes, err := GzipSize(byPath[browserRankPath])
 	if err != nil {
 		t.Fatal(err)
 	}
-	if gzipBytes > 130*1024 {
-		t.Fatalf("compact rank gzip size = %d, above 130 KiB", gzipBytes)
+	if gzipBytes > 130_000 {
+		t.Fatalf("compact rank gzip size = %d, above 130 kB", gzipBytes)
 	}
 }
 
@@ -480,6 +482,50 @@ func decodeFixture(t *testing.T, payload []byte) SelectorFixture {
 		t.Fatalf("fixture = %#v", fixture)
 	}
 	return fixture
+}
+
+func assertBrowserProvenance(t *testing.T, payload, manifestPayload []byte) {
+	t.Helper()
+	var provenance BrowserProvenance
+	if err := decodeClosedJSON(payload, &provenance); err != nil {
+		t.Fatalf("decode browser provenance: %v", err)
+	}
+	var manifest Manifest
+	if err := decodeClosedJSON(manifestPayload, &manifest); err != nil {
+		t.Fatalf("decode manifest for browser provenance: %v", err)
+	}
+	if provenance.FormatVersion != browserProvenanceFormat ||
+		provenance.Method != browserEditorialMethod ||
+		provenance.ArtifactVersion != browserArtifactVersion ||
+		provenance.Corpus != manifest.Corpus ||
+		provenance.RubricVersion != manifest.Rubric.Version ||
+		provenance.PolicyVersion != manifest.PolicyVersion ||
+		provenance.GeneratorManifestSHA256 != hashBytes(manifestPayload) ||
+		provenance.PromptSHA256 != manifest.Prompt.SHA256 ||
+		provenance.Model.Provider != manifest.Model.Provider ||
+		provenance.Model.ModelID != manifest.Model.ModelID ||
+		provenance.Model.ModelRevision != manifest.Model.ModelRevision ||
+		provenance.Model.GeneratedAt != manifest.GeneratedAt ||
+		provenance.Model.RunsPerLabel != manifest.GenerationSettings.RunsPerLabel ||
+		provenance.Review.ReviewedAt != manifest.Review.ReviewedAt ||
+		provenance.Review.HeadCount != manifest.Review.ReviewedHeadCount ||
+		!reflect.DeepEqual(provenance.Review.Scope, manifest.Review.Scope) {
+		t.Fatalf("browser provenance does not match its manifest: %#v", provenance)
+	}
+	for _, forbidden := range []string{
+		"generator_commit",
+		"generation_passes",
+		"interface_version",
+		"request_id",
+		"input_tokens",
+		"output_tokens",
+		"reviewer",
+		"output_path",
+	} {
+		if bytes.Contains(payload, []byte(forbidden)) {
+			t.Fatalf("browser provenance exposes %q", forbidden)
+		}
+	}
 }
 
 func assertReviewSource(t *testing.T, payload []byte, corpus Corpus) {

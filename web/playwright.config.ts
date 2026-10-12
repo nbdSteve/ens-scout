@@ -7,6 +7,9 @@ const ASSETS = /assets\.spec\.ts/
 /** The one suite that needs a verifier, and the one the other projects cannot run. */
 const VERIFY = /verify\.spec\.ts/
 
+/** The one local lab profile that measures browser performance entries. */
+const PERFORMANCE = /performance\.spec\.ts/
+
 /*
  * Two production builds, on two ports.
  *
@@ -49,17 +52,17 @@ export default defineConfig({
   projects: [
     {
       name: 'desktop',
-      testIgnore: [ASSETS, VERIFY],
+      testIgnore: [ASSETS, PERFORMANCE, VERIFY],
       use: { ...devices['Desktop Chrome'], viewport: { width: 1440, height: 900 } },
     },
     {
       name: 'tablet',
-      testIgnore: [ASSETS, VERIFY],
+      testIgnore: [ASSETS, PERFORMANCE, VERIFY],
       use: { ...devices['Desktop Chrome'], viewport: { width: 834, height: 1112 } },
     },
     {
       name: 'mobile',
-      testIgnore: [ASSETS, VERIFY],
+      testIgnore: [ASSETS, PERFORMANCE, VERIFY],
       use: { ...devices['Pixel 7'], viewport: { width: 390, height: 844 } },
     },
     {
@@ -76,7 +79,7 @@ export default defineConfig({
        * overflow went unnoticed here. A plain window at 320px cannot hide it.
        */
       name: 'narrow',
-      testIgnore: [ASSETS, VERIFY],
+      testIgnore: [ASSETS, PERFORMANCE, VERIFY],
       use: { ...devices['Desktop Chrome'], viewport: { width: 320, height: 568 } },
     },
     {
@@ -98,6 +101,28 @@ export default defineConfig({
         baseURL: VERIFY_SITE.baseURL,
         contextOptions: { reducedMotion: 'reduce' },
         viewport: { width: 1440, height: 900 },
+      },
+    },
+    {
+      /*
+       * A local production bundle under a mobile viewport and touch profile, with
+       * four-times CPU slowdown applied in the spec. Transfer-size tests carry the
+       * network budget separately, so this project does not introduce variable
+       * public-network timing into the browser metrics.
+       */
+      name: 'performance',
+      dependencies: ['desktop', 'tablet', 'mobile', 'narrow', 'verify', 'assets'],
+      testMatch: PERFORMANCE,
+      use: {
+        ...devices['Pixel 7'],
+        /*
+         * Trace screenshots and DOM snapshots contend with the same throttled
+         * renderer this project measures. The spec attaches its own Event Timing
+         * breakdown before asserting the budgets, so keep lab instrumentation
+         * outside the measured page.
+         */
+        trace: 'off',
+        viewport: { width: 390, height: 844 },
       },
     },
     {

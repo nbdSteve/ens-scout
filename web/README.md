@@ -105,21 +105,27 @@ with no `view` opens the available names.
 
 ## Featured entrance
 
-The canonical empty-query Available route opens on a full-viewport editorial map of
-twelve reviewed names on desktop and tablet, or the first seven of the same ranking on
-mobile. The names remain in score order in the DOM and keyboard sequence even though
-fixed slots position them spatially. Ordinary scrolling reveals the complete searchable
-and filterable field; the skip link and `Explore all` action both focus its heading.
+The canonical empty-query Available route opens on a full-viewport editorial map of twelve reviewed names on desktop and tablet, or the first seven of the same ranking on mobile.
+The names remain in ranked order in the DOM and keyboard sequence even though fixed slots position them spatially.
+The hero renders the names without visible scores, positions, facet tags, or explanatory copy; ranking remains an ordering and placement input only.
+Ordinary scrolling reveals the complete searchable and filterable field; the skip link and `Explore all` action both focus its heading.
+One floating `Data` button opens snapshot and ranking provenance from either the hero or a discovery deep link.
 
-Any search, non-default view, status/lifecycle filter, length filter, source-list
-filter, sort direction, page number, or simulated clock is a discovery deep link and
-bypasses the hero. The address bar remains the authority rather than a second UI state.
+Any search, non-default view, status/lifecycle filter, length filter, source-list filter, sort direction, page number, or simulated clock is a discovery deep link and bypasses the hero.
+The address bar remains the authority rather than a second UI state.
 
-The rank artifact loads independently of the snapshot. While it is pending the page
-reserves the final geometry without showing candidate names. A refused rank uses the
-deterministic allowlist-only fallback through the same selector, while a refused safety
-policy omits the hero and starts at ordinary discovery. Neither case can delay or break
-the snapshot list.
+`public/data/og-rank-v1.json` is the complete offline editorial rank, and `src/data/featured-safe-v1.json` is its separately reviewed placement allowlist.
+The selector intersects those artifacts with names whose current snapshot status is exactly `available`, then applies one deterministic diversity pass without running a simulation in the browser.
+The rank artifact loads independently of the snapshot.
+While it is pending the page reserves the final geometry without showing candidate names.
+A missing, slow, blocked, or corrupt rank uses the deterministic allowlist-only fallback through the same selector, while a refused safety policy omits the hero and starts at ordinary discovery.
+Neither case shifts or delays the ordinary snapshot list.
+
+`go run ./cmd/og-ranking build` regenerates the rank, allowlist, fixture, review summary, and sanitized browser provenance from the reviewed repository inputs.
+`go run ./cmd/og-ranking check` proves those committed artifacts are current without contacting a model.
+The compact `Featured ranking` group in the Data drawer shows the approved method, versions, corpus identity, generator identity and hashes, review scope, safety policy, runtime source, and the snapshot used for the availability join.
+That public provenance is generated at `src/data/featured-ranking-provenance-v1.json` and deliberately excludes prompts, raw responses, provider request metadata, account identifiers, credentials, and local paths.
+Editorial rank never opens a registration link; only an unexpired fresh check for that exact name can pass the outbound gate.
 
 ## Development
 
@@ -152,7 +158,7 @@ reads them from the same definition the servers do, or it could pass while scann
 wrong bundle.
 Both directories are git-ignored.
 
-It runs six projects.
+It runs seven projects.
 
 | Project            | Why it exists                                                        |
 | ------------------ | -------------------------------------------------------------------- |
@@ -161,7 +167,19 @@ It runs six projects.
 | `mobile` (Pixel 7) | A real phone context, including its viewport-meta behaviour          |
 | `narrow` (320)     | WCAG 1.4.10 Reflow, in a desktop context on purpose - see below      |
 | `verify`           | `dist-verify` against a stub read API: the whole fresh-check surface |
+| `performance`      | Local mid-tier mobile LCP, INP, and CLS budgets                      |
 | `assets`           | Reads both builds with no browser: secret scan and origin allowlist  |
+
+`performance` uses the local production fixture at 390 by 844 CSS pixels with touch, a mobile user agent, and four-times CPU slowdown.
+It observes Chrome's buffered Largest Contentful Paint, Layout Shift, and Event Timing entries and fails above 2.5 seconds LCP, 200 milliseconds INP, or 0.10 CLS.
+It runs after the functional and asset projects, so concurrent browser workers cannot become input delay in the measured page.
+Its result records the input delay, processing time, presentation delay, and target for every measured interaction before enforcing those budgets, so a CI failure retains the evidence needed to diagnose it.
+The performance project disables Playwright trace capture because trace screenshots and DOM snapshots compete with the throttled renderer; its structured metrics attachment provides the failure diagnostics instead.
+Run `npx playwright test --project=performance --no-deps` to exercise only this profile while developing it.
+It does not emulate a public network, whose variance would make the gate flaky; `assets` enforces the transfer side separately.
+The rank must remain at or below 80,000 bytes Brotli and 130,000 bytes gzip, while the initial entry JavaScript must remain below 350,000 bytes raw and 110,000 bytes gzip.
+The same production-asset suite rejects model runtimes, model assets or hosts, provider credentials, WebGPU probes, shader requirements, model caches, generation calls, and runtime force or collision solvers.
+Layout coverage separately caps the rendered hero at twelve name controls.
 
 `verify` runs with reduced motion asked for, because what it drives is a sequence of
 states rather than a layout, and it is the one project whose base URL is the second
@@ -217,14 +235,12 @@ so there is one answer to whether a name may be acted on rather than two that co
 `tests/browser/assets.spec.ts` inspects both built sites without launching a browser and
 fails if a removed model runtime, model asset reference, endpoint, or credential returns.
 
-`public/data/og-rank-v1.json` and `src/data/featured-safe-v1.json` are reviewed
-offline data read by the pure modules under `src/ranking/`. The runtime parser accepts
-only the pinned corpus, rubric, policy, tuple shape, facet mask, and zero flags; the
-selector then intersects the allowlist and the snapshot's exact `available` results.
-`App` consumes that result only on the canonical default route. A refused rank uses
-deterministic allowlist-only scoring, and a refused allowlist yields an omitted featured
-state. Both the hero and raw list receive the same fresh-check binding and outbound
-gate.
+`public/data/og-rank-v1.json`, `src/data/featured-safe-v1.json`, and `src/data/featured-ranking-provenance-v1.json` are generated reviewed offline data read by the pure modules under `src/ranking/`.
+The runtime parsers accept only the pinned corpus, rubric, policy, provenance shape, tuple shape, facet mask, and zero flags, and they require the manifest identities to agree.
+The selector then intersects the allowlist and the snapshot's exact `available` results.
+`App` consumes that result only on the canonical default route.
+A refused rank uses deterministic allowlist-only scoring, and a refused allowlist yields an omitted featured state.
+Both the hero and raw list receive the same fresh-check binding and outbound gate.
 
 ## What this app must not do
 

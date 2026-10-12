@@ -8,11 +8,11 @@ import {
   type ReactNode,
 } from 'react'
 import { DataDrawer } from './components/DataDrawer'
-import { DiscoveryHeader } from './components/DiscoveryHeader'
 import { EmptyState } from './components/EmptyState'
 import { ErrorState } from './components/ErrorState'
 import { FeaturedHero } from './components/FeaturedHero'
 import { FilterDock } from './components/FilterDock'
+import { FloatingDataButton } from './components/FloatingDataButton'
 import { LoadingState } from './components/LoadingState'
 import { NameField } from './components/NameField'
 import { Notice } from './components/Notice'
@@ -191,7 +191,7 @@ export function App({ config = appConfig, deps, featuredDeps, verifyDeps }: AppP
           {showHero ? 'Skip featured names' : 'Skip to the names'}
         </a>
 
-        <DiscoveryHeader dataOpen={dataOpen} hasNotice={hasDataNotice} onOpenData={openData} />
+        <FloatingDataButton dataOpen={dataOpen} hasNotice={hasDataNotice} onOpenData={openData} />
 
         <main id="main">
           {(store.phase === 'loading' || store.phase === 'failed') && (
@@ -217,7 +217,6 @@ export function App({ config = appConfig, deps, featuredDeps, verifyDeps }: AppP
                     focusDiscovery(event, true)
                   }}
                   selection={featuredSelection}
-                  snapshot={snapshot}
                   verify={verify}
                 />
               )}
@@ -263,13 +262,7 @@ export function App({ config = appConfig, deps, featuredDeps, verifyDeps }: AppP
                   viewCounts={viewCounts}
                 />
 
-                <SnapshotBadge
-                  dataOpen={dataOpen}
-                  now={now}
-                  onOpenData={openData}
-                  preview={query.now !== null}
-                  snapshot={snapshot}
-                />
+                <SnapshotBadge now={now} preview={query.now !== null} snapshot={snapshot} />
               </div>
 
               <section aria-labelledby="page-title" className="spectrum" id="results">

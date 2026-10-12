@@ -19,7 +19,7 @@ import {
   type CheckAnswer,
   type CheckedName,
 } from './checkApi'
-import { expectAccessible, MINUTE, scrollsSideways, since } from './support'
+import { expectAccessible, MINUTE, openData, scrollsSideways, since } from './support'
 
 /**
  * Fresh checks, in a real browser, against the bundle that has a verifier.
@@ -209,12 +209,14 @@ test('the deterministic fallback uses the same featured verification path', asyn
   await expect(first).toBeChecked()
 })
 
-test('featured controls keep score order and native Space behavior', async ({ page }) => {
+test('featured controls keep ranked order and native Space behavior', async ({ page }) => {
   await openVerifiedFeatured(page)
   const boxes = page.getByRole('checkbox', { name: /^Select / })
   await expect(boxes).toHaveCount(12)
-  await expect(boxes.nth(0)).toHaveAccessibleName(/rank 1/)
-  await expect(boxes.nth(1)).toHaveAccessibleName(/rank 2/)
+  await expect(boxes.nth(0)).toHaveAccessibleName('Select zine.eth, snapshot available')
+  await expect(boxes.nth(1)).toHaveAccessibleName('Select hex.eth, snapshot available')
+  await expect(boxes.nth(0)).not.toHaveAccessibleName(/rank|score|facet/i)
+  await expect(boxes.nth(1)).not.toHaveAccessibleName(/rank|score|facet/i)
 
   await boxes.nth(0).focus()
   await boxes.nth(0).press(' ')
@@ -241,14 +243,49 @@ test('selected and checking hero states have no accessibility violations', async
   await expect(featuredItem(page, ZINE).getByRole('link')).toBeVisible()
 })
 
-test('the verifier hero exposes exactly seven ranked controls at 320 by 568', async ({ page }) => {
+test('the verifier hero exposes seven obvious name controls at 320 by 568', async ({ page }) => {
   await page.setViewportSize({ width: 320, height: 568 })
   await openVerifiedFeatured(page)
 
   await expect(
     page.getByRole('checkbox', { name: /^Select / }).filter({ visible: true }),
   ).toHaveCount(7)
+  const selectors = page.locator('.featured-name:visible').locator('.featured-name__check')
+  await expect(selectors).toHaveCount(7)
+  const selectorStyles = await selectors.evaluateAll((nodes) =>
+    nodes.map((node) => {
+      const style = getComputedStyle(node)
+      const rect = node.getBoundingClientRect()
+      return {
+        borderStyle: style.borderStyle,
+        borderWidth: Number.parseFloat(style.borderWidth),
+        height: rect.height,
+        width: rect.width,
+      }
+    }),
+  )
+  expect(
+    selectorStyles.every(
+      ({ borderStyle, borderWidth, height, width }) =>
+        borderStyle === 'solid' && borderWidth >= 1 && height >= 19 && width >= 19,
+    ),
+  ).toBe(true)
+  await expect(page.getByRole('button', { name: 'Select names to check' })).toBeInViewport()
+  await expect(page.getByRole('button', { name: 'Data', exact: true })).toBeInViewport()
+  await expect(page.locator('.featured-name__rank, .featured-name__facet')).toHaveCount(0)
   expect(await scrollsSideways(page)).toBe(false)
+})
+
+test('network snapshot provenance hints stay legible in Data', async ({ page }) => {
+  await openVerified(page, { view: 'all' })
+  const drawer = await openData(page)
+  const hints = drawer.locator('.field__hint')
+
+  expect(await hints.count()).toBeGreaterThan(0)
+  for (const hint of await hints.all()) {
+    await expect(hint).toHaveCSS('color', 'rgb(90, 82, 107)')
+  }
+  await expectAccessible(page)
 })
 
 test('no name is a link until a fresh check covers it', async ({ page }) => {

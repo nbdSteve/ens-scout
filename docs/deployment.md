@@ -114,6 +114,67 @@ compiler no pull request had run would report an update for source nobody change
 Raising the pin is a deliberate change, and `AGENTS.md` records what else has to move
 with it.
 
+## Post-deploy smoke sequence
+
+Run this only after the trusted `main` deployment succeeds.
+Use the exact deployed SHA and copy the generated `PublicSiteUrl` from that run's deployment summary.
+The sequence is read-only: do not deploy, invoke a scanner, mutate AWS, or send `POST /api/check`.
+
+From the repository root, replace the generated URL placeholder and capture the two origins under the ignored Playwright output directory:
+
+```bash
+CUSTOM_SITE='https://ens.steve.gg'
+GENERATED_SITE='<PublicSiteUrl copied from the deployment summary>'
+SMOKE_OUTPUT='web/test-results/post-deploy'
+mkdir -p "$SMOKE_OUTPUT"
+
+for SITE_NAME in custom generated; do
+  if [ "$SITE_NAME" = custom ]; then
+    SITE_ORIGIN="$CUSTOM_SITE"
+  else
+    SITE_ORIGIN="$GENERATED_SITE"
+  fi
+
+  curl --fail-with-body --silent --show-error --compressed \
+    --dump-header "$SMOKE_OUTPUT/$SITE_NAME-health.headers" \
+    --output "$SMOKE_OUTPUT/$SITE_NAME-health.json" \
+    "$SITE_ORIGIN/health"
+  curl --fail-with-body --silent --show-error --compressed \
+    --dump-header "$SMOKE_OUTPUT/$SITE_NAME-meta.headers" \
+    --output "$SMOKE_OUTPUT/$SITE_NAME-meta.json" \
+    "$SITE_ORIGIN/api/snapshot/meta"
+  curl --fail-with-body --silent --show-error --compressed \
+    --dump-header "$SMOKE_OUTPUT/$SITE_NAME-rank.headers" \
+    --output "$SMOKE_OUTPUT/$SITE_NAME-rank.json" \
+    "$SITE_ORIGIN/data/og-rank-v1.json"
+done
+
+jq -e '.status == "ok" and (.snapshot_id | type == "string")' \
+  "$SMOKE_OUTPUT/custom-health.json" "$SMOKE_OUTPUT/generated-health.json"
+jq -e '.format_version == 3 and (.snapshot_id | type == "string") and (.checksum | type == "string")' \
+  "$SMOKE_OUTPUT/custom-meta.json" "$SMOKE_OUTPUT/generated-meta.json"
+jq -e '.format_version == 1 and .rubric_version == "og-v1" and .policy_version == "featured-safe-v1" and (.items | length == 19051)' \
+  "$SMOKE_OUTPUT/custom-rank.json" "$SMOKE_OUTPUT/generated-rank.json"
+jq -S '{snapshot_id, checksum}' "$SMOKE_OUTPUT/custom-meta.json" > "$SMOKE_OUTPUT/custom-identity.json"
+jq -S '{snapshot_id, checksum}' "$SMOKE_OUTPUT/generated-meta.json" > "$SMOKE_OUTPUT/generated-identity.json"
+cmp "$SMOKE_OUTPUT/custom-identity.json" "$SMOKE_OUTPUT/generated-identity.json"
+shasum -a 256 "$SMOKE_OUTPUT/custom-rank.json" "$SMOKE_OUTPUT/generated-rank.json"
+```
+
+The two rank hashes must match, and the two metadata identity documents must compare equal.
+Review the captured headers for `200`, the expected content type, cache policy, and an entity tag on both cacheable API responses.
+Do not fail the smoke solely because `/health` reports an old source; that is a publisher-freshness signal to investigate, while a non-`ok` health document or non-`200` response is a serving failure.
+
+Use `chrome-devtools-axi` against each origin and save screenshots or traces only below `web/test-results/post-deploy/`.
+At 1440 by 900, load `/`, confirm twelve featured name controls in ranked DOM order with no visible ranks or facet tags, and confirm there is no visible page header.
+Confirm the one floating `Data` button covers neither a name nor an action, open it, confirm the compact `Featured ranking` facts and current snapshot join, press Escape, and confirm focus returns to Data.
+Confirm no featured or raw name is a registration link before a fresh check, then use `Explore all` and verify that ordinary discovery receives focus.
+Load `/?q=zine`, confirm the hero is bypassed and the search, filters, pagination, snapshot notice, and matching result remain usable.
+At 390 CSS pixels and at 320 by 568, repeat the root and deep-link checks, confirm the mobile hero contains seven names, and confirm the floating Data button, check action, Explore action, and long-name content remain fully visible without horizontal document overflow.
+Repeat the keyboard path with reduced motion enabled, then inspect the Network panel and confirm requests stay on the current origin and include only the application assets, rank artifact, and read-only snapshot paths.
+Any model host, model asset, provider call, WebGPU probe, cross-origin API request, or request to `/api/check` fails the smoke.
+The normal trusted-main pipeline owns deployment; this live verification is a separate post-deploy activity and never runs from a pull-request worktree.
+
 ## Why the bootstrap roles are not used
 
 `infra/lib/deployment.ts` selects `CliCredentialsStackSynthesizer`, so the deployment

@@ -14,13 +14,17 @@ import (
 )
 
 const (
-	reviewPath           = "data/ranking/og-v1.review.jsonl"
-	manifestPath         = "data/ranking/og-v1.manifest.json"
-	headPath             = "data/ranking/og-v1.head.md"
-	allowlistPath        = "data/ranking/featured-safe-v1.json"
-	selectorFixturePath  = "data/ranking/featured-safe-v1.fixture.json"
-	browserRankPath      = "web/public/data/og-rank-v1.json"
-	browserAllowlistPath = "web/src/data/featured-safe-v1.json"
+	reviewPath              = "data/ranking/og-v1.review.jsonl"
+	manifestPath            = "data/ranking/og-v1.manifest.json"
+	headPath                = "data/ranking/og-v1.head.md"
+	allowlistPath           = "data/ranking/featured-safe-v1.json"
+	selectorFixturePath     = "data/ranking/featured-safe-v1.fixture.json"
+	browserRankPath         = "web/public/data/og-rank-v1.json"
+	browserAllowlistPath    = "web/src/data/featured-safe-v1.json"
+	browserProvenancePath   = "web/src/data/featured-ranking-provenance-v1.json"
+	browserArtifactVersion  = "og-rank-v1"
+	browserEditorialMethod  = "Global OG score + diversity"
+	browserProvenanceFormat = 1
 )
 
 // Artifact is one deterministic file derived from the corpus, validated model
@@ -103,6 +107,36 @@ type SelectorFixture struct {
 	FormatVersion           int      `json:"format_version"`
 	GeneratorManifestSHA256 string   `json:"generator_manifest_sha256"`
 	Labels                  []string `json:"labels"`
+}
+
+type browserModelProvenance struct {
+	Provider      string `json:"provider"`
+	ModelID       string `json:"model_id"`
+	ModelRevision string `json:"model_revision"`
+	GeneratedAt   string `json:"generated_at"`
+	RunsPerLabel  int    `json:"runs_per_label"`
+}
+
+type browserReviewProvenance struct {
+	ReviewedAt string   `json:"reviewed_at"`
+	HeadCount  int      `json:"head_count"`
+	Scope      []string `json:"scope"`
+}
+
+// BrowserProvenance is the deliberately small, public subset of the generation
+// manifest used by the website's Data drawer. It excludes provider envelopes,
+// request metadata, usage, reviewer identity, generator paths, and credentials.
+type BrowserProvenance struct {
+	FormatVersion           int                     `json:"format_version"`
+	Method                  string                  `json:"method"`
+	ArtifactVersion         string                  `json:"artifact_version"`
+	Corpus                  corpusReference         `json:"corpus"`
+	RubricVersion           string                  `json:"rubric_version"`
+	PolicyVersion           string                  `json:"policy_version"`
+	GeneratorManifestSHA256 string                  `json:"generator_manifest_sha256"`
+	PromptSHA256            string                  `json:"prompt_sha256"`
+	Model                   browserModelProvenance  `json:"model"`
+	Review                  browserReviewProvenance `json:"review"`
 }
 
 type reviewHeader struct {
@@ -214,6 +248,31 @@ func BuildArtifacts(repositoryRoot string) ([]Artifact, error) {
 		return nil, fmt.Errorf("encode manifest: %w", err)
 	}
 	manifestSHA := hashBytes(manifestBytes)
+	browserProvenanceBytes, err := canonicalIndentedJSON(BrowserProvenance{
+		FormatVersion:           browserProvenanceFormat,
+		Method:                  browserEditorialMethod,
+		ArtifactVersion:         browserArtifactVersion,
+		Corpus:                  manifest.Corpus,
+		RubricVersion:           manifest.Rubric.Version,
+		PolicyVersion:           manifest.PolicyVersion,
+		GeneratorManifestSHA256: manifestSHA,
+		PromptSHA256:            manifest.Prompt.SHA256,
+		Model: browserModelProvenance{
+			Provider:      manifest.Model.Provider,
+			ModelID:       manifest.Model.ModelID,
+			ModelRevision: manifest.Model.ModelRevision,
+			GeneratedAt:   manifest.GeneratedAt,
+			RunsPerLabel:  manifest.GenerationSettings.RunsPerLabel,
+		},
+		Review: browserReviewProvenance{
+			ReviewedAt: manifest.Review.ReviewedAt,
+			HeadCount:  manifest.Review.ReviewedHeadCount,
+			Scope:      append([]string(nil), manifest.Review.Scope...),
+		},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("encode browser provenance: %w", err)
+	}
 
 	reviewBytes, err := encodeReviewSource(records, corpus, generationBytes)
 	if err != nil {
@@ -264,6 +323,7 @@ func BuildArtifacts(repositoryRoot string) ([]Artifact, error) {
 		{Path: selectorFixturePath, Bytes: fixtureBytes},
 		{Path: browserRankPath, Bytes: compactBytes},
 		{Path: browserAllowlistPath, Bytes: allowlistBytes},
+		{Path: browserProvenancePath, Bytes: browserProvenanceBytes},
 	}, nil
 }
 
@@ -570,7 +630,7 @@ func encodeHeadReport(
 	output.WriteString("\nUnknown and unreviewed labels remain `review_required`; only the separate allowlist is feature-safe.\n\n")
 	output.WriteString("## Feature-safe allowlist\n\n")
 	output.WriteString("The allowlist contains " + strconv.Itoa(len(allowlisted)) + " explicitly reviewed labels. ")
-	output.WriteString("Its canonical order is alphabetical; runtime ranking will use the separate score artifact in a later PR.\n\n")
+	output.WriteString("Its canonical order is alphabetical; runtime ranking uses the separate compact score artifact and deterministic diversity selector.\n\n")
 	for _, label := range allowlisted {
 		output.WriteString("- `" + label + "`\n")
 	}

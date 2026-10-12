@@ -969,24 +969,21 @@ never the ENS availability authority.
   way back to real time. The committed fixtures are permanently stale against a real
   clock, so a page that quietly used a different time than it displayed would be worse
   than a stale one.
-- The canonical unfiltered Available route starts with one viewport of featured names,
-  then hands off by ordinary scrolling to the existing heading, filter dock, snapshot
-  strip, raw name field, pagination, and Data drawer. Search, any non-default query
-  state, and preview-clock links bypass the hero; URL state remains authoritative. The
-  hero owns the route's single `h1`, while a bypassed discovery route keeps the discovery
-  heading as its `h1`. Skip and Explore actions both focus the discovery heading.
-- Featured presentation is a fixed editorial composition, never a force simulation,
-  collision solver, random layout, model path, or tag cloud. Rank selects one of twelve
-  desktop/tablet slots and a visual tier; 320px presentation is exactly the first seven
-  in the same order. DOM and tab order stay in rank order even when coordinates do not.
-  Reserve the complete hero geometry while ranking loads, and keep the raw discovery
-  usable regardless of rank latency or refusal. `layout.spec.ts`, `keyboard.spec.ts`,
-  and `url-state.spec.ts` own these budgets.
+- The canonical unfiltered Available route starts with one viewport of featured names, then hands off by ordinary scrolling to the existing heading, filter dock, snapshot strip, raw name field, pagination, and Data drawer.
+  Search, any non-default query state, and preview-clock links bypass the hero; URL state remains authoritative.
+  The hero owns the route's single visually hidden `h1`, while a bypassed discovery route keeps the discovery heading as its `h1`.
+  Skip and Explore actions both focus the discovery heading.
+- Featured presentation is a fixed editorial composition, never a force simulation, collision solver, random layout, model path, or tag cloud.
+  Rank selects one of twelve desktop/tablet slots and a visual tier; 320px presentation is exactly the first seven in the same order.
+  Rank numbers, facet tags, scores, and explanatory copy are not rendered; ranking remains only the ordering and placement input.
+  DOM and tab order stay in rank order even when coordinates do not.
+  Reserve the complete hero geometry while ranking loads, and keep the raw discovery usable regardless of rank latency or refusal.
+  `layout.spec.ts`, `keyboard.spec.ts`, and `url-state.spec.ts` own these budgets.
 - Keep Available as the default view and keep the frontend-only `preview` augmentation
   dense enough to exercise the composition without changing the committed Go fixture.
   It includes at least twelve available names plus long labels for containment coverage.
-- The header is a real `banner` landmark with the local ENS Scout CSS mark, Data, and
-  the outbound ENS action. Do not import or copy Graph artwork or branding.
+- There is no visible page header or general outbound ENS action.
+  One floating `Data` button opens the drawer from the hero and discovery routes, preserves its notice indicator and modal focus contract, and stays clear of featured names and controls at every supported viewport.
 - `state/nameVisual.ts` is the one deterministic seed for per-name bloom position,
   accent, and entry delay. These values are decorative and carry no lifecycle meaning.
   The raw field and featured map may each update one field-level light from pointer
@@ -1127,11 +1124,8 @@ workflow and artifact contract.
   accepts only the pinned format, rubric, policy, corpus identity, exact keys,
   tuple shape, score range, facet mask, and zero flags, then requires the rank and
   allowlist provenance and membership to agree.
-- Runtime selection joins by the exact bare label, admits only allowlisted
-  snapshot results whose status is exactly `available`, and carries no lifecycle
-  or registration claim from editorial data. A refused rank may fall back only to
-  deterministic scoring over the valid allowlist; a refused allowlist omits
-  featured selection rather than exposing raw alphabetical names.
+- Runtime selection joins by the exact bare label, admits only allowlisted snapshot results whose status is exactly `available`, and carries no lifecycle or registration claim from editorial data.
+  A refused rank may fall back only to deterministic scoring over the valid allowlist; a refused allowlist omits featured selection entirely.
 - Keep desktop selection deterministic at twelve names after the unconstrained
   top four, bounded facet/length/family diversity pass, and rank-order deferred
   fill. Mobile is the first seven of that same desktop result.
@@ -1141,6 +1135,10 @@ workflow and artifact contract.
   rank settles to deterministic fallback without delaying discovery; a missing or
   invalid safety policy omits the hero. No unreviewed snapshot name may flash while the
   artifact is pending.
+- `web/src/data/featured-ranking-provenance-v1.json` is a generated, closed public subset of the reviewed manifest, and the Data drawer is the only UI that renders it.
+  Keep raw prompts, responses, request metadata, reviewer identity, credentials, account identifiers, and local paths out of that artifact.
+- `web/tests/browser/assets.spec.ts` owns the final transfer and forbidden-runtime budgets, and `web/tests/browser/performance.spec.ts` owns the stable local mobile browser-vitals profile.
+  Keep those as executable production-bundle gates rather than prose-only targets.
 
 ## ENS lifecycle rules
 

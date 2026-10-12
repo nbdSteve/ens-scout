@@ -52,10 +52,12 @@ test('one requestAnimationFrame-updated light follows the field and resets on ex
     .toEqual([Number.parseFloat(before.x), Number.parseFloat(before.y)])
 })
 
-test('the header uses local CSS identity and no copied Graph branding', async ({ page }) => {
+test('the simplified shell has no visible header or general outbound action', async ({ page }) => {
   await visit(page)
 
-  await expect(page.getByRole('link', { name: 'ENS Scout home' })).toBeVisible()
-  await expect(page.locator('.brand img, .brand svg, .brand canvas')).toHaveCount(0)
+  await expect(page.getByRole('banner')).toHaveCount(0)
+  await expect(page.getByRole('link', { name: 'ENS Scout home' })).toHaveCount(0)
+  await expect(page.getByRole('navigation', { name: 'Site' })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Data', exact: true })).toHaveCount(1)
   await expect(page.locator('body')).not.toContainText('The Graph')
 })

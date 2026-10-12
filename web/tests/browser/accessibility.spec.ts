@@ -35,6 +35,10 @@ test('the deterministic fallback hero has no automated accessibility violations'
     'data-featured-source',
     'deterministic-fallback',
   )
+  const drawer = await openData(page)
+  await expect(
+    drawer.getByRole('region', { name: 'Featured ranking' }).getByText(/Deterministic fallback/),
+  ).toBeVisible()
   await expectAccessible(page)
 })
 
@@ -65,8 +69,15 @@ test('the Data drawer is accessible', async ({ page }) => {
 test('the Data drawer remains accessible from the featured hero', async ({ page }) => {
   test.setTimeout(120_000)
   await visitFeatured(page)
-  await openData(page)
-  await expect(page.locator('.featured-source')).toContainText('Reviewed ranking')
+  const drawer = await openData(page)
+  const ranking = drawer.getByRole('region', { name: 'Featured ranking' })
+  await expect(ranking).toContainText('Reviewed artifact')
+  await expect(ranking).toContainText('Global OG score + diversity')
+  await expect(ranking).toContainText('og-rank-v1')
+  await expect(ranking).toContainText('featured-safe-v1')
+  await expect(ranking).toContainText('preview-spectrum')
+  await expect(drawer).not.toContainText('The good ones are still out there.')
+  await expect(drawer).not.toContainText('Strong, memorable names from the latest snapshot.')
   await expectAccessible(page)
 })
 
@@ -83,14 +94,15 @@ test('the empty and stale states remain accessible', async ({ page }) => {
   await expectAccessible(page)
 })
 
-test('landmarks match the editorial header and discovery hierarchy', async ({ page }) => {
+test('landmarks match the simplified discovery hierarchy', async ({ page }) => {
   await visit(page)
 
-  await expect(page.getByRole('banner')).toHaveCount(1)
+  await expect(page.getByRole('banner')).toHaveCount(0)
   await expect(page.getByRole('main')).toHaveCount(1)
   await expect(page.getByRole('contentinfo')).toHaveCount(0)
-  await expect(page.getByRole('navigation', { name: 'Site' })).toHaveCount(1)
+  await expect(page.getByRole('navigation', { name: 'Site' })).toHaveCount(0)
   await expect(page.getByRole('navigation', { name: 'Views' })).toHaveCount(1)
+  await expect(page.getByRole('button', { name: 'Data', exact: true })).toHaveCount(1)
   await expect(page.getByRole('heading', { level: 1 })).toHaveCount(1)
 })
 
@@ -100,8 +112,10 @@ test('the canonical route keeps one H1 in the hero and a labelled discovery H2',
   await visitFeatured(page)
 
   await expect(page.getByRole('heading', { level: 1 })).toHaveAccessibleName(
-    'The good ones are still out there.',
+    'Featured available .eth names',
   )
   await expect(page.getByRole('heading', { level: 2, name: 'Available .eth names' })).toHaveCount(1)
-  await expect(page.getByRole('region', { name: 'Available .eth names' })).toHaveCount(1)
+  await expect(page.getByRole('region', { name: 'Available .eth names', exact: true })).toHaveCount(
+    1,
+  )
 })

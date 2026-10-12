@@ -68,7 +68,7 @@ export async function visitFeatured(page: Page): Promise<void> {
  * region is not rendered until there is one.
  */
 export function results(page: Page): Locator {
-  return page.getByRole('region', { name: /\.eth names$/ })
+  return page.locator('#results')
 }
 
 /**
@@ -97,7 +97,7 @@ export function openLength(page: Page): Promise<void> {
 
 /** Opens snapshot provenance and notices in the accessible Data drawer. */
 export async function openData(page: Page): Promise<Locator> {
-  await page.getByRole('banner').getByRole('button', { name: /^Data/ }).click()
+  await page.getByRole('button', { name: 'Data', exact: true }).click()
   const drawer = page.getByRole('dialog', { name: 'Data' })
   await expect(drawer).toBeVisible()
   await drawer.evaluate(async (node) => {

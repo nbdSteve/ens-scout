@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test'
-import { openData, searchOf, visit, visitFeatured } from './support'
+import { openData, scrollsSideways, searchOf, visit, visitFeatured } from './support'
 
 async function bloom(page: Page): Promise<{ opacity: string; transform: string }> {
   return page
@@ -47,18 +47,24 @@ test('the Data drawer traps focus, closes with Escape, and restores its opener',
   page,
 }) => {
   await visit(page)
-  const opener = page.getByRole('banner').getByRole('button', { name: /^Data/ })
+  const opener = page.getByRole('button', { name: 'Data', exact: true })
   await opener.focus()
   await opener.press('Enter')
 
   const drawer = page.getByRole('dialog', { name: 'Data' })
   await expect(drawer).toBeVisible()
-  await expect(drawer.getByRole('button', { name: 'Close Data' })).toBeFocused()
+  const close = drawer.getByRole('button', { name: 'Close Data' })
+  await expect(close).toBeFocused()
 
   const last = drawer.getByRole('link').last()
+  await page.keyboard.press('Shift+Tab')
+  await expect(last).toBeFocused()
+  await page.keyboard.press('Tab')
+  await expect(close).toBeFocused()
+
   await last.focus()
   await page.keyboard.press('Tab')
-  await expect(drawer.getByRole('button', { name: 'Close Data' })).toBeFocused()
+  await expect(close).toBeFocused()
 
   await page.keyboard.press('Escape')
   await expect(drawer).toHaveCount(0)
@@ -106,6 +112,32 @@ test('keyboard focus and pointer hover produce the same name-cell bloom', async 
   })
   expect(outline.style).not.toBe('none')
   expect(Number.parseFloat(outline.width)).toBeGreaterThan(0)
+})
+
+test('higher contrast and forced colors preserve focus, labels, and reflow', async ({
+  page,
+}, testInfo) => {
+  test.skip(testInfo.project.name !== 'desktop', 'one media-emulation assertion is enough')
+  await page.emulateMedia({ contrast: 'more', forcedColors: 'active' })
+  await visitFeatured(page)
+
+  await expect(page.locator('.featured-name:visible')).toHaveCount(12)
+  const explore = page.getByRole('link', { name: /Explore all 16/ })
+  await explore.focus()
+  await expect(explore).toBeFocused()
+  const focus = await explore.evaluate((node) => {
+    const style = getComputedStyle(node)
+    return {
+      color: style.color,
+      background: style.backgroundColor,
+      outlineStyle: style.outlineStyle,
+      outlineWidth: style.outlineWidth,
+    }
+  })
+  expect(focus.color).not.toBe(focus.background)
+  expect(focus.outlineStyle).not.toBe('none')
+  expect(Number.parseFloat(focus.outlineWidth)).toBeGreaterThan(0)
+  expect(await scrollsSideways(page)).toBe(false)
 })
 
 test.describe('with reduced motion requested', () => {

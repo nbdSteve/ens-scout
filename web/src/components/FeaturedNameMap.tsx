@@ -1,21 +1,10 @@
 import { useEffect, useRef, type CSSProperties, type ReactNode } from 'react'
-import type { Facet, FeaturedName } from '../ranking/contract'
+import type { FeaturedName } from '../ranking/contract'
 import { FEATURED_SLOTS, featuredLayout } from '../ranking/layout'
 import { nameVisual } from '../state/nameVisual'
 import { EnsAppLink } from './EnsAppLink'
 import { FreshCheckEvidence } from './FreshCheckEvidence'
 import { rowVerifiedName, rowVerification, rowVerifyNote, type VerifyBinding } from './verification'
-
-const FACET_LABEL: Readonly<Record<Facet, string>> = {
-  culture_language: 'culture + language',
-  internet: 'internet',
-  technology: 'technology',
-  arts_music: 'arts + music',
-  nature: 'nature',
-  science: 'science',
-  playful: 'playful',
-  abstract_conceptual: 'abstract + conceptual',
-}
 
 type FeaturedStyle = CSSProperties & {
   '--slot-x': string
@@ -41,8 +30,8 @@ export interface FeaturedNameMapProps {
   readonly verify: VerifyBinding | null
 }
 
-function selectionLabel(name: FeaturedName, rank: number): string {
-  return `Select ${name.name}, rank ${String(rank)}, ${FACET_LABEL[name.primaryFacet]}, snapshot available`
+function selectionLabel(name: FeaturedName): string {
+  return `Select ${name.name}, snapshot available`
 }
 
 function FeaturedControl({
@@ -86,26 +75,20 @@ function FeaturedControl({
     >
       {verify === null || row === null ? (
         <div
-          aria-label={`${name.name}, rank ${String(rank)}, ${FACET_LABEL[name.primaryFacet]}, snapshot available`}
+          aria-label={`${name.name}, snapshot available`}
           className="featured-name__control featured-name__control--static"
           role="group"
         >
-          <span aria-hidden="true" className="featured-name__rank">
-            {String(rank).padStart(2, '0')}
-          </span>
           <span className="featured-name__label">
             <span>{name.label}</span>
             <span className="featured-name__suffix">.eth</span>
-          </span>
-          <span aria-hidden="true" className="featured-name__facet">
-            {FACET_LABEL[name.primaryFacet]}
           </span>
         </div>
       ) : (
         <label className="featured-name__control">
           <input
             aria-describedby={checked === null && visibleNote === null ? undefined : evidenceId}
-            aria-label={selectionLabel(name, rank)}
+            aria-label={selectionLabel(name)}
             checked={row.selected}
             disabled={!row.selectable}
             onChange={() => {
@@ -113,15 +96,9 @@ function FeaturedControl({
             }}
             type="checkbox"
           />
-          <span aria-hidden="true" className="featured-name__rank">
-            {String(rank).padStart(2, '0')}
-          </span>
           <span className="featured-name__label">
             <span>{name.label}</span>
             <span className="featured-name__suffix">.eth</span>
-          </span>
-          <span aria-hidden="true" className="featured-name__facet">
-            {FACET_LABEL[name.primaryFacet]}
           </span>
           <span aria-hidden="true" className="featured-name__check">
             ✓
@@ -211,7 +188,7 @@ export function FeaturedNameMap({ names, now, verify }: FeaturedNameMapProps): R
   }, [])
 
   return (
-    <ol aria-label="Featured available names, best first" className="featured-map" ref={field}>
+    <ol aria-label="Featured available names" className="featured-map" ref={field}>
       {names.map((name, index) => (
         <FeaturedControl key={name.name} name={name} now={now} rank={index + 1} verify={verify} />
       ))}

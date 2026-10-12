@@ -87,7 +87,7 @@ async function mountDefault(
 ): Promise<void> {
   window.history.replaceState(null, '', '/')
   render(<App config={CONFIG} deps={depsFor(document)} featuredDeps={featuredDeps} />)
-  await screen.findByRole('list', { name: 'Featured available names, best first' })
+  await screen.findByRole('list', { name: 'Featured available names' })
 }
 
 function nameList(): HTMLElement {
@@ -95,8 +95,7 @@ function nameList(): HTMLElement {
 }
 
 async function openData(user: ReturnType<typeof userEvent.setup>): Promise<HTMLElement> {
-  const header = screen.getByRole('banner')
-  const trigger = within(header).getByRole('button', { name: /Data/ })
+  const trigger = screen.getByRole('button', { name: 'Data' })
   await user.click(trigger)
   return screen.getByRole('dialog', { name: 'Data' })
 }
@@ -111,13 +110,13 @@ describe('ENS Spectrum discovery path', () => {
 
     expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1)
     expect(screen.getByRole('heading', { level: 1 })).toHaveAccessibleName(
-      'The good ones are still out there.',
+      'Featured available .eth names',
     )
     expect(screen.getByRole('heading', { level: 2, name: 'Available .eth names' })).toBeVisible()
     expect(
-      within(
-        screen.getByRole('list', { name: 'Featured available names, best first' }),
-      ).getAllByRole('listitem'),
+      within(screen.getByRole('list', { name: 'Featured available names' })).getAllByRole(
+        'listitem',
+      ),
     ).toHaveLength(12)
     expect(document.querySelector('.featured-hero')).toHaveAttribute(
       'data-featured-source',
@@ -126,6 +125,7 @@ describe('ENS Spectrum discovery path', () => {
   })
 
   it('uses the safe fallback for a refused rank and omits the hero for a refused policy', async () => {
+    const user = userEvent.setup()
     const { unmount } = render(
       <App
         config={CONFIG}
@@ -136,11 +136,16 @@ describe('ENS Spectrum discovery path', () => {
         }}
       />,
     )
-    await screen.findByRole('list', { name: 'Featured available names, best first' })
+    await screen.findByRole('list', { name: 'Featured available names' })
     expect(document.querySelector('.featured-hero')).toHaveAttribute(
       'data-featured-source',
       'deterministic-fallback',
     )
+    let drawer = await openData(user)
+    expect(
+      within(drawer).getByText('Deterministic fallback · reviewed safety allowlist only'),
+    ).toBeVisible()
+    await user.click(within(drawer).getByRole('button', { name: 'Close Data' }))
 
     unmount()
     window.history.replaceState(null, '', '/')
@@ -157,6 +162,11 @@ describe('ENS Spectrum discovery path', () => {
     await screen.findByRole('list', { name: 'Available .eth names' })
     expect(document.querySelector('.featured-hero')).not.toBeInTheDocument()
     expect(screen.getByRole('heading', { level: 1 })).toHaveAccessibleName('Available .eth names')
+    drawer = await openData(user)
+    expect(within(drawer).getByText('Omitted · reviewed safety policy unavailable')).toBeVisible()
+    expect(within(drawer).getByText('Snapshot join').closest('.fact')).toHaveTextContent(
+      'Not performed test-snapshot',
+    )
   })
 
   it('lands on Available, renders names as a list, and contains no table', async () => {
@@ -198,7 +208,7 @@ describe('ENS Spectrum discovery path', () => {
     expect(within(filters).getByText('More')).toBeVisible()
   })
 
-  it('uses the snapshot strip for preview time, ENS verification, and Data', async () => {
+  it('uses the snapshot strip for preview time and ENS verification with one floating Data control', async () => {
     await mount()
 
     expect(screen.getByText('Preview', { exact: false })).toHaveTextContent('Preview · Mar 1')
@@ -206,7 +216,11 @@ describe('ENS Spectrum discovery path', () => {
       'href',
       'https://app.ens.domains/',
     )
-    expect(screen.getAllByRole('button', { name: /Data/ })).toHaveLength(2)
+    expect(screen.getAllByRole('button', { name: 'Data' })).toHaveLength(1)
+    expect(screen.getByRole('button', { name: 'Data' })).toHaveAccessibleDescription(
+      'Data notices available',
+    )
+    expect(screen.queryByRole('banner')).not.toBeInTheDocument()
   })
 })
 
@@ -214,7 +228,7 @@ describe('Data drawer', () => {
   it('is closed by default, opens accessibly, and restores focus when closed', async () => {
     const user = userEvent.setup()
     await mount()
-    const trigger = within(screen.getByRole('banner')).getByRole('button', { name: /Data/ })
+    const trigger = screen.getByRole('button', { name: 'Data' })
 
     expect(screen.queryByRole('dialog', { name: 'Data' })).not.toBeInTheDocument()
     await user.click(trigger)
@@ -240,6 +254,37 @@ describe('Data drawer', () => {
     )
     expect(within(drawer).getByRole('heading', { name: 'Scan' })).toBeVisible()
     expect(within(drawer).getByRole('heading', { name: 'What each status means' })).toBeVisible()
+  })
+
+  it('shows compact reviewed ranking provenance without repeating the hero copy', async () => {
+    const user = userEvent.setup()
+    await mountDefault()
+
+    expect(screen.queryByRole('heading', { name: 'Featured ranking' })).not.toBeInTheDocument()
+    const drawer = await openData(user)
+    const ranking = within(drawer).getByRole('region', { name: 'Featured ranking' })
+
+    expect(ranking).toHaveAttribute('data-featured-source', 'reviewed-artifact')
+    expect(ranking).toHaveTextContent('Global OG score + diversity')
+    expect(ranking).toHaveTextContent('og-v1')
+    expect(ranking).toHaveTextContent('og-rank-v1')
+    expect(ranking).toHaveTextContent('19,051 labels')
+    expect(ranking).toHaveTextContent('sha256: 647b9aa91380…')
+    expect(ranking).toHaveTextContent('amazon-bedrock')
+    expect(ranking).toHaveTextContent('openai.gpt-5.6-sol')
+    expect(ranking).toHaveTextContent('Prompt sha256: ca60722c18fa…')
+    expect(ranking).toHaveTextContent('manifest sha256: 63e1060cef44…')
+    expect(ranking).toHaveTextContent('ranked head (128)')
+    expect(ranking).toHaveTextContent('featured-safe-v1')
+    expect(ranking).toHaveTextContent('Reviewed artifact')
+    expect(ranking).toHaveTextContent('test-snapshot')
+    expect(ranking).toHaveTextContent('2026-03-01 12:00:00 UTC')
+    expect(ranking).toHaveTextContent(
+      'Ranking is editorial, not an availability or legal claim. Featured names are intersected with this snapshot. A current fresh check and ENS remain authoritative.',
+    )
+    expect(ranking).not.toHaveTextContent('The good ones are still out there.')
+    expect(ranking).not.toHaveTextContent('Strong, memorable names from the latest snapshot.')
+    expect(ranking).not.toHaveTextContent('Explore all')
   })
 
   it('keeps rejected URL values out of the field and explains them in Data', async () => {

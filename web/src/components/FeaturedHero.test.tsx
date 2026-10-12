@@ -2,12 +2,10 @@ import { fireEvent, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import type { FeaturedSelection } from '../ranking/contract'
-import { buildSnapshot } from '../test/factory'
 import type { VerifyBinding } from './verification'
 import { FeaturedHero } from './FeaturedHero'
 
 const NOW = new Date('2026-03-01T12:09:00Z')
-const SNAPSHOT = buildSnapshot()
 const SELECTION: FeaturedSelection = {
   source: 'reviewed-artifact',
   desktop: [
@@ -33,7 +31,7 @@ function binding(selected: ReadonlySet<string> = new Set()): VerifyBinding {
 }
 
 describe('FeaturedHero', () => {
-  it('renders the approved snapshot-derived entrance and reserved loading geometry', () => {
+  it('renders the simplified semantic entrance and reserved loading geometry', () => {
     const { rerender } = render(
       <FeaturedHero
         availableCount={9126}
@@ -44,16 +42,18 @@ describe('FeaturedHero', () => {
         onDismissFailure={() => undefined}
         onExplore={() => undefined}
         selection={null}
-        snapshot={SNAPSHOT}
         verify={binding()}
       />,
     )
 
-    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent(
-      'The good ones are still out there.',
+    expect(screen.getByRole('heading', { level: 1 })).toHaveAccessibleName(
+      'Featured available .eth names',
     )
-    expect(screen.getByText('9,126 available in the latest scan')).toBeVisible()
-    expect(screen.getByText(/Snapshot 9m/)).toBeVisible()
+    expect(screen.getByRole('heading', { level: 1 })).toHaveClass('visually-hidden')
+    expect(screen.queryByText(/available in the latest scan/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/The good ones are still out there/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/Strong, memorable names/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/Snapshot availability only/)).not.toBeInTheDocument()
     expect(document.querySelectorAll('.featured-map__skeleton')).toHaveLength(12)
 
     rerender(
@@ -66,7 +66,6 @@ describe('FeaturedHero', () => {
         onDismissFailure={() => undefined}
         onExplore={() => undefined}
         selection={SELECTION}
-        snapshot={SNAPSHOT}
         verify={binding()}
       />,
     )
@@ -92,7 +91,6 @@ describe('FeaturedHero', () => {
         onDismissFailure={() => undefined}
         onExplore={onExplore}
         selection={SELECTION}
-        snapshot={SNAPSHOT}
         verify={binding(new Set(['vex.eth']))}
       />,
     )
@@ -102,6 +100,11 @@ describe('FeaturedHero', () => {
 
     const explore = screen.getByRole('link', { name: /Explore all 1/ })
     expect(explore).toHaveAttribute('href', '#page-title')
+    expect(explore.querySelector('.featured-hero__explore-arrow')).toHaveTextContent('↓')
+    expect(explore.querySelector('.featured-hero__explore-arrow')).toHaveAttribute(
+      'aria-hidden',
+      'true',
+    )
     fireEvent.click(explore)
     expect(onExplore).toHaveBeenCalledTimes(1)
   })
@@ -117,7 +120,6 @@ describe('FeaturedHero', () => {
         onDismissFailure={() => undefined}
         onExplore={() => undefined}
         selection={SELECTION}
-        snapshot={SNAPSHOT}
         verify={null}
       />,
     )
@@ -134,7 +136,6 @@ describe('FeaturedHero', () => {
         onDismissFailure={() => undefined}
         onExplore={() => undefined}
         selection={SELECTION}
-        snapshot={SNAPSHOT}
         verify={binding()}
       />,
     )

@@ -161,7 +161,7 @@ Unknown and unreviewed labels remain `review_required`; only the separate allowl
 
 ## Feature-safe allowlist
 
-The allowlist contains 73 explicitly reviewed labels. Its canonical order is alphabetical; runtime ranking will use the separate score artifact in a later PR.
+The allowlist contains 73 explicitly reviewed labels. Its canonical order is alphabetical; runtime ranking uses the separate compact score artifact and deterministic diversity selector.
 
 - `alive`
 - `axiom`

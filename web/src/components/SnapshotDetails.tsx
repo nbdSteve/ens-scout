@@ -1,12 +1,18 @@
 import type { ReactNode } from 'react'
-import type { FeaturedSource } from '../ranking/contract'
-import { SnapshotStatus } from './SnapshotStatus'
-import { SummaryCounts } from './SummaryCounts'
 import type { AppConfig } from '../config/env'
 import { FIXTURE_DESCRIPTION } from '../data/fixtures'
+import { formatAbsolute, toIsoSecond } from '../format/time'
+import type { FeaturedSource } from '../ranking/contract'
+import {
+  FEATURED_RANKING_PROVENANCE,
+  featuredSourceLabel,
+  shortDigest,
+} from '../ranking/provenance'
 import type { Snapshot } from '../snapshot/types'
 import type { SnapshotOrigin } from '../state/useSnapshot'
 import { VIEWS } from '../state/views'
+import { SnapshotStatus } from './SnapshotStatus'
+import { SummaryCounts } from './SummaryCounts'
 
 /**
  * The complete snapshot context rendered inside the Data drawer.
@@ -35,6 +41,8 @@ export function SnapshotDetails({
   config,
   featuredSource,
 }: SnapshotDetailsProps): ReactNode {
+  const rankingProvenance = FEATURED_RANKING_PROVENANCE
+
   return (
     <div className="data-details" id="details">
       <SnapshotStatus
@@ -45,11 +53,119 @@ export function SnapshotDetails({
         snapshot={snapshot}
       />
 
-      {featuredSource !== null && featuredSource !== 'omitted' && (
-        <p className="featured-source">
-          <strong>Featured names:</strong>{' '}
-          {featuredSource === 'reviewed-artifact' ? 'Reviewed ranking' : 'Deterministic fallback'}
-        </p>
+      {featuredSource !== null && (
+        <section
+          aria-labelledby="featured-ranking-heading"
+          className="card featured-ranking"
+          data-featured-source={featuredSource}
+        >
+          <div>
+            <h3 className="card__title" id="featured-ranking-heading">
+              Featured ranking
+            </h3>
+          </div>
+
+          <dl className="facts">
+            {rankingProvenance === null ? (
+              <div className="fact">
+                <dt className="fact__label">Artifact record</dt>
+                <dd className="fact__value">Unavailable in this build</dd>
+              </div>
+            ) : (
+              <>
+                <div className="fact">
+                  <dt className="fact__label">Method</dt>
+                  <dd className="fact__value">{rankingProvenance.method}</dd>
+                </div>
+                <div className="fact">
+                  <dt className="fact__label">Rubric</dt>
+                  <dd className="fact__value">
+                    <code>{rankingProvenance.rubricVersion}</code>
+                  </dd>
+                </div>
+                <div className="fact">
+                  <dt className="fact__label">Artifact</dt>
+                  <dd className="fact__value">
+                    <code>{rankingProvenance.artifactVersion}</code>
+                  </dd>
+                </div>
+                <div className="fact">
+                  <dt className="fact__label">Corpus</dt>
+                  <dd className="fact__value">
+                    {rankingProvenance.corpus.count.toLocaleString('en-GB')} labels{' '}
+                    <span aria-hidden="true">·</span>{' '}
+                    <code>sha256: {shortDigest(rankingProvenance.corpus.sha256)}</code>
+                  </dd>
+                </div>
+                <div className="fact">
+                  <dt className="fact__label">Generator</dt>
+                  <dd className="fact__value">
+                    <code>{rankingProvenance.model.provider}</code>{' '}
+                    <span aria-hidden="true">·</span> <code>{rankingProvenance.model.modelId}</code>{' '}
+                    <span aria-hidden="true">·</span> revision{' '}
+                    <code>{rankingProvenance.model.modelRevision}</code>{' '}
+                    <span aria-hidden="true">·</span>{' '}
+                    <time dateTime={rankingProvenance.model.generatedAt}>
+                      {rankingProvenance.model.generatedAt.slice(0, 10)}
+                    </time>{' '}
+                    <span aria-hidden="true">·</span> {rankingProvenance.model.runsPerLabel} model
+                    passes
+                  </dd>
+                </div>
+                <div className="fact">
+                  <dt className="fact__label">Hashes</dt>
+                  <dd className="fact__value">
+                    Prompt <code>sha256: {shortDigest(rankingProvenance.promptSha256)}</code>{' '}
+                    <span aria-hidden="true">·</span> manifest{' '}
+                    <code>sha256: {shortDigest(rankingProvenance.generatorManifestSha256)}</code>
+                  </dd>
+                </div>
+                <div className="fact">
+                  <dt className="fact__label">Review</dt>
+                  <dd className="fact__value">
+                    {rankingProvenance.review.scope
+                      .map((scope, index) =>
+                        index === 0
+                          ? `${scope} (${String(rankingProvenance.review.headCount)})`
+                          : scope,
+                      )
+                      .join('; ')}{' '}
+                    <span aria-hidden="true">·</span> reviewed{' '}
+                    <time dateTime={rankingProvenance.review.reviewedAt}>
+                      {rankingProvenance.review.reviewedAt}
+                    </time>
+                  </dd>
+                </div>
+                <div className="fact">
+                  <dt className="fact__label">Safety</dt>
+                  <dd className="fact__value">
+                    <code>{rankingProvenance.policyVersion}</code>
+                  </dd>
+                </div>
+              </>
+            )}
+            <div className="fact">
+              <dt className="fact__label">Runtime source</dt>
+              <dd className="fact__value">{featuredSourceLabel(featuredSource)}</dd>
+            </div>
+            <div className="fact">
+              <dt className="fact__label">Snapshot join</dt>
+              <dd className="fact__value">
+                {featuredSource === 'omitted' ? 'Not performed' : 'Available names from'}{' '}
+                <code>{snapshot.metadata.snapshotId}</code> <span aria-hidden="true">·</span>{' '}
+                scanned{' '}
+                <time dateTime={toIsoSecond(snapshot.metadata.scannedAt)}>
+                  {formatAbsolute(snapshot.metadata.scannedAt)}
+                </time>
+              </dd>
+            </div>
+          </dl>
+
+          <p className="prose featured-ranking__note">
+            Ranking is editorial, not an availability or legal claim. Featured names are intersected
+            with this snapshot. A current fresh check and ENS remain authoritative.
+          </p>
+        </section>
       )}
 
       <SummaryCounts metadata={snapshot.metadata} />

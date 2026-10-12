@@ -1,6 +1,4 @@
 import type { MouseEvent, ReactNode } from 'react'
-import { resolveSnapshotAge } from '../snapshot/staleness'
-import type { Snapshot } from '../snapshot/types'
 import type { FeaturedSelection } from '../ranking/contract'
 import type { CheckFailure } from '../verify/failure'
 import { FeaturedMapSkeleton, FeaturedNameMap } from './FeaturedNameMap'
@@ -16,20 +14,7 @@ export interface FeaturedHeroProps {
   readonly onDismissFailure: () => void
   readonly onExplore: (event: MouseEvent<HTMLAnchorElement>) => void
   readonly selection: FeaturedSelection | null
-  readonly snapshot: Snapshot
   readonly verify: VerifyBinding | null
-}
-
-function compactAge(seconds: number): string {
-  const minutes = Math.max(0, Math.floor(seconds / 60))
-  if (minutes < 60) {
-    return `${String(Math.max(1, minutes))}m`
-  }
-  const hours = Math.floor(minutes / 60)
-  if (hours < 48) {
-    return `${String(hours)}h`
-  }
-  return `${String(Math.floor(hours / 24))}d`
 }
 
 function countLabel(count: number): string {
@@ -55,11 +40,9 @@ export function FeaturedHero({
   onDismissFailure,
   onExplore,
   selection,
-  snapshot,
   verify,
 }: FeaturedHeroProps): ReactNode {
   const selectedCount = verify?.selected.size ?? 0
-  const snapshotAge = resolveSnapshotAge(snapshot.metadata, now)
   const names = selection?.desktop ?? []
 
   return (
@@ -70,23 +53,9 @@ export function FeaturedHero({
       data-featured-source={selection?.source ?? 'loading'}
     >
       <div className="page featured-hero__inner">
-        <div className="featured-hero__meta">
-          <span className="featured-hero__count">
-            <span aria-hidden="true" className="featured-hero__dot">
-              ●
-            </span>
-            {countLabel(availableCount)} available in the latest scan
-          </span>
-          <span>
-            Snapshot {compactAge(snapshotAge.ageSeconds)} <span aria-hidden="true">·</span> not a
-            live check
-          </span>
-        </div>
-
-        <div className="featured-hero__copy">
-          <h1 id="featured-title">The good ones are still out there.</h1>
-          <p>Strong, memorable names from the latest snapshot.</p>
-        </div>
+        <h1 className="visually-hidden" id="featured-title">
+          Featured available .eth names
+        </h1>
 
         <div className="featured-hero__map">
           {selection === null ? (
@@ -106,14 +75,12 @@ export function FeaturedHero({
             {checkLabel(selectedCount, checking)}
           </button>
           <a className="featured-hero__explore" href="#page-title" onClick={onExplore}>
-            Explore all {countLabel(availableCount)} <span aria-hidden="true">↓</span>
+            Explore all {countLabel(availableCount)}
+            <span aria-hidden="true" className="featured-hero__explore-arrow">
+              ↓
+            </span>
           </a>
         </div>
-
-        <p className="featured-hero__trust" id="featured-trust">
-          Snapshot availability only <span aria-hidden="true">·</span> fresh check required before
-          an ENS link
-        </p>
 
         {failure !== null && (
           <div className="featured-hero__failure">
