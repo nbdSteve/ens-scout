@@ -95,6 +95,9 @@ export function NameCell({ now, result, showStatus, verify }: NameCellProps): Re
           {note === 'Fresh check has lapsed' && (
             <span className="name-cell__fresh-note">Fresh check lapsed</span>
           )}
+          {note === 'Fresh status changed' && (
+            <span className="name-cell__fresh-note">Fresh status changed</span>
+          )}
         </div>
 
         {checked !== null && <FreshCheckEvidence checked={checked} className="name-cell__fresh" />}

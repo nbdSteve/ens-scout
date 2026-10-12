@@ -79,19 +79,32 @@ describe('resolveOutbound', () => {
     })
   })
 
+  it('keeps current available and premium answers actionable', () => {
+    const premium: VerifiedName = {
+      result: { ...RESULT, status: 'premium' },
+      checkedAt: CHECKED_AT,
+      expiresAt: EXPIRES_AT,
+    }
+    expect(mayLinkOut('aaa.eth', verified({ 'aaa.eth': ENTRY }), CHECKED_AT)).toBe(true)
+    expect(mayLinkOut('aaa.eth', verified({ 'aaa.eth': premium }), CHECKED_AT)).toBe(true)
+  })
+
   /*
    * The rule that makes the gate worth having: an available status in the snapshot is
-   * not evidence, so it opens nothing on its own. There is no parameter that could
-   * carry one in.
+   * not evidence, and a newer check that disagrees must close the registration action.
    */
-  it('is decided only by the check, never by the status', () => {
+  it('refuses a current check whose status is no longer registerable', () => {
     const registered: VerifiedName = {
       result: { ...RESULT, status: 'registered' },
       checkedAt: CHECKED_AT,
       expiresAt: EXPIRES_AT,
     }
-    expect(mayLinkOut('aaa.eth', verified({ 'aaa.eth': registered }), CHECKED_AT)).toBe(true)
-    // And the converse: an available name with no check is refused.
+    expect(resolveOutbound('aaa.eth', verified({ 'aaa.eth': registered }), CHECKED_AT)).toEqual({
+      allowed: false,
+      reason: 'status-changed',
+      verified: registered,
+    })
+    expect(mayLinkOut('aaa.eth', verified({ 'aaa.eth': registered }), CHECKED_AT)).toBe(false)
     expect(mayLinkOut('aaa.eth', verified({}), CHECKED_AT)).toBe(false)
   })
 

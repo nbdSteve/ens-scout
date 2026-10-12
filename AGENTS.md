@@ -914,21 +914,27 @@ never the ENS availability authority.
   visitor's offline snapshot.
 - `verify/gate.ts` is the one place a name is judged fit for an outbound registration
   link, and the only thing that opens it is a fresh check covering that name which has
-  not expired. Not an `available` status, not a recent scan, not a countdown that has
-  run down. There is no parameter for the caller and no way to pass one, which is the
-  enforcement: every surface that offers a way to act on a name has to come through
-  the same gate. Expiry is judged against the instant the caller renders at, so `?now=`
-  moves it and an expired check is demonstrable.
+  not expired and still reports a registerable status (`available` or `premium`). Not
+  a snapshot status, not a recent scan, and not a countdown that has run down. A fresh
+  disagreement remains visible as the newer claim and closes the action. There is no
+  parameter for the caller and no way to pass one, which is the enforcement: every
+  surface that offers a way to act on a name has to come through the same gate. Expiry
+  is judged against the instant the caller renders at, so `?now=` moves it and an
+  expired check is demonstrable.
 - `components/verification.ts` is the one per-name derivation, and the spatial field is
-  handed a binding or nothing. Nothing means the deployment has no verifier, and then there are
-  no tick boxes and no outbound links at all, because a link the gate cannot judge is
-  one this page cannot stand behind.
+  handed a binding or nothing. The featured hero and raw field receive the same binding,
+  so a selection, pending state, result, expiry, or refusal cannot diverge between them.
+  Nothing means the deployment has no verifier, and then there are no tick boxes and no
+  outbound links at all, because a link the gate cannot judge is one this page cannot
+  stand behind.
 - A snapshot answer and a fresh answer are two claims about two different moments, so
   the page shows them as two and states the instant the fresh one was obtained. When a
-  fresh check fails, the name cell keeps the snapshot presentation and says the check did
-  not happen; it never presents the snapshot status as the verified one, and it never
-  clears the visitor's selection or their draft. Every outbound action says ENS decides,
-  because a name the index does not hold may still fail to register.
+  fresh check disagrees, the fresh result is the actionable truth without removing the
+  snapshot-backed name before the visitor can understand it. When a check fails, the
+  name keeps the snapshot presentation and the page says the check did not happen; it
+  never presents the snapshot status as the verified one, and it never clears the
+  visitor's selection or their draft. Every outbound action says ENS decides, because a
+  name the index does not hold may still fail to register.
 - Every failure sentence about a check is a fixed literal in `verify/failure.ts`, chosen
   by kind, and no `advisory` or `message` from a response reaches a screen. The kinds
   are separate because the honest sentences differ: a spent allowance, an index that did
@@ -963,12 +969,19 @@ never the ENS availability authority.
   way back to real time. The committed fixtures are permanently stale against a real
   clock, so a page that quietly used a different time than it displayed would be worse
   than a stale one.
-- The spatial name field is the primary discovery path. Above it stays only the
-  near-white editorial header, the view title and count, the compact black filter dock,
-  and the terse snapshot strip. Provenance, schedule detail, lifecycle wording, URL
-  advisories, and method live in the accessible Data drawer. At 1440x900 the first six
-  available names must be fully visible; at 320x568 the first name must begin above
-  320px. `layout.spec.ts` owns those budgets.
+- The canonical unfiltered Available route starts with one viewport of featured names,
+  then hands off by ordinary scrolling to the existing heading, filter dock, snapshot
+  strip, raw name field, pagination, and Data drawer. Search, any non-default query
+  state, and preview-clock links bypass the hero; URL state remains authoritative. The
+  hero owns the route's single `h1`, while a bypassed discovery route keeps the discovery
+  heading as its `h1`. Skip and Explore actions both focus the discovery heading.
+- Featured presentation is a fixed editorial composition, never a force simulation,
+  collision solver, random layout, model path, or tag cloud. Rank selects one of twelve
+  desktop/tablet slots and a visual tier; 320px presentation is exactly the first seven
+  in the same order. DOM and tab order stay in rank order even when coordinates do not.
+  Reserve the complete hero geometry while ranking loads, and keep the raw discovery
+  usable regardless of rank latency or refusal. `layout.spec.ts`, `keyboard.spec.ts`,
+  and `url-state.spec.ts` own these budgets.
 - Keep Available as the default view and keep the frontend-only `preview` augmentation
   dense enough to exercise the composition without changing the committed Go fixture.
   It includes at least twelve available names plus long labels for containment coverage.
@@ -976,10 +989,11 @@ never the ENS availability authority.
   the outbound ENS action. Do not import or copy Graph artwork or branding.
 - `state/nameVisual.ts` is the one deterministic seed for per-name bloom position,
   accent, and entry delay. These values are decorative and carry no lifecycle meaning.
-  `NameField` may update one field-level light from pointer coordinates through a single
-  queued animation frame; hover and keyboard focus must produce equivalent cell feedback.
-  Reduced motion disables entry drift, transforms, drawer motion, and pointer-following
-  updates while preserving every interaction.
+  The raw field and featured map may each update one field-level light from pointer
+  coordinates through a single queued animation frame; hover and keyboard focus must
+  produce equivalent feedback. Reduced motion disables entry drift, transforms, drawer
+  motion, smooth handoff, and pointer-following updates while preserving every
+  interaction.
 - A length range whose bounds cross is kept and reported, never repaired. `parseQuery`
   holds it, `serializeQuery` round-trips it, `isInvertedRange` is the one predicate for
   it, and `filterResults` skips the length filter rather than applying a range no label
@@ -1120,9 +1134,13 @@ workflow and artifact contract.
   featured selection rather than exposing raw alphabetical names.
 - Keep desktop selection deterministic at twelve names after the unconstrained
   top four, bounded facet/length/family diversity pass, and rank-order deferred
-  fill. Mobile is the first seven of that same desktop result. Until the spatial
-  hero change consumes this seam, do not wire it into `App` or alter first-screen
-  behavior.
+  fill. Mobile is the first seven of that same desktop result.
+- The default-route loader validates the bundled safety policy before starting a
+  request, loads the versioned rank artifact in parallel with the snapshot, and feeds
+  both normal and fallback data through this same selector. A missing, slow, or corrupt
+  rank settles to deterministic fallback without delaying discovery; a missing or
+  invalid safety policy omits the hero. No unreviewed snapshot name may flash while the
+  artifact is pending.
 
 ## ENS lifecycle rules
 

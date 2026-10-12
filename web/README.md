@@ -48,10 +48,11 @@ endpoint, or credential is embedded in the bundle.
 
 ## Fresh checks
 
-A snapshot is minutes to hours old by the time anyone reads it, so a row offers no link
-to register a name until a fresh check has covered that exact name and has not expired.
-Nothing else opens that gate - not an `available` status, not a recent scan, and not a
-countdown that has run down.
+A snapshot is minutes to hours old by the time anyone reads it, so neither the hero nor
+a raw row offers a registration link until a fresh check has covered that exact name,
+has not expired, and still reports it as registerable. Nothing else opens that gate -
+not an `available` snapshot status, not a recent scan, and not a countdown that has run
+down.
 
 Select up to the number of names one check covers, ask for the check, and the endpoint
 reads the ENS index once for the whole selection.
@@ -62,6 +63,8 @@ The two stay visibly separate because they are two claims about two different mo
 A check that fails changes no status.
 The row keeps saying what the snapshot said, the page says the check did not happen and
 why in its own words, and the selection is left alone so nothing has to be retyped.
+If a fresh status disagrees with the snapshot, both surfaces keep the name visible, show
+the newer result, and close any registration action that no longer fits it.
 Every link out still says ENS decides: a name the index does not hold may still fail to
 register.
 
@@ -99,6 +102,24 @@ A default is written as the absence of its parameter, so the shortest link is th
 canonical one and the app rewrites any longer spelling of the same state to it.
 `view` defaults to `available`, which is the question a visitor arrives with; a URL
 with no `view` opens the available names.
+
+## Featured entrance
+
+The canonical empty-query Available route opens on a full-viewport editorial map of
+twelve reviewed names on desktop and tablet, or the first seven of the same ranking on
+mobile. The names remain in score order in the DOM and keyboard sequence even though
+fixed slots position them spatially. Ordinary scrolling reveals the complete searchable
+and filterable field; the skip link and `Explore all` action both focus its heading.
+
+Any search, non-default view, status/lifecycle filter, length filter, source-list
+filter, sort direction, page number, or simulated clock is a discovery deep link and
+bypasses the hero. The address bar remains the authority rather than a second UI state.
+
+The rank artifact loads independently of the snapshot. While it is pending the page
+reserves the final geometry without showing candidate names. A refused rank uses the
+deterministic allowlist-only fallback through the same selector, while a refused safety
+policy omits the hero and starts at ordinary discovery. Neither case can delay or break
+the snapshot list.
 
 ## Development
 
@@ -167,17 +188,12 @@ src/snapshot/      the browser's half of the snapshot contract, and its parser
 src/verify/        the browser's half of the check contract, its parser, and the gate
 src/ranking/       strict editorial artifact parsing, deterministic selection, and fallback
 src/data/          fixture loading, the read API client, and the local cache
-src/state/         URL state, filtering, sorting, paging, the clock, and one fresh check
+src/state/         URL state, filtering, paging, the clock, ranking load, and one fresh check
 src/format/        time and text formatting
-src/components/    presentation
-src/optics/        the ambient optical background, mounted behind the page
-src/constellation/ the deterministic name composition
+src/components/    the featured entrance, discovery field, evidence, and disclosures
 src/test/          test-only helpers, including the reader for the Go sources
 tests/browser/     Playwright specs
 ```
-
-`src/constellation/` composes the name arrangement that replaces the results table in a
-later visual slice, so it is unit-tested and nothing renders it yet.
 
 `src/snapshot/contract.ts` restates the few constants a reader cannot derive from the
 payload it is handed: the format version it accepts, the cadence intervals, and the
@@ -202,12 +218,13 @@ so there is one answer to whether a name may be acted on rather than two that co
 fails if a removed model runtime, model asset reference, endpoint, or credential returns.
 
 `public/data/og-rank-v1.json` and `src/data/featured-safe-v1.json` are reviewed
-offline data read by the pure modules under `src/ranking/`. The runtime parser
-accepts only the pinned corpus, rubric, policy, tuple shape, facet mask, and zero
-flags; the selector then intersects the allowlist and the snapshot's exact
-`available` results. A refused rank uses deterministic allowlist-only scoring, and
-a refused allowlist yields an omitted featured state. `App` does not consume this
-seam yet, so the current UI and fresh-check flow are unchanged.
+offline data read by the pure modules under `src/ranking/`. The runtime parser accepts
+only the pinned corpus, rubric, policy, tuple shape, facet mask, and zero flags; the
+selector then intersects the allowlist and the snapshot's exact `available` results.
+`App` consumes that result only on the canonical default route. A refused rank uses
+deterministic allowlist-only scoring, and a refused allowlist yields an omitted featured
+state. Both the hero and raw list receive the same fresh-check binding and outbound
+gate.
 
 ## What this app must not do
 

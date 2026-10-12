@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react'
+import type { FeaturedSource } from '../ranking/contract'
 import { SnapshotStatus } from './SnapshotStatus'
 import { SummaryCounts } from './SummaryCounts'
 import type { AppConfig } from '../config/env'
@@ -22,6 +23,7 @@ export interface SnapshotDetailsProps {
   readonly cachedAt: Date | null
   readonly confirmedCurrent: boolean
   readonly config: AppConfig
+  readonly featuredSource: FeaturedSource | null
 }
 
 export function SnapshotDetails({
@@ -31,6 +33,7 @@ export function SnapshotDetails({
   cachedAt,
   confirmedCurrent,
   config,
+  featuredSource,
 }: SnapshotDetailsProps): ReactNode {
   return (
     <div className="data-details" id="details">
@@ -41,6 +44,13 @@ export function SnapshotDetails({
         origin={origin}
         snapshot={snapshot}
       />
+
+      {featuredSource !== null && featuredSource !== 'omitted' && (
+        <p className="featured-source">
+          <strong>Featured names:</strong>{' '}
+          {featuredSource === 'reviewed-artifact' ? 'Reviewed ranking' : 'Deterministic fallback'}
+        </p>
+      )}
 
       <SummaryCounts metadata={snapshot.metadata} />
 
@@ -127,10 +137,11 @@ export function SnapshotDetails({
             <>
               <p className="prose">
                 A fresh check is the one thing here that reads the ENS index again. Select names in
-                the list and ask for one: the answer is labelled with the instant it was read, it is
-                shown beside the scan&rsquo;s answer rather than replacing it, and it lasts a short
-                while. A name links out to the ENS app only while a fresh check covers it, and a
-                check reserves nothing.
+                the featured map or the list and ask for one: the answer is labelled with the
+                instant it was read, it is shown beside the scan&rsquo;s answer rather than
+                replacing it, and it lasts a short while. A registration link appears only while a
+                current fresh check still reports a registerable state, and a check reserves
+                nothing.
               </p>
               <p className="prose">
                 Everything else on this page is the scan. Time passing on this device does not move

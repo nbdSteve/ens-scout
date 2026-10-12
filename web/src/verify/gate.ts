@@ -22,7 +22,7 @@ import type { VerifiedName, VerifiedNames } from './types'
  */
 
 export type OutboundVerdict =
-  /** A fresh check covers this name and is still current. */
+  /** A fresh check covers this name, is current, and still reports a registerable state. */
   | { readonly allowed: true; readonly verified: VerifiedName }
   /**
    * No check has covered this name in this session. The distinction from 'expired'
@@ -31,6 +31,8 @@ export type OutboundVerdict =
   | { readonly allowed: false; readonly reason: 'unverified' }
   /** A check covered this name and its answer is no longer current. */
   | { readonly allowed: false; readonly reason: 'expired'; readonly verified: VerifiedName }
+  /** A current check says the snapshot's registration action is no longer appropriate. */
+  | { readonly allowed: false; readonly reason: 'status-changed'; readonly verified: VerifiedName }
 
 const UNVERIFIED: OutboundVerdict = { allowed: false, reason: 'unverified' }
 
@@ -48,6 +50,9 @@ export function resolveOutbound(name: string, verified: VerifiedNames, now: Date
   }
   if (now.getTime() >= entry.expiresAt.getTime()) {
     return { allowed: false, reason: 'expired', verified: entry }
+  }
+  if (entry.result.status !== 'available' && entry.result.status !== 'premium') {
+    return { allowed: false, reason: 'status-changed', verified: entry }
   }
   return { allowed: true, verified: entry }
 }

@@ -1,11 +1,41 @@
 import { expect, test, type Page } from '@playwright/test'
-import { matchCount, openData, openLength, openMore, searchOf, since, visit } from './support'
+import {
+  SCANNED_AT,
+  matchCount,
+  openData,
+  openLength,
+  openMore,
+  searchOf,
+  since,
+  visit,
+} from './support'
 
 function namesOn(page: Page): Promise<string[]> {
   return page
     .locator('.name-cell__label')
     .evaluateAll((nodes) => nodes.map((node) => node.textContent.trim()))
 }
+
+test('every discovery deep link bypasses the hero and retains a correct H1', async ({ page }) => {
+  await page.clock.setFixedTime(SCANNED_AT)
+  const searches = [
+    '?q=zine',
+    '?view=all',
+    '?view=all&status=available',
+    '?min=3',
+    '?list=three-letters',
+    '?sort=expiry',
+    '?dir=desc',
+    '?page=2',
+    `?now=${encodeURIComponent(since(0))}`,
+  ]
+
+  for (const search of searches) {
+    await page.goto(`/${search}`)
+    await expect(page.locator('.featured-hero'), `${search} rendered the hero`).toHaveCount(0)
+    await expect(page.getByRole('heading', { level: 1, name: /\.eth names$/ })).toHaveCount(1)
+  }
+})
 
 test('a view link writes the view and Back restores default Available', async ({ page }) => {
   await visit(page)
@@ -22,13 +52,14 @@ test('a view link writes the view and Back restores default Available', async ({
 
   await page.goBack()
   expect(searchOf(page)).not.toContain('view=')
+  await expect(page.locator('.name-cell')).toHaveCount(landed.length)
   expect(await namesOn(page)).toEqual(landed)
 })
 
 test('search reaches the address bar and survives a reload', async ({ page }) => {
   await visit(page, { view: 'all' })
   await page.getByRole('searchbox', { name: 'Search names' }).fill('x')
-  await expect(matchCount(page)).toHaveText('2 names')
+  await expect(matchCount(page)).toHaveText('4 names')
   await expect.poll(() => searchOf(page)).toContain('q=x')
 
   const found = await namesOn(page)
@@ -71,7 +102,7 @@ test('sort and length controls keep their URL behavior behind the compact dock',
 
   await openLength(page)
   await page.getByRole('spinbutton', { name: 'Shortest label length' }).fill('5')
-  await expect(matchCount(page)).toHaveText('8 names')
+  await expect(matchCount(page)).toHaveText('5 names')
   await expect.poll(() => searchOf(page)).toContain('min=5')
 })
 

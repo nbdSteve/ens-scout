@@ -178,6 +178,32 @@ describe('NameField fresh-check behavior', () => {
     expect(within(cell('aura.eth')).getByText('Fresh check')).toBeVisible()
   })
 
+  it('shows a current changed status and removes the registration action', () => {
+    const changed = verifiedName('aura.eth')
+    mount({
+      now: CHECKED_AT,
+      verify: binding({
+        verified: new Map([
+          [
+            'aura.eth',
+            {
+              ...changed,
+              result: {
+                ...changed.result,
+                status: 'registered',
+                expiry: new Date('2027-01-01T00:00:00Z'),
+              },
+            },
+          ],
+        ]),
+      }),
+    })
+
+    expect(within(cell('aura.eth')).queryByRole('link')).not.toBeInTheDocument()
+    expect(within(cell('aura.eth')).getByText('Registered')).toBeVisible()
+    expect(within(cell('aura.eth')).getByText('Fresh status changed')).toBeVisible()
+  })
+
   it('disables only unselected checkboxes at the selection bound', () => {
     mount({
       verify: binding({

@@ -54,12 +54,15 @@ export function rowVerifyNote(row: RowVerification): string | null {
   if (row.verdict.allowed) {
     return null
   }
-  return row.verdict.reason === 'expired' ? 'Fresh check has lapsed' : 'No fresh check'
+  if (row.verdict.reason === 'expired') {
+    return 'Fresh check has lapsed'
+  }
+  return row.verdict.reason === 'status-changed' ? 'Fresh status changed' : 'No fresh check'
 }
 
 export function rowVerifiedName(row: RowVerification): VerifiedName | null {
   if (row.verdict.allowed) {
     return row.verdict.verified
   }
-  return row.verdict.reason === 'expired' ? row.verdict.verified : null
+  return row.verdict.reason === 'unverified' ? null : row.verdict.verified
 }

@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react'
 import { CHECK_MAX_NAMES } from '../verify/contract'
 import { checkNeedsNewBundle, type CheckFailure } from '../verify/failure'
-import { Notice } from './Notice'
+import { Notice, type NoticeVoice } from './Notice'
 import { reloadDocument } from './recovery'
 
 /**
@@ -28,15 +28,65 @@ export interface VerifyBarProps {
   readonly selected: ReadonlySet<string>
   readonly checking: boolean
   readonly failure: CheckFailure | null
+  readonly failureVoice?: NoticeVoice
   readonly onCheck: () => void
   readonly onClear: () => void
   readonly onDismiss: () => void
+}
+
+export interface VerifyFailureNoticeProps {
+  readonly failure: CheckFailure
+  readonly onCheck: () => void
+  readonly onDismiss: () => void
+  readonly voice?: NoticeVoice
+}
+
+/**
+ * The one rendered explanation for a failed fresh check.
+ *
+ * The hero and discovery action both reuse it, so every surface preserves the
+ * same fixed wording and recovery rules without learning anything about check
+ * errors itself.
+ */
+export function VerifyFailureNotice({
+  failure,
+  onCheck,
+  onDismiss,
+  voice = 'alert',
+}: VerifyFailureNoticeProps): ReactNode {
+  const needsReload = checkNeedsNewBundle(failure.kind)
+
+  return (
+    <Notice tone="warn" voice={voice} title="Fresh check failed">
+      <p>{failure.message}</p>
+      <p>
+        Your selection is unchanged, and no status on this page was replaced by a guess. The
+        statuses below are still what the scan recorded.
+      </p>
+      <p className="verify-bar__recover">
+        {failure.retryable && !needsReload && (
+          <button className="button button--quiet" onClick={onCheck} type="button">
+            Try again
+          </button>
+        )}
+        {needsReload && (
+          <button className="button button--quiet" onClick={reloadDocument} type="button">
+            Reload the page
+          </button>
+        )}
+        <button className="button button--quiet" onClick={onDismiss} type="button">
+          Dismiss
+        </button>
+      </p>
+    </Notice>
+  )
 }
 
 export function VerifyBar({
   selected,
   checking,
   failure,
+  failureVoice = 'alert',
   onCheck,
   onClear,
   onDismiss,
@@ -45,7 +95,6 @@ export function VerifyBar({
   if (count === 0 && failure === null) {
     return null
   }
-  const needsReload = failure !== null && checkNeedsNewBundle(failure.kind)
 
   return (
     <div className="verify-bar">
@@ -79,28 +128,12 @@ export function VerifyBar({
       </div>
 
       {failure !== null && (
-        <Notice tone="warn" voice="alert" title="Fresh check failed">
-          <p>{failure.message}</p>
-          <p>
-            Your selection is unchanged, and no status on this page was replaced by a guess. The
-            statuses below are still what the scan recorded.
-          </p>
-          <p className="verify-bar__recover">
-            {failure.retryable && !needsReload && (
-              <button className="button button--quiet" onClick={onCheck} type="button">
-                Try again
-              </button>
-            )}
-            {needsReload && (
-              <button className="button button--quiet" onClick={reloadDocument} type="button">
-                Reload the page
-              </button>
-            )}
-            <button className="button button--quiet" onClick={onDismiss} type="button">
-              Dismiss
-            </button>
-          </p>
-        </Notice>
+        <VerifyFailureNotice
+          failure={failure}
+          onCheck={onCheck}
+          onDismiss={onDismiss}
+          voice={failureVoice}
+        />
       )}
     </div>
   )

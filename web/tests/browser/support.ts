@@ -49,6 +49,18 @@ export async function visit(page: Page, params: Record<string, string> = {}): Pr
 }
 
 /**
+ * Opens the canonical route while fixing the browser clock without putting that
+ * clock in the URL. A `now` parameter is intentionally a deep link and therefore
+ * bypasses the hero; this helper exercises the real empty-query entrance.
+ */
+export async function visitFeatured(page: Page): Promise<void> {
+  await page.clock.setFixedTime(SCANNED_AT)
+  await page.goto('/')
+  await expect(page.locator('.featured-hero')).toBeVisible()
+  await expect(results(page)).toBeVisible()
+}
+
+/**
  * The results region, whichever view is on show.
  *
  * It is named by the page's `<h1>`, and every view titles itself `<something> .eth

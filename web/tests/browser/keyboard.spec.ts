@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test'
-import { openData, searchOf, visit } from './support'
+import { openData, searchOf, visit, visitFeatured } from './support'
 
 async function bloom(page: Page): Promise<{ opacity: string; transform: string }> {
   return page
@@ -19,8 +19,28 @@ test('the skip link is first and lands on the name field', async ({ page }) => {
   await expect(skip).toBeFocused()
   await expect(skip).toBeInViewport()
   await skip.press('Enter')
-  await expect(page).toHaveURL(/#results$/)
-  await expect(page.locator('#results')).toBeInViewport()
+  await expect(page).toHaveURL(/#page-title$/)
+  await expect(page.locator('#page-title')).toBeFocused()
+  await expect(page.locator('#page-title')).toBeInViewport()
+})
+
+test('the canonical skip link and Explore action focus the discovery heading', async ({ page }) => {
+  await visitFeatured(page)
+  await page.keyboard.press('Tab')
+
+  const skip = page.getByRole('link', { name: 'Skip featured names' })
+  await expect(skip).toBeFocused()
+  await skip.press('Enter')
+  await expect(page.locator('#page-title')).toBeFocused()
+  await expect(page.locator('#page-title')).toBeInViewport()
+
+  await page.evaluate(() => {
+    window.scrollTo(0, 0)
+  })
+  await page.getByRole('link', { name: /Explore all 16/ }).click()
+  await expect(page.locator('#page-title')).toBeFocused()
+  await expect(page.locator('#page-title')).toBeInViewport()
+  expect(await page.evaluate(() => window.scrollY)).toBeGreaterThan(0)
 })
 
 test('the Data drawer traps focus, closes with Escape, and restores its opener', async ({
@@ -114,5 +134,32 @@ test.describe('with reduced motion requested', () => {
 
     await openData(page)
     await expect(page.getByRole('dialog', { name: 'Data' })).toBeVisible()
+  })
+
+  test('the hero has no entry or pointer-following motion and hands off immediately', async ({
+    page,
+  }) => {
+    await visitFeatured(page)
+    const map = page.locator('.featured-map')
+    const before = await map.getAttribute('style')
+    const box = await map.boundingBox()
+    expect(box).not.toBeNull()
+    await page.mouse.move((box?.x ?? 0) + 40, (box?.y ?? 0) + 40)
+    await page.waitForTimeout(50)
+    expect(await map.getAttribute('style')).toBe(before)
+
+    const animated = await page.locator('.featured-hero *').evaluateAll((nodes) =>
+      nodes
+        .filter((node) => {
+          const style = getComputedStyle(node)
+          return Number.parseFloat(style.animationDuration) * 1000 >= 10
+        })
+        .map((node) => node.getAttribute('class') ?? node.tagName.toLowerCase()),
+    )
+    expect(animated).toEqual([])
+
+    await page.getByRole('link', { name: /Explore all 16/ }).click()
+    await expect(page.locator('#page-title')).toBeFocused()
+    await expect(page.locator('#page-title')).toBeInViewport()
   })
 })

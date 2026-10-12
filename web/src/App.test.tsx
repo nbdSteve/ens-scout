@@ -1,13 +1,26 @@
 import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { App } from './App'
 import type { AppConfig } from './config/env'
 import type { SnapshotDocument } from './snapshot/types'
+import type { FeaturedNamesDeps } from './state/useFeaturedNames'
 import type { SnapshotDeps } from './state/useSnapshot'
 import { buildLatestDocument, buildSnapshotDocument, SCANNED_AT } from './test/factory'
 
 const CONFIG: AppConfig = { apiBaseUrl: null, fixtureId: 'preview' }
+const RANK_DOCUMENT = JSON.parse(
+  readFileSync(resolve(process.cwd(), 'public/data/og-rank-v1.json'), 'utf8'),
+) as unknown
+const ALLOWLIST_DOCUMENT = JSON.parse(
+  readFileSync(resolve(process.cwd(), 'src/data/featured-safe-v1.json'), 'utf8'),
+) as unknown
+const FEATURED_DEPS: FeaturedNamesDeps = {
+  allowlistDocument: ALLOWLIST_DOCUMENT,
+  loadRank: () => Promise.resolve(RANK_DOCUMENT),
+}
 
 const DOCUMENT = buildSnapshotDocument({
   results: [
@@ -38,6 +51,26 @@ function depsFor(document: SnapshotDocument = DOCUMENT): SnapshotDeps {
 }
 
 const NOW = new Date(SCANNED_AT.getTime() + 60 * 60 * 1000)
+const FEATURED_DOCUMENT = buildSnapshotDocument({
+  results: [
+    'dub',
+    'eon',
+    'fuzz',
+    'hex',
+    'jinx',
+    'jolt',
+    'midi',
+    'moth',
+    'rune',
+    'saga',
+    'zero',
+    'zine',
+  ].map((label) => ({ name: `${label}.eth`, status: 'available' as const })),
+  sources: [
+    { id: 'four-letters', path: 'data/words/4-letters.txt', cadence: 'daily', names: 9 },
+    { id: 'three-letters', path: 'data/words/3-letters.txt', cadence: 'daily', names: 3 },
+  ],
+})
 
 async function mount(
   search = `?now=${NOW.toISOString().slice(0, 19)}Z`,
@@ -46,6 +79,15 @@ async function mount(
   window.history.replaceState(null, '', `/${search}`)
   render(<App config={CONFIG} deps={depsFor(document)} />)
   await screen.findByRole('list', { name: /\.eth names$/ })
+}
+
+async function mountDefault(
+  featuredDeps: FeaturedNamesDeps = FEATURED_DEPS,
+  document: SnapshotDocument = FEATURED_DOCUMENT,
+): Promise<void> {
+  window.history.replaceState(null, '', '/')
+  render(<App config={CONFIG} deps={depsFor(document)} featuredDeps={featuredDeps} />)
+  await screen.findByRole('list', { name: 'Featured available names, best first' })
 }
 
 function nameList(): HTMLElement {
@@ -64,6 +106,59 @@ beforeEach(() => {
 })
 
 describe('ENS Spectrum discovery path', () => {
+  it('opens the canonical Available route with one ranked hero before discovery', async () => {
+    await mountDefault()
+
+    expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1)
+    expect(screen.getByRole('heading', { level: 1 })).toHaveAccessibleName(
+      'The good ones are still out there.',
+    )
+    expect(screen.getByRole('heading', { level: 2, name: 'Available .eth names' })).toBeVisible()
+    expect(
+      within(
+        screen.getByRole('list', { name: 'Featured available names, best first' }),
+      ).getAllByRole('listitem'),
+    ).toHaveLength(12)
+    expect(document.querySelector('.featured-hero')).toHaveAttribute(
+      'data-featured-source',
+      'reviewed-artifact',
+    )
+  })
+
+  it('uses the safe fallback for a refused rank and omits the hero for a refused policy', async () => {
+    const { unmount } = render(
+      <App
+        config={CONFIG}
+        deps={depsFor(FEATURED_DOCUMENT)}
+        featuredDeps={{
+          allowlistDocument: ALLOWLIST_DOCUMENT,
+          loadRank: () => Promise.resolve(null),
+        }}
+      />,
+    )
+    await screen.findByRole('list', { name: 'Featured available names, best first' })
+    expect(document.querySelector('.featured-hero')).toHaveAttribute(
+      'data-featured-source',
+      'deterministic-fallback',
+    )
+
+    unmount()
+    window.history.replaceState(null, '', '/')
+    render(
+      <App
+        config={CONFIG}
+        deps={depsFor(FEATURED_DOCUMENT)}
+        featuredDeps={{
+          allowlistDocument: null,
+          loadRank: () => Promise.resolve(RANK_DOCUMENT),
+        }}
+      />,
+    )
+    await screen.findByRole('list', { name: 'Available .eth names' })
+    expect(document.querySelector('.featured-hero')).not.toBeInTheDocument()
+    expect(screen.getByRole('heading', { level: 1 })).toHaveAccessibleName('Available .eth names')
+  })
+
   it('lands on Available, renders names as a list, and contains no table', async () => {
     await mount()
 
@@ -190,17 +285,25 @@ describe('Data drawer', () => {
 })
 
 describe('keyboard order', () => {
-  it('starts with a skip link that targets the name field', async () => {
+  it('starts with a skip link that targets the discovery heading', async () => {
     const user = userEvent.setup()
     await mount()
 
     await user.tab()
     const skip = screen.getByRole('link', { name: 'Skip to the names' })
     expect(skip).toHaveFocus()
-    expect(skip).toHaveAttribute('href', '#results')
+    expect(skip).toHaveAttribute('href', '#page-title')
     expect(screen.getByRole('region', { name: 'Available .eth names' })).toHaveAttribute(
       'id',
       'results',
     )
+  })
+
+  it('calls the first-focus link Skip featured names on the canonical route', async () => {
+    const user = userEvent.setup()
+    await mountDefault()
+
+    await user.tab()
+    expect(screen.getByRole('link', { name: 'Skip featured names' })).toHaveFocus()
   })
 })

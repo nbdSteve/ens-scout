@@ -2,13 +2,14 @@ import { readFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import type { Locator, Page, Route } from '@playwright/test'
 import type { Status } from '../../src/snapshot/contract'
+import { densePreview } from '../../src/data/densePreview'
 import {
   CHECK_AUTHORITY,
   CHECK_FORMAT_VERSION,
   CHECK_SOURCE,
   type CheckCode,
 } from '../../src/verify/contract'
-import { visit } from './support'
+import { visit, visitFeatured } from './support'
 
 /**
  * The read API, as the `verify` project's bundle sees it.
@@ -75,6 +76,26 @@ export async function stubSnapshot(page: Page): Promise<void> {
   })
 }
 
+/** Serves the dense frontend preview, including twelve safe ranked names. */
+export async function stubFeaturedSnapshot(page: Page): Promise<void> {
+  const payload = densePreview({
+    snapshot: JSON.parse(await committed('snapshot.json')) as unknown,
+    latest: JSON.parse(await committed('latest.json')) as unknown,
+  })
+  await page.route('**/api/snapshot', async (route) => {
+    await route.fulfill({
+      body: JSON.stringify(payload.snapshot),
+      headers: { 'content-type': JSON_TYPE },
+    })
+  })
+  await page.route('**/api/latest', async (route) => {
+    await route.fulfill({
+      body: JSON.stringify(payload.latest),
+      headers: { 'content-type': JSON_TYPE },
+    })
+  })
+}
+
 /**
  * Opens the verifier build at a simulated instant, with the snapshot routed.
  *
@@ -84,6 +105,12 @@ export async function stubSnapshot(page: Page): Promise<void> {
 export async function openVerified(page: Page, params: Record<string, string> = {}): Promise<void> {
   await stubSnapshot(page)
   await visit(page, params)
+}
+
+/** Opens the verifier build on the canonical hero route with the dense snapshot. */
+export async function openVerifiedFeatured(page: Page): Promise<void> {
+  await stubFeaturedSnapshot(page)
+  await visitFeatured(page)
 }
 
 /** One name in a stubbed answer. The wire spelling, so the stub is the wire shape. */

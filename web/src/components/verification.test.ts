@@ -101,6 +101,10 @@ describe('rowVerification verdict', () => {
 })
 
 describe('rowVerifyNote', () => {
+  const changed: VerifiedName = {
+    ...entry,
+    result: { ...result, status: 'registered', expiry: new Date('2027-01-01T00:00:00Z') },
+  }
   const cases: readonly (readonly [string, VerifyBinding, Date, string | null])[] = [
     [
       'says nothing when a current check has already spoken through the link',
@@ -121,6 +125,12 @@ describe('rowVerifyNote', () => {
       EXPIRES_AT,
       'Fresh check running',
     ],
+    [
+      'states when a current fresh status removes the registration action',
+      binding({ verified: new Map([['aaaa.eth', changed]]) }),
+      CHECKED_AT,
+      'Fresh status changed',
+    ],
   ]
 
   it.each(cases)('%s', (_name, bound, now, expected) => {
@@ -129,11 +139,17 @@ describe('rowVerifyNote', () => {
 })
 
 describe('rowVerifiedName', () => {
-  it('returns the latest result for both current and lapsed checks', () => {
+  it('returns the latest result for current, changed, and lapsed checks', () => {
+    const changed: VerifiedName = {
+      ...entry,
+      result: { ...result, status: 'registered', expiry: new Date('2027-01-01T00:00:00Z') },
+    }
     const bound = binding({ verified: new Map([['aaaa.eth', entry]]) })
+    const changedBound = binding({ verified: new Map([['aaaa.eth', changed]]) })
 
     expect(rowVerifiedName(rowVerification('aaaa.eth', bound, CHECKED_AT))).toBe(entry)
     expect(rowVerifiedName(rowVerification('aaaa.eth', bound, EXPIRES_AT))).toBe(entry)
+    expect(rowVerifiedName(rowVerification('aaaa.eth', changedBound, CHECKED_AT))).toBe(changed)
   })
 
   it('returns nothing when no check covered the name', () => {

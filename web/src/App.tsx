@@ -11,6 +11,7 @@ import { DataDrawer } from './components/DataDrawer'
 import { DiscoveryHeader } from './components/DiscoveryHeader'
 import { EmptyState } from './components/EmptyState'
 import { ErrorState } from './components/ErrorState'
+import { FeaturedHero } from './components/FeaturedHero'
 import { FilterDock } from './components/FilterDock'
 import { LoadingState } from './components/LoadingState'
 import { NameField } from './components/NameField'
@@ -27,8 +28,10 @@ import { formatAbsolute, toIsoSecond } from './format/time'
 import type { Status } from './snapshot/contract'
 import { deriveAttribution } from './snapshot/attribution'
 import { resolveSourceGroups } from './snapshot/staleness'
+import { isCanonicalFeaturedRoute } from './ranking/route'
 import { applyQuery, countByStatus, filterResults } from './state/filter'
 import { CLEAR_FILTERS, isFiltered } from './state/query'
+import { useFeaturedNames, type FeaturedNamesDeps } from './state/useFeaturedNames'
 import { useFreshCheck, type FreshCheckDeps } from './state/useFreshCheck'
 import { useLengthDrafts } from './state/useLengthDrafts'
 import { useNow } from './state/useNow'
@@ -39,6 +42,7 @@ import { VIEWS, viewOrDefault } from './state/views'
 export interface AppProps {
   readonly config?: AppConfig
   readonly deps?: SnapshotDeps
+  readonly featuredDeps?: FeaturedNamesDeps
   readonly verifyDeps?: FreshCheckDeps
 }
 
@@ -50,15 +54,22 @@ const VIEW_HEADING: Readonly<Record<string, string>> = {
   all: 'All scanned',
 }
 
-export function App({ config = appConfig, deps, verifyDeps }: AppProps): ReactNode {
+export function App({ config = appConfig, deps, featuredDeps, verifyDeps }: AppProps): ReactNode {
   const { query, warnings, setQuery, hrefFor } = useUrlState()
   const now = useNow(query.now)
   const store = useSnapshot(config, deps)
   const check = useFreshCheck(config, now, verifyDeps)
   const [dataOpen, setDataOpen] = useState(false)
   const dataReturnFocus = useRef<HTMLElement | null>(null)
+  const discoveryHeading = useRef<HTMLHeadingElement>(null)
 
   const snapshot = store.snapshot
+  const featuredRoute = isCanonicalFeaturedRoute(query) && warnings.length === 0
+  const featured = useFeaturedNames(snapshot, featuredRoute, featuredDeps)
+  const featuredSelection = featured.phase === 'ready' ? featured.selection : null
+  const showHero =
+    featured.phase === 'loading' ||
+    (featured.phase === 'ready' && featured.selection.source !== 'omitted')
   const attribution = useMemo(
     () =>
       snapshot === null ? null : deriveAttribution(snapshot.metadata.sources, snapshot.results),
@@ -144,6 +155,24 @@ export function App({ config = appConfig, deps, verifyDeps }: AppProps): ReactNo
   const closeData = useCallback((): void => {
     setDataOpen(false)
   }, [])
+  const focusDiscovery = useCallback(
+    (event: MouseEvent<HTMLAnchorElement>, smooth: boolean): void => {
+      event.preventDefault()
+      const headingNode = discoveryHeading.current
+      if (headingNode === null) {
+        return
+      }
+      const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+      headingNode.focus({ preventScroll: true })
+      headingNode.scrollIntoView({
+        behavior: smooth && !reduced ? 'smooth' : 'auto',
+        block: 'start',
+      })
+      const target = `${window.location.pathname}${window.location.search}#page-title`
+      window.history.replaceState(null, '', target)
+    },
+    [],
+  )
 
   useEffect(() => {
     document.title = view.title
@@ -152,8 +181,14 @@ export function App({ config = appConfig, deps, verifyDeps }: AppProps): ReactNo
   return (
     <>
       <div className="site-shell">
-        <a className="skip-link" href="#results">
-          Skip to the names
+        <a
+          className="skip-link"
+          href="#page-title"
+          onClick={(event) => {
+            focusDiscovery(event, false)
+          }}
+        >
+          {showHero ? 'Skip featured names' : 'Skip to the names'}
         </a>
 
         <DiscoveryHeader dataOpen={dataOpen} hasNotice={hasDataNotice} onOpenData={openData} />
@@ -170,12 +205,46 @@ export function App({ config = appConfig, deps, verifyDeps }: AppProps): ReactNo
 
           {snapshot !== null && store.origin !== null && attribution !== null && page !== null && (
             <>
-              <div className="page discovery">
+              {showHero && (
+                <FeaturedHero
+                  availableCount={snapshot.metadata.counts.available}
+                  checking={check.checking}
+                  failure={check.failure}
+                  now={now}
+                  onCheck={check.check}
+                  onDismissFailure={check.dismissFailure}
+                  onExplore={(event) => {
+                    focusDiscovery(event, true)
+                  }}
+                  selection={featuredSelection}
+                  snapshot={snapshot}
+                  verify={verify}
+                />
+              )}
+
+              <div className={`page discovery${showHero ? ' discovery--after-hero' : ''}`}>
                 <div className="editorial-heading">
-                  <h1 id="page-title">
-                    <span className="editorial-heading__word">{heading}</span>{' '}
-                    <span className="editorial-heading__suffix">.eth names</span>
-                  </h1>
+                  {showHero ? (
+                    <h2
+                      className="editorial-heading__title"
+                      id="page-title"
+                      ref={discoveryHeading}
+                      tabIndex={-1}
+                    >
+                      <span className="editorial-heading__word">{heading}</span>{' '}
+                      <span className="editorial-heading__suffix">.eth names</span>
+                    </h2>
+                  ) : (
+                    <h1
+                      className="editorial-heading__title"
+                      id="page-title"
+                      ref={discoveryHeading}
+                      tabIndex={-1}
+                    >
+                      <span className="editorial-heading__word">{heading}</span>{' '}
+                      <span className="editorial-heading__suffix">.eth names</span>
+                    </h1>
+                  )}
                   <span className="editorial-heading__count" role="status">
                     {page.total.toLocaleString('en-GB')} {page.total === 1 ? 'name' : 'names'}
                   </span>
@@ -208,6 +277,7 @@ export function App({ config = appConfig, deps, verifyDeps }: AppProps): ReactNo
                   <VerifyBar
                     checking={check.checking}
                     failure={check.failure}
+                    failureVoice={showHero ? 'silent' : 'alert'}
                     onCheck={check.check}
                     onClear={check.clearSelection}
                     onDismiss={check.dismissFailure}
@@ -321,6 +391,7 @@ export function App({ config = appConfig, deps, verifyDeps }: AppProps): ReactNo
             cachedAt={store.cachedAt}
             config={config}
             confirmedCurrent={store.confirmedCurrent}
+            featuredSource={featuredSelection?.source ?? null}
             now={now}
             origin={store.origin}
             snapshot={snapshot}

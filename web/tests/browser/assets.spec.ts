@@ -201,8 +201,11 @@ for (const site of SITES) {
     const entry = scripts.filter(([path]) => /\/assets\/index-[^/]+\.js$/.test(path))
     expect(entry.length, 'no entry chunk in the build').toBe(1)
 
-    const bytes = Buffer.byteLength(entry[0]?.[1] ?? '', 'utf8')
-    expect(bytes).toBeLessThan(600_000)
+    const text = entry[0]?.[1] ?? ''
+    const bytes = Buffer.byteLength(text, 'utf8')
+    const gzipBytes = gzipSync(Buffer.from(text, 'utf8'), { level: 9 }).byteLength
+    expect(bytes, 'entry JavaScript exceeds 350 KiB raw').toBeLessThanOrEqual(350 * 1024)
+    expect(gzipBytes, 'entry JavaScript exceeds 110 KiB gzip').toBeLessThanOrEqual(110 * 1024)
   })
 
   test(`${site.outDir}/ ships the fixture, so a clean clone has something to show`, async () => {

@@ -10,6 +10,7 @@ import {
   fulfilCheck,
   hold,
   openVerified,
+  openVerifiedFeatured,
   POISON,
   refuseCheck,
   rowFor,
@@ -45,6 +46,7 @@ import { expectAccessible, MINUTE, scrollsSideways, since } from './support'
 /** Names in the committed `preview` fixture. The first two are its available pair. */
 const AMBER = 'amber.eth'
 const ORB = 'orb.eth'
+const ZINE = 'zine.eth'
 
 /** The bound, as text, for the sentence the bar renders it into. */
 const BOUND = String(CHECK_MAX_NAMES)
@@ -72,6 +74,182 @@ function current(results: readonly CheckedName[]): CheckAnswer {
 function lapsed(results: readonly CheckedName[]): CheckAnswer {
   return { checkedAt: since(-5 * MINUTE), expiresAt: since(-4 * MINUTE), results }
 }
+
+function featuredBox(page: import('@playwright/test').Page, name: string) {
+  return page.getByRole('checkbox', { name: new RegExp(`^Select ${name.replace('.', '\\.')},`) })
+}
+
+function featuredItem(page: import('@playwright/test').Page, name: string) {
+  return featuredBox(page, name).locator('xpath=ancestor::li[contains(@class, "featured-name")]')
+}
+
+test('the hero and raw list share one selection and one fresh result', async ({ page }) => {
+  await openVerifiedFeatured(page)
+
+  let asked: readonly string[] = []
+  await stubCheck(page, async (route, names) => {
+    asked = names
+    await fulfilCheck(route, checkDocument(current([{ name: ZINE, status: 'available' }])))
+  })
+
+  await featuredBox(page, ZINE).check()
+  await expect(tickBox(page, ZINE)).toBeChecked()
+  await page.getByRole('button', { name: 'Check 1 name' }).click()
+
+  expect(asked).toEqual([ZINE])
+  await expect(featuredItem(page, ZINE).getByRole('link')).toHaveAttribute(
+    'href',
+    `https://app.ens.domains/${ZINE}`,
+  )
+  await expect(ensLinkFor(page, ZINE)).toHaveAttribute('href', `https://app.ens.domains/${ZINE}`)
+})
+
+test('selecting a featured name alone creates no ENS registration link', async ({ page }) => {
+  await openVerifiedFeatured(page)
+
+  await featuredBox(page, ZINE).check()
+  await expect(featuredItem(page, ZINE).getByRole('link')).toHaveCount(0)
+  await expect(ensLinkFor(page, ZINE)).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Check 1 name' })).toBeEnabled()
+})
+
+test('a featured fresh disagreement stays visible and closes both outbound actions', async ({
+  page,
+}) => {
+  await openVerifiedFeatured(page)
+  await stubCheck(page, async (route) => {
+    await fulfilCheck(
+      route,
+      checkDocument(
+        current([{ name: ZINE, status: 'registered', expiry: '2027-06-01T12:00:00Z' }]),
+      ),
+    )
+  })
+
+  await featuredBox(page, ZINE).check()
+  await page.getByRole('button', { name: 'Check 1 name' }).click()
+
+  await expect(featuredItem(page, ZINE)).toContainText('Registered')
+  await expect(featuredItem(page, ZINE)).toContainText('Fresh status changed')
+  await expect(featuredItem(page, ZINE).getByRole('link')).toHaveCount(0)
+  await expect(ensLinkFor(page, ZINE)).toHaveCount(0)
+  await expect(featuredBox(page, ZINE)).toBeChecked()
+})
+
+test('a throttled featured check preserves the snapshot and selection', async ({ page }) => {
+  await openVerifiedFeatured(page)
+  await stubCheck(page, async (route) => {
+    await refuseCheck(route, { status: 429, code: 'client_throttled', retryAfterSeconds: 30 })
+  })
+
+  await featuredBox(page, ZINE).check()
+  await page.getByRole('button', { name: 'Check 1 name' }).click()
+
+  const heroFailure = page.locator('.featured-hero').getByRole('alert')
+  await expect(heroFailure).toContainText(
+    'You have checked several names in quick succession. Wait a moment and check again.',
+  )
+  await expect(featuredItem(page, ZINE)).toBeVisible()
+  await expect(featuredBox(page, ZINE)).toBeChecked()
+  await expect(featuredItem(page, ZINE).getByRole('link')).toHaveCount(0)
+})
+
+test('a timed-out featured check preserves the snapshot and selection', async ({ page }) => {
+  await openVerifiedFeatured(page)
+  await stubCheck(page, async (route) => {
+    await refuseCheck(route, { status: 504, code: 'check_timed_out' })
+  })
+
+  await featuredBox(page, ZINE).check()
+  await page.getByRole('button', { name: 'Check 1 name' }).click()
+
+  await expect(page.locator('.featured-hero').getByRole('alert')).toContainText(
+    'The check did not finish in time. No name was verified.',
+  )
+  await expect(featuredItem(page, ZINE)).toBeVisible()
+  await expect(featuredBox(page, ZINE)).toBeChecked()
+  await expect(featuredItem(page, ZINE).getByRole('link')).toHaveCount(0)
+  await expect(ensLinkFor(page, ZINE)).toHaveCount(0)
+})
+
+test('a lapsed featured result stays visible and closes both outbound actions', async ({
+  page,
+}) => {
+  await openVerifiedFeatured(page)
+  await stubCheck(page, async (route) => {
+    await fulfilCheck(route, checkDocument(lapsed([{ name: ZINE, status: 'available' }])))
+  })
+
+  await featuredBox(page, ZINE).check()
+  await page.getByRole('button', { name: 'Check 1 name' }).click()
+
+  await expect(featuredItem(page, ZINE)).toContainText('Fresh check has lapsed')
+  await expect(featuredItem(page, ZINE)).toContainText('Fresh check 11:55:00 UTC')
+  await expect(featuredItem(page, ZINE).getByRole('link')).toHaveCount(0)
+  await expect(rowFor(page, ZINE)).toContainText('Fresh check lapsed')
+  await expect(ensLinkFor(page, ZINE)).toHaveCount(0)
+})
+
+test('the deterministic fallback uses the same featured verification path', async ({ page }) => {
+  await page.route('**/data/og-rank-v1.json', async (route) => {
+    await route.fulfill({
+      body: '{"format_version":99}',
+      headers: { 'content-type': 'application/json' },
+    })
+  })
+  await openVerifiedFeatured(page)
+  await expect(page.locator('.featured-hero')).toHaveAttribute(
+    'data-featured-source',
+    'deterministic-fallback',
+  )
+
+  const first = page.getByRole('checkbox', { name: /^Select / }).first()
+  await first.check()
+  await expect(page.getByRole('button', { name: 'Check 1 name' })).toBeEnabled()
+  await expect(first).toBeChecked()
+})
+
+test('featured controls keep score order and native Space behavior', async ({ page }) => {
+  await openVerifiedFeatured(page)
+  const boxes = page.getByRole('checkbox', { name: /^Select / })
+  await expect(boxes).toHaveCount(12)
+  await expect(boxes.nth(0)).toHaveAccessibleName(/rank 1/)
+  await expect(boxes.nth(1)).toHaveAccessibleName(/rank 2/)
+
+  await boxes.nth(0).focus()
+  await boxes.nth(0).press(' ')
+  await expect(boxes.nth(0)).toBeChecked()
+  await boxes.nth(0).press('Tab')
+  await expect(boxes.nth(1)).toBeFocused()
+})
+
+test('selected and checking hero states have no accessibility violations', async ({ page }) => {
+  await openVerifiedFeatured(page)
+  const gate = hold()
+  await stubCheck(page, async (route) => {
+    await gate.held
+    await fulfilCheck(route, checkDocument(current([{ name: ZINE, status: 'available' }])))
+  })
+
+  await featuredBox(page, ZINE).check()
+  await expectAccessible(page)
+  await page.getByRole('button', { name: 'Check 1 name' }).click()
+  await expect(page.getByRole('button', { name: 'Checking 1 name' })).toBeDisabled()
+  await expectAccessible(page)
+
+  gate.release()
+  await expect(featuredItem(page, ZINE).getByRole('link')).toBeVisible()
+})
+
+test('the verifier hero exposes exactly seven ranked controls at 320 by 568', async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 568 })
+  await openVerifiedFeatured(page)
+
+  await expect(
+    page.getByRole('checkbox', { name: /^Select / }).filter({ visible: true }),
+  ).toHaveCount(7)
+  expect(await scrollsSideways(page)).toBe(false)
+})
 
 test('no name is a link until a fresh check covers it', async ({ page }) => {
   await openVerified(page, { view: 'all' })
@@ -133,6 +311,7 @@ test('a fresh status that disagrees with the scan is shown beside it', async ({ 
   // Fresh evidence remains explicit and may contradict that recorded view.
   await expect(page.getByRole('heading', { level: 1 })).toHaveAccessibleName('Available .eth names')
   await expect(rowFor(page, AMBER)).toContainText(/Fresh check 12:00:00 UTC\s*Registered/)
+  await expect(rowFor(page, AMBER).getByRole('link')).toHaveCount(0)
 })
 
 test('a check that has lapsed takes the link away and says so', async ({ page }) => {

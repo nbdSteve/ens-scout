@@ -1,5 +1,13 @@
 import { expect, test, type Locator } from '@playwright/test'
-import { openData, openLength, openMore, scrollsSideways, visit } from './support'
+import {
+  SCANNED_AT,
+  openData,
+  openLength,
+  openMore,
+  scrollsSideways,
+  visit,
+  visitFeatured,
+} from './support'
 
 async function fitsViewport(locator: Locator): Promise<boolean> {
   const box = await locator.boundingBox()
@@ -13,6 +21,108 @@ async function fitsViewport(locator: Locator): Promise<boolean> {
 function cells(page: import('@playwright/test').Page): Locator {
   return page.locator('.name-field > .name-cell')
 }
+
+function featuredNames(page: import('@playwright/test').Page): Locator {
+  return page.locator('.featured-name:visible')
+}
+
+test('the canonical route opens on the curated hero at every required viewport', async ({
+  page,
+}, testInfo) => {
+  await visitFeatured(page)
+
+  const expected: Readonly<Record<string, number>> = {
+    desktop: 12,
+    tablet: 12,
+    mobile: 7,
+    narrow: 7,
+  }
+  await expect(featuredNames(page)).toHaveCount(expected[testInfo.project.name] ?? 0)
+  await expect(page.getByRole('heading', { level: 1 })).toHaveAccessibleName(
+    'The good ones are still out there.',
+  )
+  await expect(page.getByRole('link', { name: /Explore all 16/ })).toBeInViewport()
+  await expect(page.getByRole('button', { name: 'Select names to check' })).toBeInViewport()
+
+  for (const name of await featuredNames(page).all()) {
+    await expect(name).toBeInViewport({ ratio: 1 })
+  }
+  expect(await scrollsSideways(page)).toBe(false)
+})
+
+test('a 200 percent zoom-equivalent viewport reflows without clipping the hero', async ({
+  page,
+}, testInfo) => {
+  test.skip(testInfo.project.name !== 'desktop', 'one desktop zoom-equivalent assertion is enough')
+  await page.setViewportSize({ width: 720, height: 450 })
+  await visitFeatured(page)
+
+  await expect(featuredNames(page)).toHaveCount(12)
+  const hero = await page.locator('.featured-hero').boundingBox()
+  expect(hero).not.toBeNull()
+  expect(hero?.height ?? 0).toBeGreaterThanOrEqual(720)
+  expect(await scrollsSideways(page)).toBe(false)
+
+  const explore = page.getByRole('link', { name: /Explore all 16/ })
+  await explore.focus()
+  await expect(explore).toBeFocused()
+  await expect(explore).toBeInViewport()
+})
+
+test('rank one is visually dominant and no lower tier crosses its ceiling', async ({ page }) => {
+  await visitFeatured(page)
+  const sizes = await featuredNames(page).evaluateAll((nodes) =>
+    nodes.map((node) => ({
+      rank: Number.parseInt(node.getAttribute('data-rank') ?? '0', 10),
+      tier: node.getAttribute('data-tier'),
+      size: Number.parseFloat(
+        getComputedStyle(node.querySelector('.featured-name__label') ?? node).fontSize,
+      ),
+    })),
+  )
+  const first = sizes.find(({ rank }) => rank === 1)
+  expect(first).toBeDefined()
+  expect(
+    sizes.every(({ rank, size }) => rank === 1 || size < (first?.size ?? Number.NEGATIVE_INFINITY)),
+  ).toBe(true)
+
+  const tierMaximum = new Map<string, number>()
+  for (const { tier, size } of sizes) {
+    if (tier !== null) {
+      tierMaximum.set(tier, Math.max(tierMaximum.get(tier) ?? 0, size))
+    }
+  }
+  expect(tierMaximum.get('dominant') ?? 0).toBeGreaterThan(tierMaximum.get('anchor') ?? 0)
+  expect(tierMaximum.get('anchor') ?? 0).toBeGreaterThan(tierMaximum.get('supporting') ?? 0)
+})
+
+test('ranking arrival replaces reserved geometry without moving discovery', async ({
+  page,
+}, testInfo) => {
+  test.skip(testInfo.project.name !== 'desktop', 'one geometry assertion covers the shared shell')
+  let release = (): void => undefined
+  const held = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  await page.route('**/data/og-rank-v1.json', async (route) => {
+    const response = await route.fetch()
+    await held
+    await route.fulfill({ response })
+  })
+  await page.clock.setFixedTime(SCANNED_AT)
+  await page.goto('/')
+  await expect(page.locator('.featured-map__skeleton')).toHaveCount(12)
+  await expect(page.locator('#page-title')).toBeAttached()
+  const before = await page.locator('#page-title').boundingBox()
+
+  release()
+  await expect(page.locator('.featured-name')).toHaveCount(12)
+  const after = await page.locator('#page-title').boundingBox()
+
+  expect(before).not.toBeNull()
+  expect(after).not.toBeNull()
+  expect(Math.abs((after?.y ?? 0) - (before?.y ?? 0))).toBeLessThanOrEqual(0.5)
+})
 
 test('the primary path is the Spectrum field, not the rejected dashboard', async ({ page }) => {
   await visit(page)
@@ -119,10 +229,44 @@ test('the 32 and 64 character preview names remain contained', async ({ page }) 
   }
 })
 
-test('each required viewport can be captured without overflow', async ({ page }, testInfo) => {
-  await visit(page)
+test('long synthetic featured labels stay inside their controls', async ({ page }) => {
+  await visitFeatured(page)
+  const names = featuredNames(page)
+  await names
+    .nth(0)
+    .locator('.featured-name__label > span')
+    .first()
+    .evaluate((node) => {
+      node.textContent = 'y'.repeat(32)
+    })
+  await names
+    .nth(1)
+    .locator('.featured-name__label > span')
+    .first()
+    .evaluate((node) => {
+      node.textContent = 'z'.repeat(64)
+    })
+
+  for (const index of [0, 1]) {
+    const contained = await names.nth(index).evaluate((node) => {
+      const control = node.querySelector('.featured-name__control')?.getBoundingClientRect()
+      const label = node.querySelector('.featured-name__label')
+      if (control === undefined || label === null) {
+        return false
+      }
+      return [...label.getClientRects()].every(
+        (rect) => rect.left >= control.left - 0.5 && rect.right <= control.right + 0.5,
+      )
+    })
+    expect(contained, `synthetic featured label ${String(index + 1)} escaped`).toBe(true)
+  }
   expect(await scrollsSideways(page)).toBe(false)
-  await testInfo.attach(`ens-spectrum-${testInfo.project.name}`, {
+})
+
+test('each required viewport can be captured without overflow', async ({ page }, testInfo) => {
+  await visitFeatured(page)
+  expect(await scrollsSideways(page)).toBe(false)
+  await testInfo.attach(`ens-og-hero-${testInfo.project.name}`, {
     body: await page.screenshot({ fullPage: false }),
     contentType: 'image/png',
   })
