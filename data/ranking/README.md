@@ -35,8 +35,9 @@ its Bedrock adapter is outside every Lambda and frontend import path.
 - `featured-safe-v1.fixture.json` contains the first twelve ranked allowlisted
   labels for future selector tests.
 - `../../web/public/data/og-rank-v1.json` is the compact browser tuple artifact.
-- `../../web/src/data/featured-safe-v1.json` is the exact allowlist copy reserved
-  for the later selector/fallback PR. This PR does not import it or change UI
+- `../../web/src/data/featured-safe-v1.json` is the exact allowlist copy consumed
+  by the browser's strict parser and deterministic fallback. The pure runtime
+  seam is not yet wired into `App`, so these artifacts still change no UI
   behavior.
 
 The full review source uses compact tuples because repeating field names across

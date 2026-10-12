@@ -1109,9 +1109,20 @@ workflow and artifact contract.
   go test ./internal/ogranking ./cmd/og-ranking
   ```
 
-- This repository slice ships data only. Do not import the ranking or allowlist
-  into browser behavior until the separate parser/selector work adds its
-  fail-closed runtime contract.
+- `web/src/ranking` is the pure browser boundary over those artifacts. Its parser
+  accepts only the pinned format, rubric, policy, corpus identity, exact keys,
+  tuple shape, score range, facet mask, and zero flags, then requires the rank and
+  allowlist provenance and membership to agree.
+- Runtime selection joins by the exact bare label, admits only allowlisted
+  snapshot results whose status is exactly `available`, and carries no lifecycle
+  or registration claim from editorial data. A refused rank may fall back only to
+  deterministic scoring over the valid allowlist; a refused allowlist omits
+  featured selection rather than exposing raw alphabetical names.
+- Keep desktop selection deterministic at twelve names after the unconstrained
+  top four, bounded facet/length/family diversity pass, and rank-order deferred
+  fill. Mobile is the first seven of that same desktop result. Until the spatial
+  hero change consumes this seam, do not wire it into `App` or alter first-screen
+  behavior.
 
 ## ENS lifecycle rules
 

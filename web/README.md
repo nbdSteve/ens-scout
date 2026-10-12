@@ -165,6 +165,7 @@ That is exactly how a 320px overflow went unnoticed here once.
 src/wire/          the primitive readers both fail-closed parsers are built from
 src/snapshot/      the browser's half of the snapshot contract, and its parser
 src/verify/        the browser's half of the check contract, its parser, and the gate
+src/ranking/       strict editorial artifact parsing, deterministic selection, and fallback
 src/data/          fixture loading, the read API client, and the local cache
 src/state/         URL state, filtering, sorting, paging, the clock, and one fresh check
 src/format/        time and text formatting
@@ -201,10 +202,12 @@ so there is one answer to whether a name may be acted on rather than two that co
 fails if a removed model runtime, model asset reference, endpoint, or credential returns.
 
 `public/data/og-rank-v1.json` and `src/data/featured-safe-v1.json` are reviewed
-offline data reserved for the later fail-closed ranking parser and selector. This
-data-only slice does not import or fetch either file, so it changes no current UI
-behavior. The browser still performs no inference and receives no model credential
-or provider dependency.
+offline data read by the pure modules under `src/ranking/`. The runtime parser
+accepts only the pinned corpus, rubric, policy, tuple shape, facet mask, and zero
+flags; the selector then intersects the allowlist and the snapshot's exact
+`available` results. A refused rank uses deterministic allowlist-only scoring, and
+a refused allowlist yields an omitted featured state. `App` does not consume this
+seam yet, so the current UI and fresh-check flow are unchanged.
 
 ## What this app must not do
 
