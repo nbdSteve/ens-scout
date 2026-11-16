@@ -5,46 +5,60 @@ and what the identity that deploys it is permitted to do.
 It holds no credential and no secret value.
 It also names no real account number, role name, role ARN, hosted-zone ID, certificate
 ARN, or numeric GitHub repository identity. The account, roles, zone, and certificate
-live in the protected `production` environment's variables; the immutable GitHub
-identity stays in GitHub's repository configuration and is supplied only when the
-deployment-role trust document is rendered.
+live in the protected `production` environment's secrets; the region is its one
+variable; the immutable GitHub identity stays in GitHub's repository configuration and
+is supplied only when the deployment-role trust document is rendered.
 
 `infra/README.md` covers the CDK application itself, including the out-of-band
 prerequisites, and `.github/workflows/deploy-production.yml` is the only workflow that
 deploys.
 
-## The six variables
+## The six values
 
-Everything the deployment needs to know about the account is a variable on the
-`production` environment.
-There are six, and none of them is secret.
+Everything the deployment needs to know about the account is a secret or a variable on
+the `production` environment.
+There are six: five secrets and one variable.
 
-| Variable | What it holds |
-| --- | --- |
-| `AWS_ACCOUNT_ID` | The twelve-digit account, as a bare account number |
-| `AWS_REGION` | `ap-southeast-2` |
-| `AWS_DEPLOY_ROLE_ARN` | The whole ARN of the role GitHub Actions assumes |
-| `AWS_CLOUDFORMATION_EXECUTION_ROLE_ARN` | The whole ARN of the role CloudFormation acts as |
-| `AWS_ROUTE53_HOSTED_ZONE_ID` | The existing public Route 53 zone containing `ens.steve.gg` |
-| `AWS_ACM_CERTIFICATE_ARN` | The existing `us-east-1` ACM certificate covering `ens.steve.gg` |
+| Name | Kind | What it holds |
+| --- | --- | --- |
+| `AWS_ACCOUNT_ID` | Secret | The twelve-digit account, as a bare account number |
+| `AWS_REGION` | Variable | `ap-southeast-2` |
+| `AWS_DEPLOY_ROLE_ARN` | Secret | The whole ARN of the role GitHub Actions assumes |
+| `AWS_CLOUDFORMATION_EXECUTION_ROLE_ARN` | Secret | The whole ARN of the role CloudFormation acts as |
+| `AWS_ROUTE53_HOSTED_ZONE_ID` | Secret | The existing public Route 53 zone containing `ens.steve.gg` |
+| `AWS_ACM_CERTIFICATE_ARN` | Secret | The existing `us-east-1` ACM certificate covering `ens.steve.gg` |
+
+They are secrets because a repository may be public and its deploy logs are readable by
+anyone.
+A variable used in `env:` or `with:` is printed in the step header, where a secret is
+masked, and the certificate ARN embeds the account, so it is a secret too.
+The region is not account-specific and stays a variable.
+Environment secrets reach only a job that declares the `production` environment, which
+is what keeps the build job from reading them.
+Do not create a repository-level secret for any of them: that would make it readable by
+the build job.
+
+`aws-actions/configure-aws-credentials` does not mask the account ID in its own output by
+default, so the credentials step sets `mask-aws-account-id: true`, and it sets
+`allowed-account-ids` to the account secret.
+No step prints a value.
 
 Both roles are supplied as whole ARNs rather than assembled from the account and a role
 name.
 Composing one in the workflow would put a role name back in a tracked file, and it would
-also let a variable disagree with the ARN the workflow built out of it.
-`AWS_ACCOUNT_ID` exists as a separate value because two things genuinely need the account
-on its own: the CDK stack environment, which is an account and a region rather than an
-ARN, and the `allowed-account-ids` guard on the credential step.
+also let a value disagree with the ARN the workflow built out of it.
+`AWS_ACCOUNT_ID` exists as a separate value because the `allowed-account-ids` guard on
+the credential step needs the account on its own.
 
-The deploy job's first step refuses to build anything until all six are present, the
+The deploy job's first step refuses to run anything until all six are present, the
 account is twelve digits and is not the placeholder `infra/cdk.json` commits, the region
 is shaped like a region, both ARNs are IAM role ARNs in the account `AWS_ACCOUNT_ID`
 names, the hosted-zone ID is shaped like a Route 53 zone ID, the certificate ARN names
 `us-east-1` and the same account, and the two role ARNs are not the same role.
-It prints variable names and never values.
-`infra/test/deployment.test.ts` asserts that the step comes before the build and the
-deploy, that every variable the workflow reads is one the step requires, and that each
-one reaches the command that needs it.
+It prints names and never values.
+`infra/test/deployment.test.ts` asserts that the step comes first, that every secret and
+variable the workflow reads is one the step requires, that only the region is a variable,
+and that each value reaches the command that needs it.
 
 ## The path
 
@@ -53,36 +67,61 @@ commit it checked for production. A manual `workflow_dispatch` remains available
 as a recovery path from `main`; it does not approve, release, or otherwise participate
 in the automatic path.
 
+The work is three jobs, and the split is a security boundary.
+The job that holds the OIDC token must not run third-party build code, because anything
+that can request the token can assume the deployment role and send the stack any
+template.
+A package install script, a Go module, a web build step, or a test is such code, so none
+of them runs in that job.
+The deploy job still acts on data the build job controls, which is why it validates that
+data first (below).
+
 1. `checks.yml` runs for the push to `main`.
 2. When that run completes, GitHub starts `deploy production` through `workflow_run`.
    The trigger names the `checks` workflow, the `completed` activity, and the `main`
    branch, but those filters are not treated as the authorization boundary.
-3. The unprivileged selector job emits a deploy SHA only when the upstream event was
+3. The unprivileged `select` job emits a deploy SHA only when the upstream event was
    `push`, its conclusion was `success`, its head branch was `main`, and its head
    repository was `nbdSteve/ens-scout`. The emitted value is exactly
    `github.event.workflow_run.head_sha`, and it must be a full commit ID. A failed run,
-   pull-request run, fork run, or non-main run emits nothing, so the deploy job is
-   skipped before it can enter the environment or request an OIDC token.
+   pull-request run, fork run, or non-main run emits nothing, so the later jobs are
+   skipped before anything runs.
    For a recovery dispatch, the same selector accepts only `refs/heads/main` and emits
    the immutable `github.sha` recorded on that dispatch.
-4. The deploy job runs only when that one output is present. It declares
-   `environment: production`, whose custom deployment branch policy names `main` alone
-   and whose protection rules require no reviewer interaction.
-5. The job checks the six variables described above, then checks out the selected
-   full SHA and verifies that `git rev-parse HEAD` is the same value. It never checks
-   out a moving branch for a deployment.
-6. The job builds `web/dist` with `VITE_API_BASE_URL=/`, so the browser stays on the
-   hostname that reached CloudFront—custom or generated—for both the page and `/api/*`.
-7. The job builds, tests, and synthesizes once with
-   `npm run check`, passing the account, hosted-zone ID, and certificate ARN as CDK
-   context. That leaves the whole cloud assembly—the template, both Go binaries, and
-   that web build—in `infra/cdk.out`.
-8. It records that selected SHA and the synthesized template's SHA-256, then requests
-   an OIDC token and assumes the role `AWS_DEPLOY_ROLE_ARN` names.
-9. It runs `cdk deploy --app cdk.out --role-arn "$AWS_CLOUDFORMATION_EXECUTION_ROLE_ARN"`,
-   which deploys the assembly step 7 verified and synthesizes nothing new.
-10. It writes the stack's generated HTTPS `PublicSiteUrl` output to the GitHub
-    deployment summary.
+4. The `build` job checks out that full SHA and verifies that `git rev-parse HEAD` is the
+   same value. It has `contents: read` and nothing else: no `id-token`, no
+   `production` environment, so no secret and no variable of that environment, and no
+   AWS credential. It builds `web/dist` with `VITE_API_BASE_URL=/`, so the browser stays
+   on the hostname that reached CloudFront for both the page and `/api/*`, then runs
+   `npm run check` with `ens-scout:deferDeploymentIdentifiers=true`. That is
+   `tsc --noEmit`, the assertion suite, and a synth, and it leaves the whole cloud
+   assembly - the template, both Go binaries, and the web build - in `infra/cdk.out`.
+   It packs `cdk.out` into a tar, because the artifact actions save every file as mode
+   644 and the Lambda `bootstrap` binaries would lose their execute bit, reports the
+   tar's SHA-256 as a job output, and uploads it as an artifact kept for one day.
+5. The `deploy` job declares `environment: production`, whose custom deployment branch
+   policy names `main` alone and whose protection rules require no reviewer
+   interaction, and is the only job with `id-token: write`. It checks the six values
+   first, then downloads the assembly tar, compares its hash with the one `build` reported
+   (which protects the transfer only), unpacks it, and validates it. It checks out
+   nothing, restores no cache, and runs no repository code.
+6. The validation step allows only what today's synth produces: the artifact kinds, the
+   agnostic stack environment with no assumed or lookup role, no docker image assets,
+   file asset sources that are relative paths inside `cdk.out` with no `executable`,
+   the bootstrap bucket as the only destination, no symlinks, and a template asset that
+   is the hashed template. `cdk deploy --app` reads the asset manifest, and the schema
+   lets a file source name an `executable` the CLI runs with the credentials in its
+   environment, so without this step the build job could run code in the token job.
+   It records the selected SHA and the template's SHA-256 in the job summary, installs
+   the `aws-cdk` CLI at the exact version `infra/package.json` pins with
+   `--ignore-scripts`, and only then requests an OIDC token and assumes the role
+   `AWS_DEPLOY_ROLE_ARN` names.
+7. It runs `cdk deploy --app cdk.out --role-arn "$AWS_CLOUDFORMATION_EXECUTION_ROLE_ARN"`
+   with the two `--parameters` described below, which deploys the assembly `build`
+   verified and synthesizes nothing new.
+8. It writes the stack's generated HTTPS `PublicSiteUrl` output to the GitHub deployment
+   summary. The CLI's own output goes to a file that is deleted, so nothing but that
+   URL, the commit, and the template hash reaches a log.
 
 The build happens before the credential is obtained, so a failing check costs no AWS
 session at all.
@@ -92,27 +131,56 @@ second time.
 The selected SHA is the single identity used by checkout, verification, the artifact
 summary, and the build that creates that assembly, so a later move of `main` cannot
 change what an already-triggered run deploys.
+Concurrency is one `deploy-production` group for the whole run and never cancels one in
+flight, so two deployments cannot overlap.
 
-That is also why the account, hosted-zone ID, and certificate ARN are supplied at step 7
-rather than at step 9.
-`--app cdk.out` deploys the assembly, and the stack environment is baked into it, so the
-real account has to be present at the synth that produced the artifact.
-`infra/cdk.json` commits `infra/lib/config.ts`'s safe placeholders instead, which let a
-clean clone, every pull-request check, and every test synthesize the stack without the
-real values.
-`npm run check` ends with the synth, so the trailing arguments reach `cdk synth` and
-nothing else; a test asserts that, because a check script reordered to end with the tests
-would send the context to jest and deploy an artifact built against the placeholder.
+### How the account stays out of the assembly
 
-Step 5 compiles both Lambda entrypoints, because every CDK command bundles them
-first, so the Go toolchain is part of what this job produces.
+The stack needs the account, the hosted-zone ID, and the certificate ARN, and the build
+job may hold none of them: environment secrets reach only a job that declares the
+environment, and that job is the one holding the token.
+With `ens-scout:deferDeploymentIdentifiers=true` the stack is environment-agnostic in the
+account, so `cdk deploy` resolves the account from the credentials it runs with, and the
+zone ID and certificate ARN are two required, `NoEcho` CloudFormation parameters,
+`SiteHostedZoneId` and `SiteCertificateArn`, with no default.
+The deploy job supplies them through `--parameters` from its own secrets.
+A deployment that forgot one fails in CloudFormation rather than deploying at a
+placeholder, and the assembly, which is an artifact anyone who can read the repository
+may download, names no account, zone, or certificate.
+`infra/cdk.json` commits the flag false and the safe placeholders, which let a clean
+clone, every pull-request check, and every test synthesize the stack without the real
+values; `lib/deployment.ts` holds the mechanism.
+`npm run check` ends with the synth, so the trailing argument reaches `cdk synth` and
+nothing else; a test asserts that, because a check script reordered to end with the
+tests would send the context to jest and upload an assembly that still named the
+placeholders.
+
+The build job's tests run at the committed context, not the deferred one, so a test
+synthesizes the deferred stack itself and asserts that it names no twelve-digit number,
+declares exactly those two parameters, and differs from the committed-context stack in no
+resource.
+
+Compiling both Lambda entrypoints is part of the `build` job, because every CDK command
+bundles them first, so the Go toolchain is part of what that job produces.
 Every `setup-go` step in `.github/workflows/` therefore pins one exact version rather
 than a channel that resolves to whatever was released most recently, and
 `infra/test/deployment.test.ts` fails when the pins disagree.
-Each Lambda asset hash is the content hash of its binary, so a deploy running a
+Each Lambda asset hash is the content hash of its binary, so a build running a
 compiler no pull request had run would report an update for source nobody changed.
 Raising the pin is a deliberate change, and `AGENTS.md` records what else has to move
 with it.
+
+### What the split does and does not buy
+
+It stops code that runs while building from requesting the token, assuming the deployment
+role, or reading an account value.
+It does not stop the `build` job from handing the `deploy` job a different template: the
+assembly is produced by the job that runs third-party code, and the hash comparison only
+catches a transfer that differs from what `build` reported.
+The validation step closes the way an assembly could run code in the deploy job; it does
+not inspect the template, which is bounded instead.
+What stops a hostile template from becoming account access is the permissions boundary,
+described under the execution role below.
 
 ## Post-deploy smoke sequence
 
@@ -193,7 +261,7 @@ Removing the hop is what makes least privilege reachable here.
 
 ## The two roles
 
-All four applied documents are in `infra/iam/`, as templates.
+The applied documents are in `infra/iam/`, as templates: the two roles' trust and policy documents, the permissions boundary policy, and a transition version of the execution role's policy used once during rollout.
 The applied documents name the account, the execution role, the hosted-zone ID, and the
 immutable GitHub repository identity, so every such position is an explicit `${PLACEHOLDER}`,
 `infra/iam/README.md` says which, and `infra/scripts/render-iam.js` is the one path
@@ -291,12 +359,23 @@ exception is a failing test rather than a quiet widening.
 
 What it deliberately does not hold:
 
-- No `iam:AttachRolePolicy` or `iam:DetachRolePolicy`.
-  The scanner's role gets an inline policy only, so nothing is lost, and the exclusion is
-  what stops this role from attaching `AdministratorAccess` to a role it can also pass to
-  Lambda.
-- No `iam:PutRolePermissionsBoundary`, no policy creation, and no user or access-key
-  creation.
+- No unconditioned grant of the calls that shape a role. `iam:CreateRole`,
+  `iam:PutRolePolicy`, `iam:DeleteRolePolicy`, and `iam:PutRolePermissionsBoundary` are allowed only on
+  `role/EnsScout-prod-*` and only when `iam:PermissionsBoundary` equals the ARN of
+  `EnsScout-prod-PermissionsBoundary`, the customer-managed policy every role in the
+  stack carries as its boundary.
+  A role the template creates without it is refused at creation, and one with it can
+  never be granted more than the boundary allows, so a template that creates a role with
+  `AdministratorAccess` and passes it to Lambda gets a role that can still do nothing but
+  what the stack's own three roles already do.
+- No `iam:AttachRolePolicy` or `iam:DetachRolePolicy`: the stack's roles take inline
+  policies only, and the exclusion stops this role attaching `AdministratorAccess`.
+- No `iam:DeleteRolePermissionsBoundary` in the final policy, so the boundary cannot be
+  removed from a role. The transition policy used for one rollout deploy allows it under
+  the boundary condition, so that deploy can roll back.
+- No policy creation or change and no user or access-key creation, so the boundary policy
+  cannot be edited through this role and no principal outside the stack's roles can be
+  made.
 - One `iam:PassRole`, on `role/EnsScout-prod-*`, conditioned on
   `iam:PassedToService = lambda.amazonaws.com`.
 - Publish, read, and delete versions of only the two AWS CLI layers CDK generates for
@@ -318,6 +397,27 @@ What it deliberately does not hold:
 - No ACM action. The stack supplies the already-issued certificate ARN directly to
   CloudFront and creates, updates, and reads no ACM resource.
 
+### The permissions boundary
+
+`infra/iam/permissions-boundary-policy.template.json` is a customer-managed policy, and
+it costs nothing.
+It allows exactly what the stack's three roles are granted - log writes to the stack's
+log groups, five DynamoDB item calls on its table, read of the CDK asset bucket, and
+read, write, and delete in its private website bucket - and nothing from IAM or STS.
+The stack applies it to every `AWS::IAM::Role` it contains (`lib/ens-scout-stack.ts`),
+the app and the tests alike, and `test/deployment.test.ts` asserts that every role in the
+production template carries it, with and without the deferred identifiers, and that the
+policy is derived from the template's own role policies in both directions.
+The policy is configuration in the account rather than a resource in the stack, because
+a stack that created its own ceiling could raise it.
+`infra/iam/README.md` is the rollout plan for the live account and the order it has to go
+in.
+
+A trust policy cannot be conditioned, so a template can still create a bounded role that
+another principal may assume.
+That role has the boundary's permissions and no more, which is this stack's own table,
+log groups, and buckets.
+
 ## The GitHub configuration
 
 Repository `nbdSteve/ens-scout`.
@@ -326,8 +426,11 @@ Repository `nbdSteve/ens-scout`.
   policy that names `main` alone.
 - Repository OIDC subjects use GitHub's immutable repository identity. The live numeric
   values are not committed; the trust template holds `${GITHUB_REPOSITORY_IDENTITY}`.
-- The six variables above, held on that environment.
-  None is secret by nature, and the workflow refuses to run without them.
+- The five environment secrets and one environment variable above, held on that
+  environment.
+  The workflow refuses to run without them.
+- No repository-level secret.
+  A repository secret would be readable by the build job, which runs third-party code.
 - No Actions secret holds an AWS credential, and there is no AWS access key anywhere in
   the repository or its settings.
   The OIDC token the deploy job requests is the entire credential path, and it is
@@ -337,20 +440,26 @@ Repository `nbdSteve/ens-scout`.
 `main`, and requests no `id-token` at all, so nothing on that path can reach the account.
 Only its successful same-repository `push` run on `main` can supply a deploy SHA; a
 successful pull request, including one from a fork or a branch also named `main`, cannot.
-The checks also need none of the six variables: they synthesize against the committed
+The checks also need none of the six values: they synthesize against the committed
 placeholder account, hosted-zone ID, and certificate ARN.
 
 ## Residual risks
 
 These are accepted rather than closed, and each is a deliberate decision.
 
-1. The execution role can create a role under `EnsScout-prod-*`, put an inline policy on
-   it, and pass it to Lambda, which is a theoretical privilege-escalation path from that
-   role to arbitrary permissions.
-   Reaching it needs a change to the stack definition, a merge to `main`, and a successful
-   `main` checks run; that success now deploys automatically.
-   A permissions boundary on that `iam:PutRolePolicy` grant is the follow-up that would
-   close it properly.
+1. The `build` job can hand the `deploy` job any template, because it produces the
+   assembly while running third-party code.
+   The permissions boundary bounds what such a template can do with IAM: a role it
+   creates carries a ceiling it cannot remove, and the ceiling is this stack's own table,
+   log groups, and buckets.
+   It does not bound the rest of the execution role, which can still change this stack's
+   own resources, so a hostile template could still damage or replace the published site
+   and its data, and could create a bounded role that another account may assume.
+   Closing that needs a trusted source for the template, which is a different design.
+   The actions the deploy job runs, and the CDK CLI it installs, are third-party code
+   too: the CLI is pinned to an exact version with install scripts disabled, and the
+   actions are referenced by major-version tag like every other workflow here, so pinning
+   them to commit SHAs is the follow-up.
 2. The execution role's action set was derived from the committed stack rather than proved
    by a deployment, because this repository does not deploy.
    The first real deployment may therefore surface a missing action.
@@ -362,7 +471,11 @@ These are accepted rather than closed, and each is a deliberate decision.
    repository performs.
 4. The account number, role names, hosted-zone ID, certificate ARN, and live numeric
    GitHub repository identity are absent from the repository. The deployment identifiers
-   are present in the environment's variables, while GitHub itself holds the immutable
+   are present in the environment's secrets, while GitHub itself holds the immutable
    identity used in OIDC subjects.
-   That is the intended trade: it removes them from every clone, every fork, and every
-   search index, and it does not make the account or role names secret.
+   That is the intended trade: it removes them from every clone, every fork, every search
+   index, and every new deploy log, and it does not make the account or role names
+   secret. Runs before this change printed some of them in step headers, and their logs
+   keep them until the logs are deleted.
+5. The deployment role's trust and policy, and the boundary, are applied by hand, so the
+   rollout in `infra/iam/README.md` is manual and its order matters.

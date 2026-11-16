@@ -19,6 +19,7 @@
     "ens-scout:snapshotTtlAttribute": "expires_at",
     "ens-scout:logRetentionDays": 30,
     "ens-scout:dlqRetentionDays": 14,
+    "ens-scout:deferDeploymentIdentifiers": false,
     "@aws-cdk/aws-iam:minimizePolicies": true,
     "@aws-cdk/aws-lambda:recognizeLayerVersion": true,
     "@aws-cdk/aws-lambda:useCdkManagedLogGroup": false,

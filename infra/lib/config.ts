@@ -27,6 +27,7 @@ export const contextKeys = {
   snapshotTtlAttribute: 'ens-scout:snapshotTtlAttribute',
   logRetentionDays: 'ens-scout:logRetentionDays',
   dlqRetentionDays: 'ens-scout:dlqRetentionDays',
+  deferDeploymentIdentifiers: 'ens-scout:deferDeploymentIdentifiers',
 } as const;
 
 /**
@@ -75,6 +76,17 @@ export interface Config {
   readonly snapshotTtlAttribute: string;
   readonly logRetentionDays: number;
   readonly dlqRetentionDays: number;
+  /**
+   * Whether the account, hosted-zone ID, and certificate ARN are left out of the
+   * synthesized assembly and supplied at deployment instead.
+   *
+   * It is what lets the production workflow synthesize in a job that holds no
+   * production environment secret and no AWS credential, and then upload an
+   * assembly that names none of the three. `lib/deployment.ts` owns the mechanism.
+   * It is committed false, so a local synth, the pull-request checks, and every test
+   * keep the committed placeholders.
+   */
+  readonly deferDeploymentIdentifiers: boolean;
   readonly scanTuning: ScanTuning;
 }
 
@@ -154,6 +166,7 @@ export function resolveConfig(scope: Construct): Config {
     snapshotTtlAttribute: requireString(scope, contextKeys.snapshotTtlAttribute),
     logRetentionDays: requireNumber(scope, contextKeys.logRetentionDays),
     dlqRetentionDays: requireNumber(scope, contextKeys.dlqRetentionDays),
+    deferDeploymentIdentifiers: requireBoolean(scope, contextKeys.deferDeploymentIdentifiers),
     scanTuning: defaultScanTuning,
   };
 }
@@ -164,6 +177,25 @@ function requireString(scope: Construct, key: string): string {
     throw new Error(`context key ${key} must be a non-empty string`);
   }
   return value.trim();
+}
+
+/**
+ * requireBoolean reads a flag that has to be stated.
+ *
+ * `cdk ... --context key=true` delivers the string `true`, and cdk.json holds a real
+ * boolean, so both are accepted. Anything else is refused rather than read as false,
+ * because a misspelt `ture` would otherwise synthesize an assembly that still names
+ * the account.
+ */
+function requireBoolean(scope: Construct, key: string): boolean {
+  const value = scope.node.tryGetContext(key);
+  if (value === true || value === 'true') {
+    return true;
+  }
+  if (value === false || value === 'false') {
+    return false;
+  }
+  throw new Error(`context key ${key} must be true or false`);
 }
 
 function requireNumber(scope: Construct, key: string): number {

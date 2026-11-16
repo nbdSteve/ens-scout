@@ -21,6 +21,7 @@ import * as sqs from 'aws-cdk-lib/aws-sqs';
 import { Construct } from 'constructs';
 
 import { Config, contextKeys, functionTimeout } from './config';
+import { deploymentIdentifiers, stackPermissionsBoundary } from './deployment';
 import { PublicSite } from './public-site';
 import { scanSchedules } from './schedules';
 
@@ -80,8 +81,14 @@ export class EnsScoutStack extends Stack {
   readonly publicSite: PublicSite;
 
   constructor(scope: Construct, id: string, props: EnsScoutStackProps) {
-    super(scope, id, props);
+    // The boundary is set here rather than by the caller so no construction of this
+    // stack, in a test or in the app, can produce a role without it.
+    super(scope, id, {
+      ...props,
+      permissionsBoundary: stackPermissionsBoundary(props.config.environmentName),
+    });
     const { config } = props;
+    const identifiers = deploymentIdentifiers(this, config);
 
     // The snapshot store. internal/snapshot owns the key layout and internal/dynamo
     // owns the attribute names; this table has to match both or the publisher writes
@@ -133,6 +140,8 @@ export class EnsScoutStack extends Stack {
     this.scannerFunction = this.createScannerFunction(props, scannerRole);
     this.publicSite = new PublicSite(this, 'PublicSite', {
       config,
+      siteHostedZoneId: identifiers.hostedZoneId,
+      siteCertificateArn: identifiers.certificateArn,
       snapshotTable: this.snapshotTable,
       apiCode: props.apiCode,
       websiteSource: props.websiteSource,

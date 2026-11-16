@@ -283,7 +283,10 @@ describe('the rendered output directory', () => {
         fs.writeFileSync(path.join(outDir, `${name}.json`), document);
       }
       expect(fs.readdirSync(outDir).sort()).toEqual(
-        render.templateNames().map((name: string) => `${name}.json`),
+        // Sorted on the file names, because `a-b.json` sorts before `a.json` where `a`
+        // sorts before `a-b`, and a template whose name extends another's would
+        // otherwise fail an assertion that is about the files, not their order.
+        render.templateNames().map((name: string) => `${name}.json`).sort(),
       );
     } finally {
       fs.rmSync(outDir, { recursive: true, force: true });

@@ -5,23 +5,47 @@
 # it selects the immutable commit at the dispatched main ref and never participates
 # in the automatic path.
 #
-# Three things restrict what it can do, and all three have to hold:
+# The work is split across three jobs, and the split is the security design:
+#
+#   select  resolves the one commit that may deploy. No checkout, no credentials.
+#   build   runs everything third-party: package installs with install scripts, Go
+#           module builds, the web build, the tests, and the synth. It has read-only
+#           contents, no `id-token`, no `production` environment, and so no secret and
+#           no variable of that environment. It uploads the cloud assembly.
+#   deploy  holds the OIDC token and the environment. It downloads the assembly,
+#           validates it against an allowlist, installs the pinned CDK CLI with
+#           install scripts disabled, and deploys from the assembly. It checks out
+#           nothing, restores no cache, and builds and tests nothing.
+#
+# A dependency that is compromised in `build` can therefore no longer request the
+# token, assume the deployment role, or read an account value. What it can still do is
+# hand `deploy` a different assembly. The deploy job's validation step allows only the
+# artifact kinds, asset sources, and destinations today's synth produces, and in
+# particular refuses an asset `source.executable`, which the CDK CLI would run with the
+# credentials in its environment. The template itself is not validated, so the
+# permissions boundary is what keeps a hostile one from reaching the account. Every IAM role the stack creates carries
+# `EnsScout-prod-PermissionsBoundary`, and the CloudFormation execution role may create
+# or change a role only when the request names that policy, so a template can reach
+# nothing the boundary does not allow. `docs/deployment.md` records both halves.
+#
+# Three things restrict what deployment can do, and all three have to hold:
 #
 #   1. The selector admits only a successful push checks run whose head branch is
-#      main and whose head repository is this repository. The deploy job runs only
-#      when that selector returns the upstream run's full head SHA.
+#      main and whose head repository is this repository. The build and deploy jobs
+#      run only when that selector returns the upstream run's full head SHA.
 #   2. The AWS role trusts exactly one subject,
 #      `repo:${GITHUB_REPOSITORY_IDENTITY}:environment:production`, so a token minted by any
 #      other repository, branch, or environment cannot assume it.
 #   3. The role passes exactly one CloudFormation execution role, which is scoped
-#      to this stack's own resources.
+#      to this stack's own resources and may shape a role only under the boundary.
 #
-# Everything this workflow needs to know about the account is a variable on the
-# protected `production` environment, and the deploy job's first step refuses to
-# build anything until all six are present and well formed. Nothing here composes
-# an ARN out of parts, and no step prints a value: the account number and the role
-# names are public facts about a private deployment, and a workflow file and its
-# logs are the two most public places in the repository.
+# Everything this workflow needs to know about the account is a secret or a variable
+# on the protected `production` environment: five secrets and one variable. The deploy
+# job's first step refuses to run anything until all six are present and well formed.
+# Nothing here composes an ARN out of parts, and no step prints a value. A secret in
+# `env:` or `with:` is masked in the step header, which a variable is not, and the
+# credentials step masks the account ID as well, because a workflow file and its logs
+# are the two most public places in the repository.
 #
 # `docs/deployment.md` records the permission sets and what they deliberately
 # exclude. No AWS access key is stored in this repository.
@@ -96,9 +120,113 @@ jobs:
           fi
           echo "deploy_sha=$deploy_sha" >> "$GITHUB_OUTPUT"
 
+  # Everything that runs code this repository did not write. It is deliberately
+  # outside the `production` environment: environment secrets reach only a job that
+  # declares the environment, so nothing here, compromised or not, can read one. It
+  # needs no AWS credential either, because the stack is synthesized with the account,
+  # hosted-zone ID, and certificate ARN left as holes (`lib/deployment.ts` explains how)
+  # that the deploy job fills.
+  build:
+    name: build and verify the artifact
+    needs: select
+    if: needs.select.outputs.deploy_sha != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      assembly_sha256: ${{ steps.assembly.outputs.sha256 }}
+    steps:
+      # Checkout the one full SHA the selector admitted. In the automatic path this
+      # is github.event.workflow_run.head_sha, not the deploy workflow's own SHA and
+      # not a branch that could move after the checks completed.
+      - name: checkout the selected commit
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.select.outputs.deploy_sha }}
+          persist-credentials: false
+
+      - name: verify the selected commit
+        env:
+          DEPLOY_SHA: ${{ needs.select.outputs.deploy_sha }}
+        run: |
+          if [ "$(git rev-parse HEAD)" != "$DEPLOY_SHA" ]; then
+            echo "::error::checkout did not resolve to the selected deploy SHA"
+            exit 1
+          fi
+
+      # cdk.json bundles the scanner before every CDK command, so the Go toolchain is
+      # what produces the artifact this workflow deploys. That is why the version is pinned
+      # rather than floated, and why it is the same pin the checks use: the asset hash
+      # is the content hash of this binary, so a different compiler here would deploy a
+      # Lambda update for source that did not change, and would do it with a toolchain
+      # no pull request had run. checks.yml records the whole reasoning.
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.26.2'
+          cache-dependency-path: go.sum
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            infra/package-lock.json
+            web/package-lock.json
+
+      - run: npm ci
+        working-directory: web
+      - run: npm ci
+        working-directory: infra
+
+      # This is the bundle the CDK synth below packages. A same-origin base of `/`
+      # keeps the browser on whichever hostname reached the CloudFront distribution
+      # for both static files and /api/*, and keeps every Graph and AWS value out of
+      # the Vite environment.
+      - name: build the production website
+        working-directory: web
+        env:
+          VITE_API_BASE_URL: /
+        run: npm run build
+
+      # Build and verify once. `npm run check` is tsc --noEmit, the assertion suite,
+      # and a synth, and the synth leaves the whole cloud assembly in infra/cdk.out.
+      # The deploy job reads that assembly rather than synthesizing again, so the
+      # template and the Lambda bundle that go to AWS are the ones these checks just
+      # passed.
+      #
+      # `ens-scout:deferDeploymentIdentifiers=true` is what keeps this job free of the
+      # account. The trailing argument reaches `cdk synth`, which `npm run check` ends
+      # with, and the assembly it writes is environment-agnostic in the account and
+      # carries the hosted-zone ID and the certificate ARN as two required
+      # CloudFormation parameters, which `deploy` supplies from its own secrets.
+      - name: build and verify the artifact
+        working-directory: infra
+        run: npm run check -- --context "ens-scout:deferDeploymentIdentifiers=true"
+
+      # The artifact actions store every file with mode 644, which would strip the
+      # execute bit from each Lambda `bootstrap` binary before the deploy job zips it.
+      # A tar keeps the modes, so the assembly travels as one.
+      - name: package the cloud assembly
+        id: assembly
+        run: |
+          tar -C infra -cf cdk-assembly.tar cdk.out
+          echo "sha256=$(sha256sum cdk-assembly.tar | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+
+      - name: upload the cloud assembly
+        uses: actions/upload-artifact@v7
+        with:
+          name: cdk-assembly
+          path: cdk-assembly.tar
+          if-no-files-found: error
+          retention-days: 1
+
+  # The only job that may touch AWS. It runs no code from this repository's
+  # dependency graph: no checkout, no cache restore, no package install with scripts,
+  # no build, no test. Its inputs are the assembly `build` uploaded, which is data the
+  # build job controls and is validated before the CLI reads it, and one pinned CLI.
   deploy:
     name: deploy to ap-southeast-2
-    needs: select
+    needs: [select, build]
     if: needs.select.outputs.deploy_sha != ''
     runs-on: ubuntu-latest
     environment: production
@@ -108,28 +236,28 @@ jobs:
       # this job alone.
       id-token: write
     steps:
-      # The six values this job needs from the account, checked before it builds or
-      # deploys anything. It is first for two reasons: a value that is absent or
-      # mistyped then costs no checkout, no toolchain, and no synth, and it fails
-      # where the reason is legible rather than part-way through a CDK command or,
-      # worse, inside a deployment that has already started changing the stack.
+      # The six values this job needs from the account, checked before it does anything
+      # else, so a value that is absent or mistyped fails where the reason is legible
+      # rather than part-way through a CDK command or, worse, inside a deployment that
+      # has already started changing the stack.
       #
+      # Five are environment secrets and one, the region, is an environment variable.
       # Only names are printed, never values. This log is readable by anyone who can
       # read the repository.
       #
-      # The two ARNs are supplied whole rather than assembled from an account and a
+      # The two role ARNs are supplied whole rather than assembled from an account and a
       # role name. Composing one here would put a role name back in this file, and it
-      # would also mean a variable could disagree with the ARN this workflow built
-      # from it; a full ARN is checked against the account instead, so all six
-      # variables have to agree with each other before anything runs.
+      # would also mean a value could disagree with the ARN this workflow built from it;
+      # a full ARN is checked against the account instead, so all six values have to
+      # agree with each other before anything runs.
       - name: require the deployment configuration
         env:
-          AWS_ACCOUNT_ID: ${{ vars.AWS_ACCOUNT_ID }}
+          AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
           AWS_REGION: ${{ vars.AWS_REGION }}
-          AWS_DEPLOY_ROLE_ARN: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
-          AWS_CLOUDFORMATION_EXECUTION_ROLE_ARN: ${{ vars.AWS_CLOUDFORMATION_EXECUTION_ROLE_ARN }}
-          AWS_ROUTE53_HOSTED_ZONE_ID: ${{ vars.AWS_ROUTE53_HOSTED_ZONE_ID }}
-          AWS_ACM_CERTIFICATE_ARN: ${{ vars.AWS_ACM_CERTIFICATE_ARN }}
+          AWS_DEPLOY_ROLE_ARN: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          AWS_CLOUDFORMATION_EXECUTION_ROLE_ARN: ${{ secrets.AWS_CLOUDFORMATION_EXECUTION_ROLE_ARN }}
+          AWS_ROUTE53_HOSTED_ZONE_ID: ${{ secrets.AWS_ROUTE53_HOSTED_ZONE_ID }}
+          AWS_ACM_CERTIFICATE_ARN: ${{ secrets.AWS_ACM_CERTIFICATE_ARN }}
           # infra/lib/config.ts `placeholderAccount`, which infra/cdk.json commits so
           # a clean clone can synthesize. Deploying with it would be a deployment
           # aimed at nothing.
@@ -138,7 +266,7 @@ jobs:
           missing=0
           for name in AWS_ACCOUNT_ID AWS_REGION AWS_DEPLOY_ROLE_ARN AWS_CLOUDFORMATION_EXECUTION_ROLE_ARN AWS_ROUTE53_HOSTED_ZONE_ID AWS_ACM_CERTIFICATE_ARN; do
             if [ -z "${!name}" ]; then
-              echo "::error::variable $name is not set on the production environment"
+              echo "::error::$name is not set on the production environment"
               missing=1
             fi
           done
@@ -178,84 +306,145 @@ jobs:
             echo "::error::AWS_DEPLOY_ROLE_ARN and AWS_CLOUDFORMATION_EXECUTION_ROLE_ARN name one role"
             exit 1
           fi
-          echo "the six production deployment variables are present and consistent"
+          echo "the six production deployment values are present and consistent"
 
-      # Checkout the one full SHA the selector admitted. In the automatic path this
-      # is github.event.workflow_run.head_sha, not the deploy workflow's own SHA and
-      # not a branch that could move after the checks completed.
-      - name: checkout the selected commit
-        uses: actions/checkout@v7
+      # The assembly is scoped to this run, so it is the one `build` produced for the
+      # selected commit. Its tar hash is compared with the one `build` reported, which
+      # protects the transfer only: a build job that was compromised reports the hash of
+      # whatever it uploaded, so this is not a check on the content. The content is
+      # checked by the validation step below and bounded by the permissions boundary.
+      - name: download the cloud assembly
+        uses: actions/download-artifact@v8
         with:
-          ref: ${{ needs.select.outputs.deploy_sha }}
-          persist-credentials: false
+          name: cdk-assembly
+          path: assembly
 
-      - name: verify the selected commit
+      - name: verify and unpack the downloaded assembly
         env:
-          DEPLOY_SHA: ${{ needs.select.outputs.deploy_sha }}
+          EXPECTED_ASSEMBLY_SHA256: ${{ needs.build.outputs.assembly_sha256 }}
         run: |
-          if [ "$(git rev-parse HEAD)" != "$DEPLOY_SHA" ]; then
-            echo "::error::checkout did not resolve to the selected deploy SHA"
+          actual="$(sha256sum assembly/cdk-assembly.tar | cut -d' ' -f1)"
+          if [ -z "$EXPECTED_ASSEMBLY_SHA256" ] || [ "$actual" != "$EXPECTED_ASSEMBLY_SHA256" ]; then
+            echo "::error::the downloaded assembly is not the one the build job reported"
             exit 1
           fi
+          tar -xf assembly/cdk-assembly.tar --no-same-owner
+          # The Lambda handlers have to keep their execute bit through the tar; a copy
+          # that lost it would deploy two functions that cannot start.
+          for handler in cdk.out/asset.*/bootstrap; do
+            if [ -e "$handler" ] && [ ! -x "$handler" ]; then
+              echo "::error::a Lambda bootstrap binary lost its execute bit"
+              exit 1
+            fi
+          done
 
-      # cdk.json bundles the scanner before every CDK command, so the Go toolchain is
-      # what produces the artifact this job deploys. That is why the version is pinned
-      # rather than floated, and why it is the same pin the checks use: the asset hash
-      # is the content hash of this binary, so a different compiler here would deploy a
-      # Lambda update for source that did not change, and would do it with a toolchain
-      # no pull request had run. checks.yml records the whole reasoning.
-      - uses: actions/setup-go@v7
-        with:
-          go-version: '1.26.2'
-          cache-dependency-path: go.sum
+      # The assembly is data the build job controls, and `cdk deploy --app cdk.out` acts
+      # on it with the credentials from the step below in its environment. The asset
+      # schema lets a file source name an `executable` the CLI would run, so only the
+      # artifact kinds, asset sources, and destinations that today's synth produces are
+      # accepted, and anything else fails before the CLI starts. A stack environment or
+      # role field is refused for the same reason: it would send the CLI to assume a role
+      # of the template's choosing.
+      - name: validate the cloud assembly
+        run: |
+          node - <<'EOF'
+          const fs = require('fs');
+          const path = require('path');
+          const crypto = require('crypto');
+          const root = path.resolve('cdk.out');
+          const stack = 'EnsScout-prod';
+          const bucket = 'cdk-hnb659fds-assets-${AWS::AccountId}-ap-southeast-2';
+          const region = 'ap-southeast-2';
+          function fail(message) {
+            console.error(`::error::the cloud assembly is not acceptable: ${message}`);
+            process.exit(1);
+          }
+          function keys(object, allowed, what) {
+            if (object === null || typeof object !== 'object' || Array.isArray(object)) {
+              fail(`${what} is not an object`);
+            }
+            for (const key of Object.keys(object)) {
+              if (!allowed.includes(key)) fail(`${what} has the field ${key}`);
+            }
+          }
+          function read(name) {
+            return JSON.parse(fs.readFileSync(path.join(root, name), 'utf8'));
+          }
+          function walk(directory) {
+            for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+              const full = path.join(directory, entry.name);
+              if (entry.isSymbolicLink()) fail('it contains a symbolic link');
+              if (entry.isDirectory()) walk(full);
+            }
+          }
+          walk(root);
 
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: |
-            infra/package-lock.json
-            web/package-lock.json
+          const manifest = read('manifest.json');
+          keys(manifest, ['version', 'artifacts', 'minimumCliVersion'], 'the manifest');
+          const kinds = {
+            'cdk:asset-manifest': [stack + '.assets'],
+            'aws:cloudformation:stack': [stack],
+            'cdk:tree': ['Tree'],
+            'cdk:feature-flag-report': ['aws-cdk-lib/feature-flag-report'],
+          };
+          const seen = new Set();
+          for (const [id, artifact] of Object.entries(manifest.artifacts)) {
+            const allowedIds = kinds[artifact.type];
+            if (!allowedIds || !allowedIds.includes(id)) fail(`artifact ${id} is not an expected one`);
+            seen.add(artifact.type);
+            if (artifact.type === 'aws:cloudformation:stack') {
+              keys(artifact, ['type', 'environment', 'properties', 'dependencies', 'additionalMetadataFile', 'displayName'], id);
+              if (artifact.environment !== `aws://unknown-account/${region}`) fail('the stack environment is not the agnostic one');
+              keys(artifact.properties, ['templateFile', 'terminationProtection', 'tags', 'validateOnSynth', 'stackTemplateAssetObjectUrl', 'additionalDependencies'], 'the stack properties');
+              if (artifact.properties.templateFile !== stack + '.template.json') fail('the template file is not the stack template');
+            } else if (artifact.type === 'cdk:asset-manifest') {
+              keys(artifact, ['type', 'properties'], id);
+              keys(artifact.properties, ['file'], 'the asset manifest properties');
+              if (artifact.properties.file !== stack + '.assets.json') fail('the asset file is not the stack assets');
+            }
+          }
+          for (const type of ['aws:cloudformation:stack', 'cdk:asset-manifest']) {
+            if (!seen.has(type)) fail(`there is no ${type} artifact`);
+          }
 
-      - run: npm ci
-        working-directory: web
-      - run: npm ci
-        working-directory: infra
+          const template = fs.readFileSync(path.join(root, stack + '.template.json'));
+          const templateKey = crypto.createHash('sha256').update(template).digest('hex') + '.json';
+          if (manifest.artifacts[stack].properties.stackTemplateAssetObjectUrl !== `s3://${bucket}/${templateKey}`) {
+            fail('the template asset URL is not the hashed template');
+          }
 
-      # This is the bundle the CDK synth below packages. A same-origin base of `/`
-      # keeps the browser on whichever hostname reached the CloudFront distribution
-      # for both static files and /api/*, and keeps every Graph and AWS value out of
-      # the Vite environment.
-      - name: build the production website
-        working-directory: web
-        env:
-          VITE_API_BASE_URL: /
-        run: npm run build
-
-      # Build and verify once. `npm run check` is tsc --noEmit, the assertion suite,
-      # and a synth, and the synth leaves the whole cloud assembly in infra/cdk.out.
-      # The deploy step below reads that assembly rather than synthesizing again, so
-      # the template and the Lambda bundle that go to AWS are the ones these checks
-      # just passed. The bundle is reproducible, so a second synth would produce the
-      # same bytes - but "would" is not the same as "did", and this is the step that
-      # makes it the same artifact rather than an equal one.
-      #
-      # The account is supplied here, and only here, because it is a property of the
-      # artifact rather than of the deploy command: `--app cdk.out` deploys the
-      # assembly this step produced, and the stack environment is baked into it. The
-      # trailing arguments reach `cdk synth`, which `npm run check` ends with, so the
-      # assembly the assertion suite just verified is the one carrying the real
-      # account. Everything else stays in infra/cdk.json.
-      - name: build and verify the artifact
-        working-directory: infra
-        env:
-          AWS_ACCOUNT_ID: ${{ vars.AWS_ACCOUNT_ID }}
-          AWS_ROUTE53_HOSTED_ZONE_ID: ${{ vars.AWS_ROUTE53_HOSTED_ZONE_ID }}
-          AWS_ACM_CERTIFICATE_ARN: ${{ vars.AWS_ACM_CERTIFICATE_ARN }}
-        run: npm run check -- --context "ens-scout:account=$AWS_ACCOUNT_ID" --context "ens-scout:siteHostedZoneId=$AWS_ROUTE53_HOSTED_ZONE_ID" --context "ens-scout:siteCertificateArn=$AWS_ACM_CERTIFICATE_ARN"
+          const assets = read(stack + '.assets.json');
+          keys(assets, ['version', 'files', 'dockerImages'], 'the assets');
+          if (assets.dockerImages !== undefined && Object.keys(assets.dockerImages).length !== 0) fail('it has docker image assets');
+          let templateAssets = 0;
+          for (const [hash, file] of Object.entries(assets.files)) {
+            keys(file, ['displayName', 'source', 'destinations'], `asset ${hash}`);
+            keys(file.source, ['path', 'packaging'], `the source of ${hash}`);
+            const source = file.source.path;
+            if (typeof source !== 'string' || source === '' || path.isAbsolute(source) || source.split(/[\\/]/).includes('..')) {
+              fail(`the source of ${hash} is not a relative path inside the assembly`);
+            }
+            const resolved = path.resolve(root, source);
+            if (!resolved.startsWith(root + path.sep) || !fs.existsSync(resolved)) fail(`the source of ${hash} is missing or outside the assembly`);
+            if (!['zip', 'file'].includes(file.source.packaging)) fail(`the packaging of ${hash} is not zip or file`);
+            const destinations = Object.values(file.destinations);
+            if (destinations.length === 0) fail(`${hash} has no destination`);
+            for (const destination of destinations) {
+              keys(destination, ['bucketName', 'objectKey', 'region'], `a destination of ${hash}`);
+              if (destination.bucketName !== bucket) fail(`a destination of ${hash} is not the bootstrap asset bucket`);
+              if (destination.region !== region) fail(`a destination of ${hash} is in another region`);
+              if (typeof destination.objectKey !== 'string' || !destination.objectKey.startsWith(hash + '.')) fail(`a destination key of ${hash} is not its hash`);
+            }
+            if (source === stack + '.template.json') {
+              templateAssets += 1;
+              if (hash + '.json' !== templateKey || file.source.packaging !== 'file') fail('the template asset is not the hashed template');
+            }
+          }
+          if (templateAssets !== 1) fail('there is not exactly one template asset');
+          console.log('the cloud assembly holds only the expected artifacts and assets');
+          EOF
 
       - name: record what is about to be deployed
-        working-directory: infra
         env:
           DEPLOY_SHA: ${{ needs.select.outputs.deploy_sha }}
         run: |
@@ -267,16 +456,46 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
+      # No cache and no repository: nothing a build job could have planted is restored
+      # here, and no package.json is in view for setup-node to act on.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          package-manager-cache: false
+
+      # The CDK CLI is the one piece of third-party code this job has to run, so it is
+      # pinned to an exact version, installed with lifecycle scripts disabled, and
+      # installed before any credential exists. `test/deployment.test.ts` fails if this
+      # version is not the `aws-cdk` version infra/package.json pins.
+      - name: install the pinned CDK CLI
+        env:
+          CDK_CLI_VERSION: '2.1139.0'
+        run: |
+          npm install --prefix "$RUNNER_TEMP/cdk-cli" --ignore-scripts --no-audit --no-fund --save-exact "aws-cdk@$CDK_CLI_VERSION"
+          installed="$("$RUNNER_TEMP/cdk-cli/node_modules/.bin/cdk" --version)"
+          case "$installed" in
+            "$CDK_CLI_VERSION "*) ;;
+            *)
+              echo "::error::the installed CDK CLI is not the pinned version"
+              exit 1
+              ;;
+          esac
+          echo "$RUNNER_TEMP/cdk-cli/node_modules/.bin" >> "$GITHUB_PATH"
+
       - name: assume the deployment role
         uses: aws-actions/configure-aws-credentials@v6
         with:
-          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION }}
           audience: sts.amazonaws.com
+          # The account ID is a secret, so GitHub masks it everywhere; this masks it in
+          # the action's own output as well, which is where an account ID otherwise
+          # appears in a log, because the action does not mask it by default.
+          mask-aws-account-id: true
           # The role's trust policy already pins the account, so this is a second,
-          # local statement of the same fact: a variable edited to name another
+          # local statement of the same fact: a secret edited to name another
           # account's role fails here instead of somewhere inside a deployment.
-          allowed-account-ids: ${{ vars.AWS_ACCOUNT_ID }}
+          allowed-account-ids: ${{ secrets.AWS_ACCOUNT_ID }}
           role-session-name: ens-scout-deploy-${{ github.run_id }}
 
       # `--app cdk.out` deploys the assembly built above and synthesizes nothing new.
@@ -286,31 +505,38 @@ jobs:
       # this job's own role needs no permission over DynamoDB, Lambda, IAM, or
       # anything else the stack contains. It is also the only role the deployment
       # role is permitted to pass, and only to CloudFormation. That is the tie the
-      # variable has to honour: the deployment role's `iam:PassRole` names one role,
+      # secret has to honour: the deployment role's `iam:PassRole` names one role,
       # so an ARN naming any other one is denied here rather than widened there.
+      #
+      # The two `--parameters` fill the holes the build left: the hosted-zone ID and
+      # the certificate ARN. Both parameters are NoEcho, and the command's output goes
+      # to a file that is deleted, so neither reaches a log.
       #
       # `--require-approval never` answers the CLI's own prompt about IAM changes,
       # which cannot participate in an unattended automatic deployment.
       - name: deploy
-        working-directory: infra
         env:
-          AWS_CLOUDFORMATION_EXECUTION_ROLE_ARN: ${{ vars.AWS_CLOUDFORMATION_EXECUTION_ROLE_ARN }}
+          AWS_CLOUDFORMATION_EXECUTION_ROLE_ARN: ${{ secrets.AWS_CLOUDFORMATION_EXECUTION_ROLE_ARN }}
+          AWS_ROUTE53_HOSTED_ZONE_ID: ${{ secrets.AWS_ROUTE53_HOSTED_ZONE_ID }}
+          AWS_ACM_CERTIFICATE_ARN: ${{ secrets.AWS_ACM_CERTIFICATE_ARN }}
         run: |
           deploy_log="$(mktemp)"
           trap 'rm -f "$deploy_log"' EXIT
-          if ! npx cdk deploy EnsScout-prod \
+          if ! cdk deploy EnsScout-prod \
               --app cdk.out \
               --role-arn "$AWS_CLOUDFORMATION_EXECUTION_ROLE_ARN" \
+              --parameters "EnsScout-prod:SiteHostedZoneId=$AWS_ROUTE53_HOSTED_ZONE_ID" \
+              --parameters "EnsScout-prod:SiteCertificateArn=$AWS_ACM_CERTIFICATE_ARN" \
               --require-approval never \
               --progress errors-only \
               --no-color \
+              --no-notices \
               --outputs-file cdk-outputs.json >"$deploy_log" 2>&1; then
             echo "::error::CDK deployment failed; inspect the protected production stack events"
             exit 1
           fi
 
       - name: publish the generated site URL
-        working-directory: infra
         run: |
           site_url="$(node -e "
             const outputs = require('./cdk-outputs.json');

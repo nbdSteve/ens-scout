@@ -39,6 +39,10 @@ export const viewerAddressHeader = 'CloudFront-Viewer-Address';
 
 export interface PublicSiteProps {
   readonly config: Config;
+  /** The existing public hosted zone ID: the context value, or a deferred parameter. */
+  readonly siteHostedZoneId: string;
+  /** The existing us-east-1 viewer certificate ARN: the context value, or a deferred parameter. */
+  readonly siteCertificateArn: string;
   readonly snapshotTable: dynamodb.Table;
   readonly apiCode: lambda.Code;
   readonly websiteSource: s3deploy.ISource;
@@ -230,7 +234,7 @@ export class PublicSite extends Construct {
     const viewerCertificate = acm.Certificate.fromCertificateArn(
       this,
       'ViewerCertificate',
-      props.config.siteCertificateArn,
+      props.siteCertificateArn,
     );
     this.distribution = new cloudfront.Distribution(this, 'Distribution', {
       comment: `ENS Scout ${props.config.environmentName}`,
@@ -261,7 +265,7 @@ export class PublicSite extends Construct {
     });
 
     const hostedZone = route53.HostedZone.fromHostedZoneAttributes(this, 'HostedZone', {
-      hostedZoneId: props.config.siteHostedZoneId,
+      hostedZoneId: props.siteHostedZoneId,
       zoneName: props.config.siteHostedZoneName,
     });
     const recordName = props.config.siteDomainName.slice(

@@ -6,7 +6,13 @@ import * as path from 'path';
 import * as cdk from 'aws-cdk-lib';
 
 import { placeholderAccount, resolveConfig } from '../lib/config';
-import { assetBucketName, bootstrapQualifier, deploymentSynthesizer } from '../lib/deployment';
+import {
+  assetBucketName,
+  bootstrapQualifier,
+  deploymentParameterNames,
+  deploymentSynthesizer,
+  permissionsBoundaryName,
+} from '../lib/deployment';
 import { EnsScoutStack } from '../lib/ens-scout-stack';
 import {
   asList,
@@ -65,6 +71,7 @@ const assetBucket = assetBucketName(config.account, config.region);
 const exampleValues: Record<string, string> = render.exampleValues();
 const executionRoleArn = `arn:aws:iam::${config.account}:role/${exampleValues.CLOUDFORMATION_EXECUTION_ROLE_NAME}`;
 const exampleRepositoryIdentity = 'nbdSteve@1/ens-scout@2';
+const boundaryArn = `arn:aws:iam::${config.account}:policy/${permissionsBoundaryName(config.environmentName)}`;
 
 /**
  * The subject the deployment role trusts. It is a literal here on purpose: the point
@@ -393,21 +400,72 @@ describe('the CloudFormation execution role', () => {
     expect(asList(trust[0].Action)).toEqual(['sts:AssumeRole']);
   });
 
-  test('can attach no managed policy to the role it creates', () => {
-    // The stack gives every Lambda role an inline policy only, so nothing is lost, and the
-    // exclusion is what stops this role from attaching AdministratorAccess to a role
-    // it may also pass to Lambda.
+  test('shapes a role only under the permissions boundary', () => {
+    // The calls that give a role its permissions, or change what limits them, are
+    // allowed only when the request names the boundary policy. Without the condition a
+    // template could create a role with an administrator policy and pass it to Lambda.
+    const bounded = statementNamed(policy, 'ShapeStackLambdaRolesOnlyUnderThePermissionsBoundary');
+    expect(asList(bounded.Action).sort()).toEqual([
+      'iam:CreateRole',
+      'iam:DeleteRolePolicy',
+      'iam:PutRolePermissionsBoundary',
+      'iam:PutRolePolicy',
+    ]);
+    expect(bounded.Effect).toBe('Allow');
+    expect(bounded.Resource).toBe(`arn:aws:iam::${config.account}:role/${stackName}-*`);
+    expect(bounded.Condition).toEqual({
+      StringEquals: { 'iam:PermissionsBoundary': boundaryArn },
+    });
+  });
+
+  test('grants each boundary-conditioned action nowhere else', () => {
+    // A second, unconditioned grant of any of them would make the condition above
+    // decoration.
+    const conditioned = new Set([
+      'iam:CreateRole',
+      'iam:DeleteRolePolicy',
+      'iam:PutRolePermissionsBoundary',
+      'iam:PutRolePolicy',
+    ]);
+    for (const statement of policy) {
+      const granted = (asList(statement.Action) as string[]).filter((action) =>
+        conditioned.has(action),
+      );
+      if (statement.Sid === 'ShapeStackLambdaRolesOnlyUnderThePermissionsBoundary') {
+        expect(granted).toHaveLength(conditioned.size);
+      } else {
+        expect(granted).toEqual([]);
+      }
+    }
+  });
+
+  test('attaches no managed policy, can never remove a boundary, and can create no policy, user, or access key', () => {
     for (const excluded of [
       'iam:AttachRolePolicy',
       'iam:DetachRolePolicy',
-      'iam:PutRolePermissionsBoundary',
+      'iam:DeleteRolePermissionsBoundary',
       'iam:CreatePolicy',
       'iam:CreatePolicyVersion',
+      'iam:SetDefaultPolicyVersion',
+      'iam:DeletePolicy',
+      'iam:DeletePolicyVersion',
       'iam:CreateUser',
       'iam:CreateAccessKey',
+      'iam:PutUserPolicy',
+      'iam:PutUserPermissionsBoundary',
+      'iam:AttachUserPolicy',
     ]) {
       expect(actions(policy)).not.toContain(excluded);
     }
+    expect(actions(policy).filter((action) => action.startsWith('iam:'))).not.toContain('iam:*');
+  });
+
+  test('names the boundary policy the stack applies, in this account', () => {
+    expect(boundaryArn).toBe(
+      `arn:aws:iam::${config.account}:policy/${permissionsBoundaryName(config.environmentName)}`,
+    );
+    const source = render.readTemplate('cloudformation-execution-role-policy');
+    expect(source).toContain(`policy/${permissionsBoundaryName(config.environmentName)}`);
   });
 
   test('passes the stack Lambda roles to Lambda alone', () => {
@@ -676,9 +734,341 @@ describe('synthesis under the deployment synthesizer', () => {
   });
 });
 
+interface SynthesizedResource {
+  readonly Type?: string;
+  readonly Properties?: Record<string, unknown>;
+}
+
+/**
+ * synthesizeProduction builds the stack the way `bin/ens-scout.ts` does, at the
+ * committed context, with the deployment synthesizer and the fixture assets.
+ */
+function synthesizeProduction(deferred: boolean): {
+  readonly resources: Record<string, SynthesizedResource>;
+  readonly parameters: Record<string, unknown>;
+  readonly serialized: string;
+  readonly environment: { readonly account: string; readonly region: string };
+  readonly directory: string;
+} {
+  const productionConfig = {
+    ...resolveConfig(new cdk.App({ context: committedContext })),
+    deferDeploymentIdentifiers: deferred,
+  };
+  const productionApp = new cdk.App({ context: committedContext });
+  const website = fixtureWebsiteSources();
+  new EnsScoutStack(productionApp, stackName, {
+    config: productionConfig,
+    scannerCode: fixtureCode(),
+    apiCode: fixtureApiCode(),
+    websiteSource: website.site,
+    websiteAssetsSource: website.assets,
+    env: deferred
+      ? { region: productionConfig.region }
+      : { account: productionConfig.account, region: productionConfig.region },
+    synthesizer: deploymentSynthesizer(),
+  });
+  const assembly = productionApp.synth();
+  const stackArtifact = assembly.getStackByName(stackName);
+  const template = stackArtifact.template as {
+    Resources?: Record<string, SynthesizedResource>;
+    Parameters?: Record<string, unknown>;
+  };
+  return {
+    resources: template.Resources ?? {},
+    parameters: template.Parameters ?? {},
+    serialized: fs.readFileSync(path.join(assembly.directory, stackArtifact.templateFile), 'utf8'),
+    environment: stackArtifact.environment,
+    directory: assembly.directory,
+  };
+}
+
+/**
+ * accountShapedRun is a twelve-digit run that is not part of a longer hex string, which
+ * is what an asset hash is: a content hash can contain twelve decimal digits in a row
+ * by chance, and an account number never sits inside one.
+ */
+const accountShapedRun = /(?<![0-9a-f])[0-9]{12}(?![0-9a-f])/;
+
+/** actionMatches reports whether an IAM action pattern with `*` covers an action. */
+function actionMatches(pattern: string, action: string): boolean {
+  const expression = new RegExp(
+    `^${pattern.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*')}$`,
+    'i',
+  );
+  return expression.test(action);
+}
+
+describe('the permissions boundary', () => {
+  const boundary = statements('permissions-boundary-policy');
+  const boundaryActions = actions(boundary);
+  const production = synthesizeProduction(false);
+  const roles = Object.entries(production.resources).filter(
+    ([, resource]) => resource.Type === 'AWS::IAM::Role',
+  );
+
+  /** The actions every inline policy attached to one synthesized role grants. */
+  function grantedTo(roleLogicalId: string): string[] {
+    return Object.values(production.resources)
+      .filter((resource) => resource.Type === 'AWS::IAM::Policy')
+      .filter((resource) =>
+        (resource.Properties?.Roles as { Ref?: string }[]).some(
+          (role) => role.Ref === roleLogicalId,
+        ),
+      )
+      .flatMap((resource) => {
+        const document = resource.Properties?.PolicyDocument as { Statement: Statement[] };
+        return actions(document.Statement);
+      });
+  }
+
+  test('is carried by every IAM role in the production template', () => {
+    expect(roles.map(([logicalId]) => logicalId).sort()).toEqual([
+      'PublicSiteApiRole6575B2D4',
+      'PublicSiteWebsiteDeploymentRole67F56037',
+      'ScannerRole81F9E458',
+    ]);
+    for (const [logicalId, role] of roles) {
+      // The ARN is a join of the partition, the account, and the policy name, so it
+      // is compared as the string CloudFormation resolves it to.
+      const arn = JSON.stringify(role.Properties?.PermissionsBoundary);
+      expect(arn).toContain(`:policy/${permissionsBoundaryName(config.environmentName)}"`);
+      expect(arn).toContain('"Ref":"AWS::Partition"');
+      expect({ logicalId, boundary: role.Properties?.PermissionsBoundary }).toEqual({
+        logicalId,
+        boundary: {
+          'Fn::Join': [
+            '',
+            [
+              'arn:',
+              { Ref: 'AWS::Partition' },
+              `:iam::${config.account}:policy/${permissionsBoundaryName(config.environmentName)}`,
+            ],
+          ],
+        },
+      });
+    }
+  });
+
+  test('is carried by every IAM role when the identifiers are deferred, with no account in it', () => {
+    const deferred = synthesizeProduction(true);
+    const deferredRoles = Object.entries(deferred.resources).filter(
+      ([, resource]) => resource.Type === 'AWS::IAM::Role',
+    );
+    expect(deferredRoles).toHaveLength(roles.length);
+    for (const [, role] of deferredRoles) {
+      expect(role.Properties?.PermissionsBoundary).toEqual({
+        'Fn::Join': [
+          '',
+          [
+            'arn:',
+            { Ref: 'AWS::Partition' },
+            ':iam::',
+            { Ref: 'AWS::AccountId' },
+            `:policy/${permissionsBoundaryName(config.environmentName)}`,
+          ],
+        ],
+      });
+    }
+  });
+
+  test('is named by the stack and the committed templates alike', () => {
+    expect(permissionsBoundaryName('prod')).toBe('EnsScout-prod-PermissionsBoundary');
+    expect(permissionsBoundaryName(config.environmentName).startsWith(`${stackName}-`)).toBe(true);
+    for (const name of [
+      'cloudformation-execution-role-policy',
+      'cloudformation-execution-role-policy-transition',
+    ]) {
+      const document = statements(name).find(
+        (statement) => statement.Condition?.StringEquals?.['iam:PermissionsBoundary'] !== undefined,
+      );
+      expect(document?.Condition?.StringEquals?.['iam:PermissionsBoundary']).toBe(boundaryArn);
+    }
+  });
+
+  test.each(roles.map(([logicalId]) => [logicalId]))(
+    'allows every action %s is granted, because it is derived from the stack',
+    (logicalId) => {
+      const granted = grantedTo(logicalId);
+      expect(granted.length).toBeGreaterThan(0);
+      for (const action of granted) {
+        expect(boundaryActions.some((pattern) => actionMatches(pattern, action))).toBe(true);
+      }
+    },
+  );
+
+  test('allows nothing a role of this stack does not use', () => {
+    // A boundary wider than the stack is a bound that bounds nothing. Every action in
+    // it has to be one some synthesized role is actually granted, matched as a pattern
+    // in either direction because a role grants `s3:GetObject*` where a boundary names
+    // the same family.
+    const everyGrant = roles.flatMap(([logicalId]) => grantedTo(logicalId));
+    for (const pattern of boundaryActions) {
+      expect(everyGrant.some((action) => actionMatches(pattern, action) || actionMatches(action, pattern))).toBe(true);
+    }
+  });
+
+  test('holds no IAM, STS, or wildcard-service grant and no unscoped resource', () => {
+    for (const statement of boundary) {
+      expect(statement.Effect).toBe('Allow');
+      for (const action of asList(statement.Action) as string[]) {
+        expect(action).toMatch(/^(logs|dynamodb|s3):[A-Za-z*]+$/);
+        expect(action).not.toMatch(/^[a-z0-9]+:\*$/);
+      }
+      for (const resource of asList(statement.Resource) as string[]) {
+        expect(resource).not.toBe('*');
+        expect(resource).toMatch(
+          new RegExp(
+            `(${stackName}-|:ensscout-${config.environmentName}-|${assetBucket})`,
+          ),
+        );
+      }
+    }
+  });
+
+  test('scopes the asset and website buckets to the names the synthesizer and the stack use', () => {
+    const assets = statementNamed(boundary, 'ReadTheStackAssets');
+    expect(asList(assets.Resource)).toEqual([
+      `arn:aws:s3:::${assetBucket}`,
+      `arn:aws:s3:::${assetBucket}/*`,
+    ]);
+    const website = statementNamed(boundary, 'CopyTheWebsiteIntoItsPrivateBucket');
+    expect(asList(website.Resource)).toEqual([
+      `arn:aws:s3:::ensscout-${config.environmentName}-*`,
+      `arn:aws:s3:::ensscout-${config.environmentName}-*/*`,
+    ]);
+  });
+});
+
+describe('the transition execution role policy', () => {
+  const finalPolicy = statements('cloudformation-execution-role-policy');
+  const transition = statements('cloudformation-execution-role-policy-transition');
+  const isRoleStatement = (statement: Statement) =>
+    (asList(statement.Resource) as string[]).some((resource) =>
+      resource.includes(`:role/${stackName}-*`),
+    ) && !(asList(statement.Action) as string[]).includes('iam:PassRole');
+
+  test('differs from the final policy only in the role statements', () => {
+    // Every other grant is the same document, so the transition cannot quietly carry
+    // a permission the final policy dropped.
+    expect(transition.filter((statement) => !isRoleStatement(statement))).toEqual(
+      finalPolicy.filter((statement) => !isRoleStatement(statement)),
+    );
+  });
+
+  test('keeps today role grants and adds only the boundary-conditioned PutRolePermissionsBoundary', () => {
+    const roleStatements = transition.filter(isRoleStatement);
+    const unconditioned = roleStatements.filter((statement) => statement.Condition === undefined);
+    expect(unconditioned).toHaveLength(1);
+    expect(asList(unconditioned[0].Action)).toEqual(
+      expect.arrayContaining(['iam:CreateRole', 'iam:PutRolePolicy', 'iam:DeleteRolePolicy']),
+    );
+    expect(asList(unconditioned[0].Action)).not.toContain('iam:PutRolePermissionsBoundary');
+    expect(asList(unconditioned[0].Action)).not.toContain('iam:AttachRolePolicy');
+
+    const conditioned = roleStatements.filter((statement) => statement.Condition !== undefined);
+    expect(conditioned).toHaveLength(1);
+    expect(asList(conditioned[0].Action)).toEqual([
+      'iam:PutRolePermissionsBoundary',
+      'iam:DeleteRolePermissionsBoundary',
+    ]);
+    expect(conditioned[0].Condition).toEqual({
+      StringEquals: { 'iam:PermissionsBoundary': boundaryArn },
+    });
+  });
+
+  test('may remove a boundary only under the boundary condition, so a failed deploy can roll back', () => {
+    // CloudFormation removes the property from a role when it rolls a role update back,
+    // and a transition policy that could not would leave the stack in UPDATE_ROLLBACK_FAILED.
+    const removing = transition.filter((statement) =>
+      asList(statement.Action).includes('iam:DeleteRolePermissionsBoundary'),
+    );
+    expect(removing).toHaveLength(1);
+    expect(removing[0].Condition).toEqual({
+      StringEquals: { 'iam:PermissionsBoundary': boundaryArn },
+    });
+    expect(actions(finalPolicy)).not.toContain('iam:DeleteRolePermissionsBoundary');
+  });
+
+  test('grants every role action the final policy grants, so no deploy loses a call mid-rollout', () => {
+    const roleActions = (document: Statement[]) =>
+      actions(document.filter(isRoleStatement)).filter((action) => action.startsWith('iam:'));
+    for (const action of roleActions(finalPolicy)) {
+      expect(roleActions(transition)).toContain(action);
+    }
+  });
+});
+
+describe('the assembly the production build job uploads', () => {
+  const deferred = synthesizeProduction(true);
+
+  test('is environment-agnostic in the account and names no account', () => {
+    expect(deferred.environment.account).toBe('unknown-account');
+    expect(deferred.serialized).not.toMatch(accountShapedRun);
+    expect(deferred.serialized).not.toContain(config.siteHostedZoneId);
+    expect(deferred.serialized).not.toContain(config.siteCertificateArn);
+    const manifest = fs.readFileSync(path.join(deferred.directory, 'manifest.json'), 'utf8');
+    expect(manifest).not.toMatch(accountShapedRun);
+    for (const entry of fs.readdirSync(deferred.directory).filter((name) => name.endsWith('.assets.json'))) {
+      expect(fs.readFileSync(path.join(deferred.directory, entry), 'utf8')).not.toMatch(accountShapedRun);
+    }
+  });
+
+  test('carries the hosted zone and certificate as two required, hidden parameters', () => {
+    expect(Object.keys(deferred.parameters).filter((name) => name !== 'BootstrapVersion').sort()).toEqual(
+      Object.values(deploymentParameterNames).sort(),
+    );
+    for (const name of Object.values(deploymentParameterNames)) {
+      const parameter = deferred.parameters[name] as Record<string, unknown>;
+      expect(parameter.Type).toBe('String');
+      expect(parameter.NoEcho).toBe(true);
+      expect(parameter).not.toHaveProperty('Default');
+      expect(typeof parameter.AllowedPattern).toBe('string');
+    }
+  });
+
+  test('uses the parameters where the two values go, and nowhere else names them', () => {
+    const distribution = Object.values(deferred.resources).find(
+      (resource) => resource.Type === 'AWS::CloudFront::Distribution',
+    );
+    expect(
+      (distribution?.Properties?.DistributionConfig as { ViewerCertificate: { AcmCertificateArn: unknown } })
+        .ViewerCertificate.AcmCertificateArn,
+    ).toEqual({ Ref: deploymentParameterNames.siteCertificateArn });
+    const records = Object.values(deferred.resources).filter(
+      (resource) => resource.Type === 'AWS::Route53::RecordSet',
+    );
+    expect(records).toHaveLength(2);
+    for (const record of records) {
+      expect(record.Properties?.HostedZoneId).toEqual({ Ref: deploymentParameterNames.siteHostedZoneId });
+    }
+  });
+
+  test('accepts only a zone ID and certificate ARN of the right shape', () => {
+    const zone = new RegExp((deferred.parameters.SiteHostedZoneId as { AllowedPattern: string }).AllowedPattern);
+    const certificate = new RegExp(
+      (deferred.parameters.SiteCertificateArn as { AllowedPattern: string }).AllowedPattern,
+    );
+    expect(zone.test(config.siteHostedZoneId)).toBe(true);
+    expect(zone.test('not-a-zone')).toBe(false);
+    expect(certificate.test(config.siteCertificateArn)).toBe(true);
+    expect(certificate.test(config.siteCertificateArn.replace('us-east-1', 'ap-southeast-2'))).toBe(false);
+  });
+
+  test('is the same template as the committed-context one, apart from the two values', () => {
+    // Deferring must not change what is deployed: the same resource set, the same
+    // boundary, the same roles. Only the account, zone, and certificate move.
+    const committed = synthesizeProduction(false);
+    expect(Object.keys(deferred.resources).sort()).toEqual(Object.keys(committed.resources).sort());
+    for (const logicalId of Object.keys(committed.resources)) {
+      expect(deferred.resources[logicalId].Type).toBe(committed.resources[logicalId].Type);
+    }
+  });
+});
+
 describe('the production deployment workflow', () => {
   const document = workflow('deploy-production.yml');
   const select = workflowJob(document, 'select');
+  const build = workflowJob(document, 'build');
   const deploy = workflowJob(document, 'deploy');
   const resolver = workflowStep(select, 'resolve the immutable deploy SHA');
   const deploySha = '${{ needs.select.outputs.deploy_sha }}';
@@ -736,7 +1126,9 @@ describe('the production deployment workflow', () => {
     expect(select.outputs).toEqual({
       deploy_sha: '${{ steps.resolve.outputs.deploy_sha }}',
     });
-    expect(deploy.needs).toBe('select');
+    expect(build.needs).toBe('select');
+    expect(build.if).toBe("needs.select.outputs.deploy_sha != ''");
+    expect(deploy.needs).toEqual(['select', 'build']);
     expect(deploy.if).toBe("needs.select.outputs.deploy_sha != ''");
   });
 
@@ -767,13 +1159,13 @@ describe('the production deployment workflow', () => {
     expect(result.outputs.deploy_sha).toBe(checkedSha);
     expect(result.outputs.deploy_sha).not.toBe(workflowSha);
 
-    const checkout = workflowStep(deploy, 'checkout the selected commit');
+    const checkout = workflowStep(build, 'checkout the selected commit');
     expect(checkout.uses).toBe('actions/checkout@v7');
     expect(checkout.with).toEqual({
       ref: deploySha,
       'persist-credentials': false,
     });
-    expect(workflowStep(deploy, 'verify the selected commit').env).toEqual({
+    expect(workflowStep(build, 'verify the selected commit').env).toEqual({
       DEPLOY_SHA: deploySha,
     });
     expect(workflowStep(deploy, 'record what is about to be deployed').env).toEqual({
@@ -813,24 +1205,115 @@ describe('the production deployment workflow', () => {
         .filter(([, job]) => job.permissions?.['id-token'] === 'write')
         .map(([id]) => id),
     ).toEqual(['deploy']);
+    expect(
+      Object.entries(document.jobs)
+        .filter(([, job]) => job.environment !== undefined)
+        .map(([id]) => id),
+    ).toEqual(['deploy']);
     expect(deploy.permissions).toEqual({
       contents: 'read',
       'id-token': 'write',
     });
   });
 
+  test('runs every third-party build step in a job with no token, no environment, and no secret', () => {
+    // The point of the split. Anything that installs a dependency, compiles, or
+    // tests runs here, so this job must hold nothing worth stealing: no OIDC token,
+    // no production environment (environment secrets reach only a job that declares
+    // one), no secret or variable, and no credential action.
+    expect(build.permissions).toEqual({ contents: 'read' });
+    expect(build.environment).toBeUndefined();
+    const serialized = JSON.stringify(build);
+    expect(serialized).not.toContain('id-token');
+    expect(serialized).not.toMatch(/secrets\./);
+    expect(serialized).not.toMatch(/vars\./);
+    expect(serialized).not.toContain('configure-aws-credentials');
+    expect(serialized).not.toMatch(/AWS_[A-Z0-9_]+/);
+    const commands = build.steps.map(workflowRunOrEmpty).join('\n');
+    for (const command of ['npm ci', 'npm run build', 'npm run check']) {
+      expect(commands).toContain(command);
+    }
+    expect(commands).not.toContain('cdk deploy');
+  });
+
+  test('runs no repository code, no build, and no cached or scripted install in the job with the token', () => {
+    // The mirror of the test above. The only `uses` the deploy job may carry are the
+    // ones that fetch the assembly, install Node for the CLI, and exchange the token.
+    expect(deploy.steps.flatMap((step) => (step.uses === undefined ? [] : [step.uses]))).toEqual([
+      'actions/download-artifact@v8',
+      'actions/setup-node@v7',
+      'aws-actions/configure-aws-credentials@v6',
+    ]);
+    const commands = deploy.steps.map(workflowRunOrEmpty).join('\n');
+    for (const forbidden of [
+      'npm ci',
+      'npm run',
+      'npx',
+      'go build',
+      'go test',
+      'git ',
+      'cdk synth',
+      'ts-node',
+    ]) {
+      expect(commands).not.toContain(forbidden);
+    }
+    // Every install it does perform disables lifecycle scripts, so installing the CLI
+    // cannot run anything but the CLI's own code.
+    const installs = commands.split('\n').filter((line) => /\bnpm (install|i|add)\b/.test(line));
+    expect(installs).toHaveLength(1);
+    for (const line of installs) {
+      expect(line).toContain('--ignore-scripts');
+    }
+    // A cache restore is the other way a build job reaches a job it does not control.
+    const setupNode = deploy.steps.find((step) => step.uses?.startsWith('actions/setup-node@'));
+    expect(setupNode?.with).not.toHaveProperty('cache');
+    expect(setupNode?.with?.['package-manager-cache']).toBe(false);
+  });
+
+  test('installs exactly the CDK CLI version the infra project pins', () => {
+    const install = workflowStep(deploy, 'install the pinned CDK CLI');
+    const pinned: string = JSON.parse(
+      fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'),
+    ).devDependencies['aws-cdk'];
+    expect(pinned).toMatch(/^[0-9]+\.[0-9]+\.[0-9]+$/);
+    expect(install.env).toEqual({ CDK_CLI_VERSION: pinned });
+    expect(workflowRun(install)).toContain('"aws-cdk@$CDK_CLI_VERSION"');
+  });
+
+  test('installs the CLI before any credential exists', () => {
+    expect(deploy.steps.indexOf(workflowStep(deploy, 'install the pinned CDK CLI'))).toBeLessThan(
+      deploy.steps.indexOf(workflowStep(deploy, 'assume the deployment role')),
+    );
+  });
+
   test('builds once and deploys the exact cdk.out assembly that passed', () => {
-    const website = workflowStep(deploy, 'build the production website');
-    const artifact = workflowStep(deploy, 'build and verify the artifact');
+    const website = workflowStep(build, 'build the production website');
+    const artifact = workflowStep(build, 'build and verify the artifact');
+    const upload = workflowStep(build, 'upload the cloud assembly');
+    const download = workflowStep(deploy, 'download the cloud assembly');
+    const verify = workflowStep(deploy, 'verify and unpack the downloaded assembly');
+    const validate = workflowStep(deploy, 'validate the cloud assembly');
     const deployment = workflowStep(deploy, 'deploy');
-    expect(deploy.steps.indexOf(website)).toBeLessThan(deploy.steps.indexOf(artifact));
-    expect(deploy.steps.indexOf(artifact)).toBeLessThan(deploy.steps.indexOf(deployment));
+    expect(deploy.steps.indexOf(verify)).toBeLessThan(deploy.steps.indexOf(validate));
+    expect(deploy.steps.indexOf(validate)).toBeLessThan(
+      deploy.steps.indexOf(workflowStep(deploy, 'install the pinned CDK CLI')),
+    );
+    expect(build.steps.indexOf(website)).toBeLessThan(build.steps.indexOf(artifact));
+    expect(build.steps.indexOf(artifact)).toBeLessThan(build.steps.indexOf(upload));
+    expect(deploy.steps.indexOf(download)).toBeLessThan(deploy.steps.indexOf(verify));
+    expect(deploy.steps.indexOf(verify)).toBeLessThan(deploy.steps.indexOf(deployment));
     expect(website['working-directory']).toBe('web');
     expect(website.env).toEqual({ VITE_API_BASE_URL: '/' });
     expect(workflowRun(artifact)).toBe(
-      'npm run check -- --context "ens-scout:account=$AWS_ACCOUNT_ID" --context "ens-scout:siteHostedZoneId=$AWS_ROUTE53_HOSTED_ZONE_ID" --context "ens-scout:siteCertificateArn=$AWS_ACM_CERTIFICATE_ARN"',
+      'npm run check -- --context "ens-scout:deferDeploymentIdentifiers=true"',
     );
-    expect(workflowRun(deployment)).toContain(`npx cdk deploy ${stackName}`);
+    expect(upload.with).toMatchObject({
+      name: 'cdk-assembly',
+      path: 'cdk-assembly.tar',
+      'if-no-files-found': 'error',
+    });
+    expect(download.with).toEqual({ name: 'cdk-assembly', path: 'assembly' });
+    expect(workflowRun(deployment)).toContain(`cdk deploy ${stackName}`);
     expect(workflowRun(deployment)).toContain('--app cdk.out');
     expect(
       allWorkflowSteps(document).filter((step) =>
@@ -840,6 +1323,145 @@ describe('the production deployment workflow', () => {
     expect(
       allWorkflowSteps(document).filter((step) => workflowRunOrEmpty(step).includes('cdk deploy')),
     ).toHaveLength(1);
+  });
+
+  test('ships the assembly as a tar, because the artifact actions drop the execute bit', () => {
+    const pack = workflowStep(build, 'package the cloud assembly');
+    expect(workflowRun(pack)).toContain('tar -C infra -cf cdk-assembly.tar cdk.out');
+    expect(build.outputs).toEqual({ assembly_sha256: '${{ steps.assembly.outputs.sha256 }}' });
+    expect(pack.id).toBe('assembly');
+    expect(build.steps.indexOf(pack)).toBeLessThan(
+      build.steps.indexOf(workflowStep(build, 'upload the cloud assembly')),
+    );
+  });
+
+  test('refuses a tar that is not the one the build reported, and keeps the execute bit', () => {
+    const verify = workflowStep(deploy, 'verify and unpack the downloaded assembly');
+    expect(verify.env).toEqual({
+      EXPECTED_ASSEMBLY_SHA256: '${{ needs.build.outputs.assembly_sha256 }}',
+    });
+
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'ens-scout-assembly-'));
+    try {
+      const source = path.join(directory, 'source', 'cdk.out', 'asset.abc');
+      fs.mkdirSync(source, { recursive: true });
+      fs.writeFileSync(path.join(source, 'bootstrap'), 'binary');
+      fs.chmodSync(path.join(source, 'bootstrap'), 0o755);
+      fs.mkdirSync(path.join(directory, 'work', 'assembly'), { recursive: true });
+      const tar = path.join(directory, 'work', 'assembly', 'cdk-assembly.tar');
+      expect(
+        spawnSync('tar', ['-C', path.join(directory, 'source'), '-cf', tar, 'cdk.out']).status,
+      ).toBe(0);
+      const expected = require('crypto').createHash('sha256').update(fs.readFileSync(tar)).digest('hex');
+      const run = (hash: string) =>
+        spawnSync('/bin/bash', ['-c', `set -euo pipefail\n${workflowRun(verify)}`], {
+          cwd: path.join(directory, 'work'),
+          env: { ...process.env, EXPECTED_ASSEMBLY_SHA256: hash },
+          encoding: 'utf8',
+        });
+      expect(run('0'.repeat(64)).status).not.toBe(0);
+      expect(run('').status).not.toBe(0);
+      expect(run(expected).status).toBe(0);
+      const handler = path.join(directory, 'work', 'cdk.out', 'asset.abc', 'bootstrap');
+      expect(() => fs.accessSync(handler, fs.constants.X_OK)).not.toThrow();
+
+      // A copy that lost the bit, which is what the artifact actions do, is refused.
+      fs.chmodSync(handler, 0o644);
+      expect(
+        spawnSync('/bin/bash', ['-c', `for handler in cdk.out/asset.*/bootstrap; do [ ! -e "$handler" ] || [ -x "$handler" ] || exit 1; done`], {
+          cwd: path.join(directory, 'work'),
+        }).status,
+      ).toBe(1);
+      expect(workflowRun(verify)).toContain('[ ! -x "$handler" ]');
+    } finally {
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  describe('the assembly validation', () => {
+    const validate = workflowStep(deploy, 'validate the cloud assembly');
+    const stackFile = `${stackName}.assets.json`;
+
+    /** Run the validation step against a copy of a real deferred assembly, edited by `edit`. */
+    function validation(
+      edit: (files: { manifest: any; assets: any; directory: string }) => void = () => undefined,
+    ): StepResult {
+      const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'ens-scout-validate-'));
+      try {
+        fs.cpSync(synthesizeProduction(true).directory, path.join(directory, 'cdk.out'), {
+          recursive: true,
+        });
+        const manifestPath = path.join(directory, 'cdk.out', 'manifest.json');
+        const assetsPath = path.join(directory, 'cdk.out', stackFile);
+        const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+        const assets = JSON.parse(fs.readFileSync(assetsPath, 'utf8'));
+        edit({ manifest, assets, directory: path.join(directory, 'cdk.out') });
+        fs.writeFileSync(manifestPath, JSON.stringify(manifest));
+        fs.writeFileSync(assetsPath, JSON.stringify(assets));
+        const result = spawnSync('/bin/bash', ['-c', `set -euo pipefail\n${workflowRun(validate)}`], {
+          cwd: directory,
+          encoding: 'utf8',
+        });
+        return { status: result.status ?? 1, stdout: result.stdout, stderr: result.stderr, outputs: {} };
+      } finally {
+        fs.rmSync(directory, { recursive: true, force: true });
+      }
+    }
+
+    const firstFile = (assets: any) => Object.values(assets.files)[0] as any;
+
+    test('accepts the assembly today synth produces', () => {
+      const result = validation();
+      expect(result.stderr).toBe('');
+      expect(result.status).toBe(0);
+    });
+
+    test.each([
+      ['an asset executable the CLI would run', ({ assets }: any) => {
+        firstFile(assets).source.executable = ['sh', '-c', 'true'];
+      }],
+      ['a docker image asset', ({ assets }: any) => {
+        assets.dockerImages = { abc: { source: { directory: 'x' }, destinations: {} } };
+      }],
+      ['a source path with ..', ({ assets }: any) => {
+        firstFile(assets).source.path = '../outside';
+      }],
+      ['an absolute source path', ({ assets }: any) => {
+        firstFile(assets).source.path = '/etc/passwd';
+      }],
+      ['another bucket', ({ assets }: any) => {
+        (Object.values(firstFile(assets).destinations)[0] as any).bucketName = 'other-bucket';
+      }],
+      ['an assumed role on a destination', ({ assets }: any) => {
+        (Object.values(firstFile(assets).destinations)[0] as any).assumeRoleArn = 'arn:aws:iam::1:role/x';
+      }],
+      ['a concrete stack environment', ({ manifest }: any) => {
+        manifest.artifacts[stackName].environment = 'aws://123456789012/ap-southeast-2';
+      }],
+      ['an assumeRoleArn on the stack', ({ manifest }: any) => {
+        manifest.artifacts[stackName].properties.assumeRoleArn = 'arn:aws:iam::1:role/x';
+      }],
+      ['a cloudFormationExecutionRoleArn on the stack', ({ manifest }: any) => {
+        manifest.artifacts[stackName].properties.cloudFormationExecutionRoleArn = 'arn:aws:iam::1:role/x';
+      }],
+      ['a lookup role on the stack', ({ manifest }: any) => {
+        manifest.artifacts[stackName].properties.lookupRole = { arn: 'arn:aws:iam::1:role/x' };
+      }],
+      ['an unexpected artifact', ({ manifest }: any) => {
+        manifest.artifacts.Extra = { type: 'cdk:cloud-assembly', properties: { directoryName: 'x' } };
+      }],
+      ['a template asset that is not the hashed template', ({ manifest }: any) => {
+        manifest.artifacts[stackName].properties.stackTemplateAssetObjectUrl =
+          manifest.artifacts[stackName].properties.stackTemplateAssetObjectUrl.replace(/[0-9a-f]\.json$/, '0.json');
+      }],
+      ['a symbolic link', ({ directory }: any) => {
+        fs.symlinkSync('/tmp', path.join(directory, 'link'));
+      }],
+    ])('refuses %s', (_name, edit) => {
+      const result = validation(edit as never);
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain('the cloud assembly is not acceptable');
+    });
   });
 
   test('records only the immutable SHA, artifact checksum, and generated site URL', () => {
@@ -864,16 +1486,18 @@ describe('the production deployment workflow', () => {
     const serialized = serializedWorkflow(document);
     expect(serialized).not.toContain('aws-access-key-id');
     expect(serialized).not.toContain('aws-secret-access-key');
-    expect(serialized).not.toMatch(/secrets\.AWS/);
+    expect(serialized).not.toMatch(/secrets\.AWS_(ACCESS|SECRET|SESSION)/);
   });
 });
 
 describe('the deployment configuration the workflow requires', () => {
   const document = workflow('deploy-production.yml');
+  const build = workflowJob(document, 'build');
   const deploy = workflowJob(document, 'deploy');
   const validation = workflowStep(deploy, 'require the deployment configuration');
   const credential = workflowStep(deploy, 'assume the deployment role');
-  const artifact = workflowStep(deploy, 'build and verify the artifact');
+  const artifact = workflowStep(build, 'build and verify the artifact');
+  const download = workflowStep(deploy, 'download the cloud assembly');
   const deployment = workflowStep(deploy, 'deploy');
   const required = Object.keys(validation.env ?? {}).filter((name) => name.startsWith('AWS_'));
   const validAccount = '1'.repeat(12);
@@ -909,11 +1533,13 @@ describe('the deployment configuration the workflow requires', () => {
     expect(serialized).not.toMatch(/[A-Za-z][A-Za-z0-9]*Role[A-Za-z0-9]*/);
   });
 
-  test('requires every variable it reads, and reads every variable it requires', () => {
-    // A fifth variable added without a check would be one the job discovers is missing
+  test('requires every secret and variable it reads, and reads every one it requires', () => {
+    // A seventh value added without a check would be one the job discovers is missing
     // at whichever step first needs it, which on the deploy step is mid-deployment.
     const referenced = new Set(
-      [...serializedWorkflow(document).matchAll(/vars\.([A-Z0-9_]+)/g)].map((match) => match[1]),
+      [...serializedWorkflow(document).matchAll(/(?:vars|secrets)\.([A-Z0-9_]+)/g)].map(
+        (match) => match[1],
+      ),
     );
     expect([...referenced].sort()).toEqual([...required].sort());
     expect([...required].sort()).toEqual([
@@ -926,11 +1552,46 @@ describe('the deployment configuration the workflow requires', () => {
     ]);
   });
 
-  test('checks the configuration before it builds or deploys anything', () => {
+  test('keeps every account-specific value a secret, and only the region a variable', () => {
+    // A variable in `env:` or `with:` is printed in the step header of a log a public
+    // repository shows to everyone. A secret is masked there. The region is the one
+    // value that is not account-specific.
+    const sources = Object.entries(validation.env ?? {})
+      .filter(([name]) => name.startsWith('AWS_'))
+      .map(([name, value]) => [name, String(value)]);
+    expect(Object.fromEntries(sources)).toEqual({
+      AWS_ACCOUNT_ID: '${{ secrets.AWS_ACCOUNT_ID }}',
+      AWS_REGION: '${{ vars.AWS_REGION }}',
+      AWS_DEPLOY_ROLE_ARN: '${{ secrets.AWS_DEPLOY_ROLE_ARN }}',
+      AWS_CLOUDFORMATION_EXECUTION_ROLE_ARN: '${{ secrets.AWS_CLOUDFORMATION_EXECUTION_ROLE_ARN }}',
+      AWS_ROUTE53_HOSTED_ZONE_ID: '${{ secrets.AWS_ROUTE53_HOSTED_ZONE_ID }}',
+      AWS_ACM_CERTIFICATE_ARN: '${{ secrets.AWS_ACM_CERTIFICATE_ARN }}',
+    });
+    const variables = new Set(
+      [...serializedWorkflow(document).matchAll(/vars\.([A-Z0-9_]+)/g)].map((match) => match[1]),
+    );
+    expect([...variables]).toEqual(['AWS_REGION']);
+  });
+
+  test('prints no secret value: none reaches an echo, a trace, or a step summary', () => {
+    for (const step of allWorkflowSteps(document)) {
+      const script = workflowRunOrEmpty(step);
+      expect(script).not.toMatch(/set -[a-z]*x/);
+      for (const line of script.split('\n').filter((candidate) => /\b(echo|printf)\b/.test(candidate))) {
+        expect(line).not.toMatch(
+          /\$\{?(AWS_ACCOUNT_ID|AWS_DEPLOY_ROLE_ARN|AWS_CLOUDFORMATION_EXECUTION_ROLE_ARN|AWS_ROUTE53_HOSTED_ZONE_ID|AWS_ACM_CERTIFICATE_ARN)\b/,
+        );
+      }
+    }
+  });
+
+  test('checks the configuration before it downloads, authenticates, or deploys anything', () => {
     // Ordering is the point of the step. A value checked after the synth costs a
     // toolchain and a build; one checked after the deploy step has started costs a
     // half-applied stack.
-    expect(deploy.steps.indexOf(validation)).toBeLessThan(deploy.steps.indexOf(artifact));
+    expect(deploy.steps.indexOf(validation)).toBe(0);
+    expect(deploy.steps.indexOf(validation)).toBeLessThan(deploy.steps.indexOf(download));
+    expect(deploy.steps.indexOf(validation)).toBeLessThan(deploy.steps.indexOf(credential));
     expect(deploy.steps.indexOf(validation)).toBeLessThan(deploy.steps.indexOf(deployment));
   });
 
@@ -981,43 +1642,56 @@ describe('the deployment configuration the workflow requires', () => {
     ).not.toBe(0);
   });
 
-  test('assumes the deployment role the deploy-role variable names, in that region', () => {
-    expect(credential.with?.['role-to-assume']).toBe('${{ vars.AWS_DEPLOY_ROLE_ARN }}');
+  test('assumes the deployment role the deploy-role secret names, in that region', () => {
+    expect(credential.with?.['role-to-assume']).toBe('${{ secrets.AWS_DEPLOY_ROLE_ARN }}');
     expect(credential.with?.['aws-region']).toBe('${{ vars.AWS_REGION }}');
-    expect(credential.with?.['allowed-account-ids']).toBe('${{ vars.AWS_ACCOUNT_ID }}');
+    expect(credential.with?.['allowed-account-ids']).toBe('${{ secrets.AWS_ACCOUNT_ID }}');
   });
 
-  test('synthesizes the deployed artifact against the account, zone, and certificate variables', () => {
-    // `--app cdk.out` deploys the assembly, and the stack environment is baked into
-    // it, so the real account has to reach the synth that produced it. This is the
-    // whole reason cdk.json can carry a placeholder at all.
-    expect(artifact.env).toEqual({
-      AWS_ACCOUNT_ID: '${{ vars.AWS_ACCOUNT_ID }}',
-      AWS_ROUTE53_HOSTED_ZONE_ID: '${{ vars.AWS_ROUTE53_HOSTED_ZONE_ID }}',
-      AWS_ACM_CERTIFICATE_ARN: '${{ vars.AWS_ACM_CERTIFICATE_ARN }}',
-    });
+  test('masks the account ID in the credential action, which does not by default', () => {
+    expect(credential.with?.['mask-aws-account-id']).toBe(true);
+  });
+
+  test('synthesizes the deployed artifact with the account, zone, and certificate left out', () => {
+    // The build job holds none of the three, so the assembly it uploads names none of
+    // them, and the deploy job supplies the two the stack needs as CloudFormation
+    // parameters. `--app cdk.out` deploys the assembly, so the parameter names have to
+    // be the ones the stack declares.
+    expect(artifact.env).toBeUndefined();
     expect(workflowRun(artifact)).toBe(
-      'npm run check -- --context "ens-scout:account=$AWS_ACCOUNT_ID" --context "ens-scout:siteHostedZoneId=$AWS_ROUTE53_HOSTED_ZONE_ID" --context "ens-scout:siteCertificateArn=$AWS_ACM_CERTIFICATE_ARN"',
+      'npm run check -- --context "ens-scout:deferDeploymentIdentifiers=true"',
+    );
+    expect(deployment.env).toEqual({
+      AWS_CLOUDFORMATION_EXECUTION_ROLE_ARN: '${{ secrets.AWS_CLOUDFORMATION_EXECUTION_ROLE_ARN }}',
+      AWS_ROUTE53_HOSTED_ZONE_ID: '${{ secrets.AWS_ROUTE53_HOSTED_ZONE_ID }}',
+      AWS_ACM_CERTIFICATE_ARN: '${{ secrets.AWS_ACM_CERTIFICATE_ARN }}',
+    });
+    expect(workflowRun(deployment)).toContain(
+      `--parameters "${stackName}:${deploymentParameterNames.siteHostedZoneId}=$AWS_ROUTE53_HOSTED_ZONE_ID"`,
+    );
+    expect(workflowRun(deployment)).toContain(
+      `--parameters "${stackName}:${deploymentParameterNames.siteCertificateArn}=$AWS_ACM_CERTIFICATE_ARN"`,
     );
   });
 
-  test('passes the execution role the execution-role variable names', () => {
+  test('passes the execution role the execution-role secret names', () => {
     // A different ARN here is refused by the deployment role's PassRole condition, so
     // the failure is safe but opaque; this is the assertion that names where it comes
     // from.
     expect(deployment.env?.AWS_CLOUDFORMATION_EXECUTION_ROLE_ARN).toBe(
-      '${{ vars.AWS_CLOUDFORMATION_EXECUTION_ROLE_ARN }}',
+      '${{ secrets.AWS_CLOUDFORMATION_EXECUTION_ROLE_ARN }}',
     );
     expect(workflowRun(deployment)).toContain(
       '--role-arn "$AWS_CLOUDFORMATION_EXECUTION_ROLE_ARN"',
     );
   });
 
-  test('appends the account context to a script that ends with the synth', () => {
+  test('appends the deferral context to a script that ends with the synth', () => {
     // `npm run check -- <args>` appends to the end of the chained script string, so the
     // arguments reach whatever the chain ends with and nothing else. A check script
     // reordered to end with the tests would send `--context` to jest, which would
-    // deploy an artifact synthesized against the placeholder.
+    // upload an assembly that still names the placeholders, and the deploy job's
+    // parameters would then address a template that declares none.
     const scripts: Record<string, string> = JSON.parse(
       fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'),
     ).scripts;
@@ -1030,12 +1704,14 @@ describe('the deployment configuration the workflow requires', () => {
 describe('the committed IAM templates', () => {
   const names: string[] = render.templateNames();
 
-  test('are the four documents applied to the two deployment roles', () => {
+  test('are the documents applied to the two deployment roles and the boundary policy', () => {
     expect(names.sort()).toEqual([
       'cloudformation-execution-role-policy',
+      'cloudformation-execution-role-policy-transition',
       'cloudformation-execution-role-trust',
       'github-deploy-role-policy',
       'github-deploy-role-trust',
+      'permissions-boundary-policy',
     ]);
   });
 

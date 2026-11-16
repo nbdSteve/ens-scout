@@ -77,18 +77,15 @@
       ]
     },
     {
-      "Sid": "StackLambdaRolesAndTheirInlinePolicies",
+      "Sid": "StackLambdaRolesLifecycleAndInspection",
       "Effect": "Allow",
       "Action": [
-        "iam:CreateRole",
         "iam:DeleteRole",
-        "iam:DeleteRolePolicy",
         "iam:GetRole",
         "iam:GetRolePolicy",
         "iam:ListAttachedRolePolicies",
         "iam:ListRolePolicies",
         "iam:ListRoleTags",
-        "iam:PutRolePolicy",
         "iam:TagRole",
         "iam:UntagRole",
         "iam:UpdateAssumeRolePolicy",
@@ -96,6 +93,22 @@
         "iam:UpdateRoleDescription"
       ],
       "Resource": "arn:aws:iam::${ACCOUNT_ID}:role/EnsScout-prod-*"
+    },
+    {
+      "Sid": "ShapeStackLambdaRolesOnlyUnderThePermissionsBoundary",
+      "Effect": "Allow",
+      "Action": [
+        "iam:CreateRole",
+        "iam:DeleteRolePolicy",
+        "iam:PutRolePermissionsBoundary",
+        "iam:PutRolePolicy"
+      ],
+      "Resource": "arn:aws:iam::${ACCOUNT_ID}:role/EnsScout-prod-*",
+      "Condition": {
+        "StringEquals": {
+          "iam:PermissionsBoundary": "arn:aws:iam::${ACCOUNT_ID}:policy/EnsScout-prod-PermissionsBoundary"
+        }
+      }
     },
     {
       "Sid": "PassTheStackLambdaRolesToLambdaOnly",

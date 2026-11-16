@@ -45,10 +45,11 @@ and correct ENS lifecycle classification are core requirements.
 - `infra/`: the TypeScript AWS CDK application that defines the publisher, read
   API, private frontend origin, and CloudFront distribution. It is a separate npm
   project with its own README; the Go module ignores it.
-- `infra/iam/`: templates of the four documents applied to the two deployment
-  roles, rendered by `infra/scripts/render-iam.js`. They are configuration in an
-  AWS account rather than resources in the stack, and `docs/deployment.md`
-  explains them.
+- `infra/iam/`: templates of the documents applied to the two deployment roles and
+  of the stack's permissions boundary policy, rendered by
+  `infra/scripts/render-iam.js`, and the rollout plan for the live account. They are
+  configuration in an AWS account rather than resources in the stack, and
+  `docs/deployment.md` explains them.
 - `.github/workflows/`: the pull-request gates and the automatic production
   deployment. `docs/deployment.md` is the whole description of the deployment path.
 
@@ -780,10 +781,27 @@ section holds only the rules that a change here could quietly break.
   custom hostname's A and AAAA records, and preserves the generated CloudFront URL.
   The provider and deployment roles remain outside the stack because they are what
   deploy it.
-- `lib/deployment.ts` owns the bootstrap qualifier, the asset bucket name, and the
-  synthesizer, because all three have to agree with an IAM policy that lives outside
-  CDK. Nothing else may name the qualifier or build that bucket name, and
-  `test/deployment.test.ts` is what ties the committed policy templates to it.
+- `lib/deployment.ts` owns the bootstrap qualifier, the asset bucket name, the
+  synthesizer, the permissions boundary's name, and the deferred-identifier parameters,
+  because all of them have to agree with an IAM policy or a workflow that lives outside
+  CDK. Nothing else may name the qualifier, build that bucket name, or name the boundary,
+  and `test/deployment.test.ts` is what ties the committed templates and the workflow to
+  it.
+- Every `AWS::IAM::Role` in the stack carries `EnsScout-<env>-PermissionsBoundary`. The
+  stack applies it itself, so neither the app nor a test can build one without it, and
+  a role added later cannot forget it. The boundary policy lives outside CDK, and
+  `infra/iam/permissions-boundary-policy.template.json` is derived from the synthesized
+  roles: a test requires every action a role is granted to be in it and every action in
+  it to be one a role uses. Adding or widening a role's grant therefore means changing
+  that template in the same change, and the live account's policy in the rollout after
+  it - a role that needs more than the boundary allows is denied at runtime, not at
+  deploy. It allows no `iam:`, `sts:`, or unscoped resource.
+- With `ens-scout:deferDeploymentIdentifiers` true, which only the production build job
+  sets, the stack is environment-agnostic in the account and takes the hosted-zone ID and
+  certificate ARN as two required `NoEcho` parameters with no default. Nothing else may
+  read the account, zone, or certificate into the template in that mode, and a test
+  asserts the deferred assembly contains no twelve-digit number. The committed context
+  keeps the flag false and keeps the placeholders.
 
 ## Deployment invariants
 
@@ -815,15 +833,23 @@ there could quietly break.
   adding a service permission here rather than to the execution role is the mistake to
   refuse: it puts the privilege on the identity GitHub can assume instead of on the
   one only CloudFormation can.
-- The execution role can attach no managed policy, create no policy, and create no
-  user or access key. The scanner's role takes an inline policy only, so nothing is
-  lost, and the exclusion is what stops that role from attaching
-  `AdministratorAccess` to a role it may also pass to Lambda.
+- The execution role may call `iam:CreateRole`, `iam:PutRolePolicy`,
+  `iam:DeleteRolePolicy`, and `iam:PutRolePermissionsBoundary` on `role/EnsScout-prod-*`
+  only with `iam:PermissionsBoundary` equal to the boundary policy's ARN, and a test
+  asserts none of the four appears in any other statement. It attaches no managed policy
+  (no `iam:AttachRolePolicy` or `iam:DetachRolePolicy`: the stack's roles take inline
+  policies only, and the exclusion stops it attaching `AdministratorAccess`). It never
+  gets `iam:DeleteRolePermissionsBoundary` in the final policy, any policy creation or
+  change, or any user or access-key call, and keeps one `iam:PassRole`, to Lambda alone.
+  The one-deploy transition policy also allows `iam:DeleteRolePermissionsBoundary` under
+  the same condition, so a failed rollout deploy can roll back. Without the condition
+  a template could create a role with `AdministratorAccess` and pass it to Lambda; the
+  boundary is what makes that harmless, so do not loosen the condition to solve a denied
+  deployment, add the missing action to the boundary template instead.
 - Neither role may be widened to solve a problem by granting broad administration, and
-  neither may carry a wildcard action. The residual escalation path that remains -
-  `iam:PutRolePolicy` on `EnsScout-prod-*` plus Lambda creation - is recorded in
-  `docs/deployment.md` and is bounded only by the protected environment; a permissions
-  boundary is the follow-up, not a reason to stop worrying about the next grant.
+  neither may carry a wildcard action. What still follows from a hostile template is
+  recorded in `docs/deployment.md`'s residual risks: the boundary bounds IAM, not the
+  stack's own resources.
 - Production follows the completed `checks` workflow through `workflow_run`, and only a
   successful same-repository `push` whose head branch is `main` may produce a deploy
   SHA. That SHA is the upstream run's `head_sha`, and checkout, verification, summary,
@@ -831,44 +857,75 @@ there could quietly break.
   fork run, a failed run, or a non-main run reaches no environment and requests no
   token. `workflow_dispatch` is a main-only recovery trigger and does not gate the
   automatic path.
-- The `production` environment keeps the six deployment variables and the custom
+- The `production` environment keeps the six deployment values and the custom
   `main`-only branch policy, but no required-reviewer rule. Recurring production
   approval is the successful `main` checks run rather than a second human gate.
-- The production workflow builds the web bundle with `VITE_API_BASE_URL=/` before
-  synth, then builds once and deploys that artifact. `npm run check` leaves the
-  verified assembly in `infra/cdk.out` and the deploy step reads it with
-  `--app cdk.out`, so what reaches AWS is the website, both Lambda bundles, and
-  template the checks passed rather than an equal assembly synthesized again.
-  The generated `PublicSiteUrl` output is the only deployment value copied into the
-  job summary.
+- The production workflow is three jobs, and the job that holds `id-token: write` runs
+  no third-party code. `select` resolves the deploy SHA. `build` has `contents: read`
+  only, no `id-token`, no `environment`, and so no secret or variable of the
+  `production` environment; it checks out the SHA, installs dependencies, builds the web
+  bundle with `VITE_API_BASE_URL=/`, runs `npm run check` with
+  `--context ens-scout:deferDeploymentIdentifiers=true`, and uploads `infra/cdk.out`.
+  The assembly travels as a tar (`tar -C infra -cf cdk-assembly.tar cdk.out`), because the
+  artifact actions store every file as mode 644 and the Lambda `bootstrap` binaries
+  would lose their execute bit; the build reports the tar's SHA-256, which protects the
+  transfer only.
+  `deploy` declares `environment: production`, downloads and unpacks that tar, then
+  validates the assembly against an allowlist before the CLI runs: only today's artifact
+  kinds, the agnostic stack environment and no role or lookup field, no docker image
+  assets, file sources with a relative `path` inside `cdk.out` and no `executable`
+  (which the CLI would run with the credentials in its environment), the bootstrap
+  bucket as the only destination with no assumed role, no symlinks, and the template
+  asset being the hashed template. It then installs the `aws-cdk` CLI at the exact
+  version `infra/package.json` pins with `--ignore-scripts`, assumes the role, and runs
+  `cdk deploy --app cdk.out` with the two `--parameters`. It must not check out the
+  repository, restore a cache, run `npm ci`, `npm run`, `npx`, Go, or a synth, or use an
+  action beyond download-artifact, setup-node, and configure-aws-credentials. A test
+  asserts each of these, because moving one step back into `deploy` silently restores the
+  escalation path: any code that runs there can request the token. The deploy job does
+  act on data `build` controls, so the validation step is part of the boundary and must
+  stay fail-closed: a new asset kind is a deliberate allowlist change, with a test. The
+  template is not validated, so the permissions boundary is what limits a hostile one.
+  `npm run check` leaves the verified assembly in `infra/cdk.out`, so what reaches AWS is
+  the website, both Lambda bundles, and template the checks passed rather than an equal
+  assembly synthesized again. The generated `PublicSiteUrl` output is the only deployment
+  value copied into the job summary.
   That reproducibility is across checkouts and machines, not across compilers, so every
   `setup-go` step in `.github/workflows/` pins one exact version and a test in `infra/`
   fails when they disagree.
-  A deploy job that floated onto a toolchain no check had run would deploy a Lambda
+  A build that floated onto a toolchain no check had run would deploy a Lambda
   update for source nobody changed, which is the failure `-buildvcs=false` exists to
   prevent reached through the compiler instead of the VCS stamp.
-- Only the deploy job requests `id-token: write`, and it declares
-  `environment: production`. The pull-request checks request no OIDC token at all, so
-  nothing on that path can reach the account.
+- Only the deploy job requests `id-token: write` or declares an environment. The
+  pull-request checks request no OIDC token at all, so nothing on that path can reach the
+  account.
 - No AWS access key or other long-lived cloud credential goes in the repository or in
-  its GitHub settings. The account, region, two role ARNs, hosted-zone ID, and
-  certificate ARN are non-secret variables on the `production` environment:
-  `AWS_ACCOUNT_ID`, `AWS_REGION`, `AWS_DEPLOY_ROLE_ARN`,
-  `AWS_CLOUDFORMATION_EXECUTION_ROLE_ARN`, `AWS_ROUTE53_HOSTED_ZONE_ID`, and
-  `AWS_ACM_CERTIFICATE_ARN`.
+  its GitHub settings, and no deployment value is a repository-level secret, because the
+  build job could read it. The account, the two role ARNs, the hosted-zone ID, and the
+  certificate ARN (which embeds the account) are secrets of the `production` environment:
+  `AWS_ACCOUNT_ID`, `AWS_DEPLOY_ROLE_ARN`, `AWS_CLOUDFORMATION_EXECUTION_ROLE_ARN`,
+  `AWS_ROUTE53_HOSTED_ZONE_ID`, and `AWS_ACM_CERTIFICATE_ARN`. The region,
+  `AWS_REGION`, is its one variable. A variable used in `env:` or `with:` is printed in a
+  public step header and a secret is not, so do not move one of the five back to a
+  variable. The credentials step sets `mask-aws-account-id: true`, because the action
+  does not mask the account by default, and `allowed-account-ids`.
 - No tracked file holds the real account number, hosted-zone ID, certificate ARN, or
   either real role name, and none may gain one. Both roles are supplied as whole ARNs
   rather than composed from the account and a role name, because composing one puts a
-  role name back in tracked YAML and lets a variable disagree with the ARN built out
-  of it. The workflow validates all six before it builds, prints names and never
-  values, and `test/deployment.test.ts` fails on an embedded deployment identifier.
+  role name back in tracked YAML and lets a value disagree with the ARN built out
+  of it. The deploy job validates all six before anything else, prints names and never
+  values, and `test/deployment.test.ts` fails on an embedded deployment identifier or a
+  step that echoes one.
 - `infra/cdk.json` carries `lib/config.ts`'s safe account, hosted-zone, and certificate
-  placeholders. The deploy job passes the real three values as context on the
-  `npm run check` that produces the artifact it deploys, which works only because
-  `check` ends with the synth - a test asserts that order, since a `check` ending with
-  the tests would send the context to jest and deploy an artifact built against the
-  placeholders.
-- `infra/iam/` holds templates of the documents that are applied, with an explicit
+  placeholders and `ens-scout:deferDeploymentIdentifiers: false`. The build job passes
+  the flag as context on the `npm run check` that produces the artifact, which works only
+  because `check` ends with the synth - a test asserts that order, since a `check` ending
+  with the tests would send the context to jest and upload an assembly that still names
+  the placeholders, which the deploy job's parameters would then not match. The real zone
+  and certificate reach the stack only as the `--parameters` of `cdk deploy`.
+- `infra/iam/` holds templates of the documents that are applied (the two roles' trust and
+  policy documents, the boundary policy, and the one-step transition version of the
+  execution role's policy), with an explicit
   `${PLACEHOLDER}` at every position naming the account, execution role, or hosted
   zone, and
   `infra/scripts/render-iam.js` is the one path from a template to a document. Rendering
@@ -879,7 +936,11 @@ there could quietly break.
   the stack name, or the secret name in context and the test fails until the templates
   follow. That tie holds because `iam/example-values.json` names the same placeholder
   account `cdk.json` commits; everything else in a template stays a literal, or the
-  comparison would be against another placeholder and prove nothing.
+  comparison would be against another placeholder and prove nothing. The rollout order
+  for the live account is in `infra/iam/README.md` and matters: the boundary policy,
+  then the transition policy, then a deploy that attaches the boundary to every role,
+  then the final policy, then a no-op deploy. Applying the final policy first wedges
+  the next deployment.
 
 ## Website invariants
 

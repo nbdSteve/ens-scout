@@ -13,8 +13,10 @@ fallback.
 The two deployment roles are absent from the stack too, and for a different reason:
 they are what deploys it, so a stack that defined them would have to be deployed by
 something else first.
-They live in `iam/` as templates of the documents applied to the account, and
+They live in `iam/` as templates of the documents applied to the account, together with
+the permissions boundary policy every role in the stack carries, and
 [docs/deployment.md](../docs/deployment.md) explains them.
+`iam/README.md` is the order to apply them to the live account in.
 
 ## Requirements
 
@@ -41,9 +43,9 @@ npm run render:iam -- --example   # render iam/*.template.json with the example 
 ```
 
 `npm run check` ends with the synth deliberately, so trailing arguments reach `cdk
-synth` and nothing else. The production workflow passes the account, hosted-zone ID,
-and certificate ARN as context when it builds the artifact it deploys; a `check`
-reordered to end with the tests would send those values to jest instead.
+synth` and nothing else. The production build job passes
+`ens-scout:deferDeploymentIdentifiers=true` as context when it builds the artifact it
+uploads; a `check` reordered to end with the tests would send it to jest instead.
 A test asserts the order.
 
 Build the website before an infrastructure check:
@@ -82,8 +84,9 @@ through a GitHub OIDC role and the `production` environment in `ap-southeast-2`.
 A main-only `workflow_dispatch` remains as an optional recovery trigger and does not
 gate the automatic path.
 [docs/deployment.md](../docs/deployment.md) is the whole description: the six
-`production` environment variables, the two roles, what they may and may not do, the
-GitHub configuration, and the residual risks.
+`production` environment values (five secrets and the region variable), the three jobs,
+the two roles and the permissions boundary, what they may and may not do, the GitHub
+configuration, and the residual risks.
 `.github/workflows/deploy-production.yml` is the only workflow that deploys, and no
 command run during development here touches AWS.
 
@@ -91,13 +94,17 @@ The target account, hosted-zone ID, certificate ARN, role names, role ARNs, and 
 numeric GitHub repository identity are deployment values this repository does not
 commit.
 `cdk.json` carries the safe stand-ins exported by `lib/config.ts`, which let a clean
-clone, every pull-request check, and every test synthesize the stack. The workflow
-supplies the real account, hosted-zone ID, and certificate ARN as context on the synth
-that produces the artifact it deploys.
-The workflow selects `github.event.workflow_run.head_sha`, checks out and verifies that
-full commit, builds `web/dist` with the same-origin API base before the synth, deploys
-`infra/cdk.out` without another synth, and writes only the selected SHA, the template
-checksum, and the `PublicSiteUrl` output to the deployment summary.
+clone, every pull-request check, and every test synthesize the stack.
+The workflow selects `github.event.workflow_run.head_sha`. A `build` job with no AWS
+credential and no `production` secret checks out and verifies that full commit, builds
+`web/dist` with the same-origin API base, and synthesizes once with
+`ens-scout:deferDeploymentIdentifiers=true`, which leaves the account out of the assembly
+and turns the hosted-zone ID and certificate ARN into two required CloudFormation
+parameters. A separate `deploy` job, the only one with the OIDC token, downloads that
+assembly as a tar (the artifact actions would drop the Lambda execute bit), validates it
+against an allowlist, installs the pinned CDK CLI with install scripts disabled, deploys
+`cdk.out` with the two values as `--parameters`, and writes only the selected SHA, the
+template checksum, and the `PublicSiteUrl` output to the deployment summary.
 
 `npm run diff` and an interactive `cdk deploy` still work for someone holding
 credentials directly, and four things must exist before either.
@@ -112,10 +119,12 @@ credentials directly, and four things must exist before either.
 3. The public Route 53 hosted zone named by `ens-scout:siteHostedZoneName` and an issued
    ACM certificate in `us-east-1` covering `ens-scout:siteDomainName`.
    The stack imports both by identifier; it creates neither one.
-4. The two roles the templates in `iam/` describe, if the deployment goes through the
-   workflow, the immutable repository identity supplied when their trust is rendered,
-   and the six `production` environment variables that name the account, roles, hosted
-   zone, and certificate.
+4. The two roles and the permissions boundary policy the templates in `iam/` describe, if
+   the deployment goes through the workflow, the immutable repository identity supplied
+   when their trust is rendered, and the six `production` environment values that name
+   the account, roles, hosted zone, and certificate: five secrets and the region as a
+   variable. Create the boundary policy before the first deploy of a stack that carries
+   it, because CloudFormation attaches it to every role the stack creates.
 
 The stack creates the alarm topic and deliberately adds no subscription to it, so
 subscribing is a deployment step rather than something the template does.
@@ -151,6 +160,7 @@ deployed is recorded in the repository and any of it can be overridden with
 | `ens-scout:snapshotTtlAttribute` | DynamoDB TTL attribute, must match `internal/dynamo` |
 | `ens-scout:logRetentionDays` | Scanner log retention, a finite CloudWatch Logs value |
 | `ens-scout:dlqRetentionDays` | Undelivered-event queue retention |
+| `ens-scout:deferDeploymentIdentifiers` | `true` leaves the account out of the assembly and takes the zone ID and certificate ARN as deploy-time parameters; committed `false` |
 
 No key holds a credential.
 `resolveConfig` fails on a missing or malformed value instead of substituting one,
@@ -158,8 +168,8 @@ because every key changes what a scheduled scan queries or where it publishes, a
 a silent default would point a real scan at the wrong subgraph or table.
 
 The account, hosted-zone ID, and certificate ARN have deliberately synthetic committed
-values. Their real values arrive as context at the synth the production workflow
-deploys. The keys are present rather than absent so `resolveConfig` still resolves from
+values. Their real values reach the production stack as the `--parameters` of its
+`cdk deploy`, through `deferDeploymentIdentifiers`; see `lib/deployment.ts`. The keys are present rather than absent so `resolveConfig` still resolves from
 a clean clone and every assertion remains real; tests pin all three stand-ins, so a
 commit that put a live identifier back fails rather than relying on review.
 
@@ -241,7 +251,7 @@ is how a dropped `-buildvcs=false` went unnoticed once already.
 `npm test` never compiles the binary.
 
 `test/deployment.test.ts` is the one suite that asserts on things outside CDK.
-The four documents in `iam/` are configuration in an AWS account, and the two workflows
+The documents in `iam/` are configuration in an AWS account, and the two workflows
 are configuration in GitHub, so no template can describe either, and both have to agree
 with `lib/deployment.ts` and with the committed context.
 It renders the templates through `scripts/render-iam.js` with `iam/example-values.json`
@@ -260,21 +270,39 @@ already present in the locked Jest dependency graph, so comments and formatting 
 decide an assertion.
 For the automatic gate it executes the exact resolver shell body from that parsed model
 against successful, failed, pull-request, fork, non-main, dispatch, and malformed-SHA
-events, then requires checkout, verification, summary, build, and deployment to consume
-the one selected output.
+events, then requires checkout, verification, and summary to consume the one selected
+output.
 
-The same suite asserts what the deploy workflow may not contain and what it must carry.
-It requires that the workflow embeds no account number of its own and no role name or
-role ARN at all, that the six `production` variables it reads are exactly the six its
-deploy job refuses to run without, that the check comes before both the build and the
-deploy, and that each variable reaches the command that needs it - `AWS_DEPLOY_ROLE_ARN`
-the credential step's `role-to-assume`, `AWS_ACCOUNT_ID` the `allowed-account-ids` guard
-and the synth's account context, `AWS_ROUTE53_HOSTED_ZONE_ID` and
-`AWS_ACM_CERTIFICATE_ARN` their synth contexts, and
-`AWS_CLOUDFORMATION_EXECUTION_ROLE_ARN` the deploy's `--role-arn`.
+The same suite asserts the shape of the three jobs. The `build` job has `contents: read`,
+no `id-token`, no environment, and no `secrets.` or `vars.` reference. The `deploy` job is
+the only one with the token and the environment, and may use only the artifact download,
+Node setup, and the credentials action: no checkout, no cache, no `npm ci`, `npx`, Go, or
+synth, and its one `npm install` carries `--ignore-scripts` at the exact `aws-cdk` version
+`package.json` pins. It also asserts what the workflow may not contain and what it must
+carry: no account number and no role name or role ARN of its own; that the six values it
+reads are exactly the six its deploy job refuses to run without, with only the region a
+variable; that the check is the first step; that no step echoes a secret; and that each
+value reaches the command that needs it - `AWS_DEPLOY_ROLE_ARN` the credential step's
+`role-to-assume`, `AWS_ACCOUNT_ID` the `allowed-account-ids` guard,
+`AWS_ROUTE53_HOSTED_ZONE_ID` and `AWS_ACM_CERTIFICATE_ARN` the two `--parameters` the
+stack declares, and `AWS_CLOUDFORMATION_EXECUTION_ROLE_ARN` the deploy's `--role-arn`.
 A workflow that composed an ARN out of the account and a literal role name would satisfy
 the deployment either way, so the assertion is what keeps the identifiers out of the
 tree rather than a reviewer's attention.
+
+It also holds the permissions boundary to account. It requires every `AWS::IAM::Role` in
+the production template, with and without deferred identifiers, to carry the boundary; it
+feeds the deploy job's assembly validation a real assembly and a set of tampered ones (an
+asset `executable`, a docker image, a `..` path, another bucket, an assumed role, a
+concrete environment, a symlink) and requires each to fail; it unpacks a real tar and
+requires the execute bit to survive; it
+derives the boundary policy from the roles' own inline policies in both directions; it
+requires the execution role's four role-shaping calls to appear only in the one statement
+conditioned on the boundary's ARN, and `iam:DeleteRolePermissionsBoundary` nowhere in the
+final policy; and it
+holds the transition policy to the final one apart from the role statements. For the
+deferred assembly it requires no twelve-digit number anywhere, exactly the two declared
+parameters, and the same resources as the committed-context stack.
 
 `test/iam-render.test.ts` covers the render script itself: that the example values fill
 every placeholder and no more, that rendering is deterministic and canonical, that
@@ -288,7 +316,7 @@ That last set is what makes it safe to render the real documents locally.
 ```text
 bin/ens-scout.ts              app entry point; resolves context and the environment
 lib/config.ts                 context keys, validation, and the scan tuning
-lib/deployment.ts             the bootstrap qualifier, the asset bucket, and the synthesizer
+lib/deployment.ts             the bootstrap qualifier, the asset bucket, the synthesizer, the permissions boundary, and the deferred parameters
 lib/api-bundle.ts              locates the built read API bundle
 lib/public-site.ts             HTTP API, private bucket, CloudFront, and cache policies
 lib/schedules.ts              the two schedules and the cron expansion used to prove the offset
@@ -296,7 +324,7 @@ lib/ens-scout-stack.ts        the stack
 lib/scanner-bundle.ts         locates the bundle the CDK app packages
 lib/spa.ts                    the extensionless-route viewer-request rewrite
 lib/website-bundle.ts         locates web/dist and its hashed assets
-iam/                          templates of the four documents applied to the two deployment roles
+iam/                          templates of the documents applied to the two deployment roles and the permissions boundary, and the rollout plan
 scripts/bundle-scanner.js     reproducible cross-compile of both Lambda entrypoints
 scripts/render-iam.js         the one path from an iam/ template to a document
 test/                         the assertion suite

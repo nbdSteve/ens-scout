@@ -45,6 +45,7 @@ export const testConfig: Config = {
   snapshotTtlAttribute: 'expires_at',
   logRetentionDays: 30,
   dlqRetentionDays: 14,
+  deferDeploymentIdentifiers: false,
   scanTuning: defaultScanTuning,
 };
 

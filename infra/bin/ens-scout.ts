@@ -22,7 +22,13 @@ new EnsScoutStack(app, `EnsScout-${config.environmentName}`, {
   apiCode: apiCode(),
   websiteSource: website.site,
   websiteAssetsSource: website.assets,
-  env: { account: config.account, region: config.region },
+  //
+  // With `ens-scout:deferDeploymentIdentifiers` the account is left out as well: the
+  // assembly is then environment-agnostic in the account, `cdk deploy` resolves it from
+  // the credentials it runs with, and nothing in the assembly names it.
+  env: config.deferDeploymentIdentifiers
+    ? { region: config.region }
+    : { account: config.account, region: config.region },
   description: `ENS Scout scheduled publisher and public website (${config.environmentName})`,
   // Deploy with the caller's own credentials rather than through the CDK bootstrap
   // roles, which are admin-capable. `lib/deployment.ts` explains why, and

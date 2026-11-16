@@ -181,6 +181,22 @@ describe('resolveConfig', () => {
     const config = resolveConfig(scopeWith({ [contextKeys.dlqRetentionDays]: '7' }));
     expect(config.dlqRetentionDays).toBe(7);
   });
+
+  test('commits deferral off, so a local synth and the pull-request checks keep the placeholders', () => {
+    expect(resolveConfig(scopeWith()).deferDeploymentIdentifiers).toBe(false);
+  });
+
+  test('accepts the string -c passes for deferral, and refuses anything that is not a boolean', () => {
+    const key = contextKeys.deferDeploymentIdentifiers;
+    expect(resolveConfig(scopeWith({ [key]: 'true' })).deferDeploymentIdentifiers).toBe(true);
+    expect(resolveConfig(scopeWith({ [key]: true })).deferDeploymentIdentifiers).toBe(true);
+    expect(resolveConfig(scopeWith({ [key]: 'false' })).deferDeploymentIdentifiers).toBe(false);
+    // A misspelling read as false would synthesize an assembly that still names the
+    // account, in the job that exists to keep it out.
+    for (const value of ['ture', '1', 'yes', 0, '']) {
+      expect(() => resolveConfig(scopeWith({ [key]: value }))).toThrow(key);
+    }
+  });
 });
 
 function certificateArn(account: string): string {
